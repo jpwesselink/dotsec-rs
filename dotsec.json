@@ -1,0 +1,35 @@
+{
+    "$schema": "./schema.json",
+    "platforms": {
+        "aws": {
+            "keyId": "xx",
+            "secretsManager": {
+                "changeCase": "DotCase"
+            }
+        }
+    },
+    "commandDefaults": {
+        "platform": "aws",
+        "envFile": ".env",
+        "secFile": ".sec",
+        "encryptionEngine": {
+            "aws": {
+                "keyId": "xx",
+                "secretsManager": {
+                    "changeCase": "DotCase"
+                }
+            }
+        },
+        "commands": {
+            "run": {},
+            "validate": {
+                "schema": "schema.json"
+            }
+        }
+    },
+    "redaction": {
+        "exclude": [
+            "asd"
+        ]
+    }
+}

@@ -1,0 +1,384 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DotsecConfig",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "JSON schema source",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "commandDefaults": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/CommandDefaults"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "platforms": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/Platforms"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "redaction": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/Redaction"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "AwsEncryptionOptions": {
+      "description": "--encryption-engine=aws or DOTSEC_ENCRYPTION_ENGINE=aws",
+      "type": "object",
+      "properties": {
+        "keyId": {
+          "description": "--aws-key-id <key_id> or DOTSEC_AWS_KEY_ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "secretsManager": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AwsSecretsManager"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "AwsSecretsManager": {
+      "type": "object",
+      "properties": {
+        "changeCase": {
+          "description": "--aws-secrets-manager-change-case <change_case> or DOTSEC_AWS_SECRETS_MANAGER_CHANGE_CASE",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ChangeCase"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ChangeCase": {
+      "type": "string",
+      "enum": [
+        "CamelCase",
+        "CapitalCase",
+        "ConstantCase",
+        "DotCase",
+        "HeaderCase",
+        "NoCase",
+        "ParamCase",
+        "PascalCase",
+        "PathCase",
+        "SentenceCase",
+        "SnakeCase"
+      ]
+    },
+    "CommandDefaults": {
+      "type": "object",
+      "properties": {
+        "commands": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Commands"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "encryptionEngine": {
+          "description": "--encryption-engine or DOTSEC_ENCRYPTION_ENGINE",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/EncryptionEngine"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "envFile": {
+          "description": "--env-file <env_file> or DOTSEC_ENV_FILE",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "platform": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Platform"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "secFile": {
+          "description": "--sec-file <sec_file> or DOTSEC_SEC_FILE",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Commands": {
+      "type": "object",
+      "properties": {
+        "run": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Run"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "show": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Show"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "validate": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Validate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "EncryptionEngine": {
+      "description": "--encryption-engine or DOTSEC_ENCRYPTION_ENGINE",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "none"
+          ]
+        },
+        {
+          "type": "object",
+          "required": [
+            "aws"
+          ],
+          "properties": {
+            "aws": {
+              "$ref": "#/definitions/AwsEncryptionOptions"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "pki"
+          ],
+          "properties": {
+            "pki": {
+              "$ref": "#/definitions/PkiEncryptionOptions"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "OutputFormat": {
+      "type": "string",
+      "enum": [
+        "text",
+        "json",
+        "csv"
+      ]
+    },
+    "PkiEncryptionOptions": {
+      "description": "--encryption-engine=aws or DOTSEC_ENCRYPTION_ENGINE=aws",
+      "type": "object",
+      "properties": {
+        "keyId": {
+          "description": "--aws-key-id <key_id> or DOTSEC_AWS_KEY_ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "secretsManager": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AwsSecretsManager"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Platform": {
+      "type": "string",
+      "enum": [
+        "aws",
+        "pki",
+        "none"
+      ]
+    },
+    "Platforms": {
+      "type": "object",
+      "properties": {
+        "aws": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AwsEncryptionOptions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pki": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PkiEncryptionOptions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Redaction": {
+      "type": "object",
+      "required": [
+        "exclude"
+      ],
+      "properties": {
+        "exclude": {
+          "description": "--redaction-exclude <exclude> or DOTSEC_REDACTION_EXCLUDE",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Run": {
+      "type": "object",
+      "properties": {
+        "noRedaction": {
+          "description": "run --redaction or DOTSEC_RUN_REDACTION",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "using": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RunUsing"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "RunUsing": {
+      "type": "string",
+      "enum": [
+        "sec",
+        "env"
+      ]
+    },
+    "Show": {
+      "type": "object",
+      "properties": {
+        "outputFormat": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/OutputFormat"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ShowTarget"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShowTarget": {
+      "type": "string",
+      "enum": [
+        "sec",
+        "env"
+      ]
+    },
+    "Validate": {
+      "type": "object",
+      "required": [
+        "schema"
+      ],
+      "properties": {
+        "schema": {
+          "description": "validate --schema <schema> or DOTSEC_VALIDATION_SCHEMA",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

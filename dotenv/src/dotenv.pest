@@ -1,0 +1,30 @@
+WHITESPACE   =  { " " | "\t" }
+NEW_LINE     =  { "\n" | "\r\n" }
+COMMENT      = @{ "#" ~ comment_char* }
+comment_char =  { !NEW_LINE ~ ANY }
+
+export     = _{ "export" }
+key        = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+value      = @{ string }
+escaped_dq =  { "\"" }
+escaped_sq =  { "'" }
+escaped_bt =  { "`" }
+string_dq  =  { escaped_dq ~ inner_dq ~ escaped_dq }
+string_sq  =  { escaped_sq ~ inner_sq ~ escaped_sq }
+string_bt  =  { escaped_bt ~ inner_bt ~ escaped_bt }
+string     = ${ string_dq | string_sq | string_bt | var }
+inner_dq   = @{ char_dq* }
+inner_sq   = @{ char_sq* }
+inner_bt   = @{ char_bt* }
+char_dq    =  {
+    !("\"" | "\\") ~ ANY
+  | "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t")
+  | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
+}
+char_sq    =  { !(escaped_sq | NEW_LINE) ~ ANY }
+char_bt    =  { !(escaped_bt) ~ ANY }
+var        = @{ var_char+ }
+var_char   =  { !(NEW_LINE) ~ ANY }
+
+kv  =  { export? ~ key ~ "=" ~ value }
+env = _{ SOI ~ NEW_LINE* ~ (kv ~ NEW_LINE+)* ~ kv? ~ EOI }
