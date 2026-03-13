@@ -1,0 +1,36 @@
+{
+  "name": "dotsec",
+  "version": "5.0.0",
+  "description": "Encrypt and manage environment variables with AWS KMS",
+  "bin": {
+    "dotsec": "bin/dotsec.js"
+  },
+  "files": [
+    "bin/dotsec.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "optionalDependencies": {
+    "@dotsec/linux-x64-gnu": "5.0.0",
+    "@dotsec/linux-arm64-gnu": "5.0.0",
+    "@dotsec/darwin-x64": "5.0.0",
+    "@dotsec/darwin-arm64": "5.0.0",
+    "@dotsec/win32-x64-msvc": "5.0.0",
+    "@dotsec/win32-arm64-msvc": "5.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jpwesselink/dotsec-rs.git"
+  },
+  "homepage": "https://github.com/jpwesselink/dotsec-rs",
+  "bugs": {
+    "url": "https://github.com/jpwesselink/dotsec-rs/issues"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

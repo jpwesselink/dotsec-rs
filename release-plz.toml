@@ -1,0 +1,17 @@
+[workspace]
+semver_check = false
+
+# All crates share the same version.
+[[package]]
+name = "dotsec"
+version_group = "dotsec"
+
+[[package]]
+name = "dotenv"
+version_group = "dotsec"
+publish = false
+
+[[package]]
+name = "aws"
+version_group = "dotsec"
+publish = false

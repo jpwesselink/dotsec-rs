@@ -1,7 +1,16 @@
 WHITESPACE   =  { " " | "\t" }
 NEW_LINE     =  { "\n" | "\r\n" }
-COMMENT      = @{ "#" ~ comment_char* }
+// Regular comments: # (not a directive) or //
+COMMENT      = @{ ("//" ~ comment_char*) | ("#" ~ !(" "* ~ "@" ~ (ASCII_ALPHA | "_" | "-")) ~ comment_char*) }
 comment_char =  { !NEW_LINE ~ ANY }
+
+// Directives: one or more @name or @name=value on a single # line
+// e.g. # @encrypt @type=string @push=aws-ssm
+directive          = ${ "#" ~ " "* ~ single_directive ~ (" "+ ~ single_directive)* }
+single_directive   = ${ "@" ~ directive_name ~ ("=" ~ directive_value)? }
+directive_name     = @{ (ASCII_ALPHA | "_" | "-")+ }
+// Value: everything until next " @" (start of another directive) or end of line
+directive_value    = @{ (!(NEW_LINE | " @") ~ ANY)+ }
 
 export     = _{ "export" }
 key        = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
@@ -27,4 +36,5 @@ var        = @{ var_char+ }
 var_char   =  { !(NEW_LINE) ~ ANY }
 
 kv  =  { export? ~ key ~ "=" ~ value }
-env = _{ SOI ~ NEW_LINE* ~ (kv ~ NEW_LINE+)* ~ kv? ~ EOI }
+line = _{ directive | kv | COMMENT }
+env  = _{ SOI ~ NEW_LINE* ~ (line ~ NEW_LINE+)* ~ line? ~ EOI }

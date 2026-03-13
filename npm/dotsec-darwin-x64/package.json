@@ -1,0 +1,19 @@
+{
+  "name": "@dotsec/darwin-x64",
+  "version": "5.0.0",
+  "description": "dotsec native binary for macOS x64 (Intel)",
+  "os": ["darwin"],
+  "cpu": ["x64"],
+  "bin": {
+    "dotsec": "dotsec"
+  },
+  "files": ["dotsec"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jpwesselink/dotsec-rs.git"
+  }
+}

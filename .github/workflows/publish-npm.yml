@@ -1,0 +1,138 @@
+name: Publish CLI to NPM
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    name: Build ${{ matrix.npm_pkg }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            npm_pkg: dotsec-linux-x64-gnu
+            binary: dotsec
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            npm_pkg: dotsec-linux-arm64-gnu
+            binary: dotsec
+            cross: true
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            npm_pkg: dotsec-darwin-x64
+            binary: dotsec
+          - target: aarch64-apple-darwin
+            runner: macos-14
+            npm_pkg: dotsec-darwin-arm64
+            binary: dotsec
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            npm_pkg: dotsec-win32-x64-msvc
+            binary: dotsec.exe
+          - target: aarch64-pc-windows-msvc
+            runner: windows-latest
+            npm_pkg: dotsec-win32-arm64-msvc
+            binary: dotsec.exe
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --locked
+
+      - name: Build binary
+        shell: bash
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }} -p dotsec
+          else
+            cargo build --release --target ${{ matrix.target }} -p dotsec
+          fi
+
+      - name: Copy binary into npm package
+        shell: bash
+        run: cp target/${{ matrix.target }}/release/${{ matrix.binary }} npm/${{ matrix.npm_pkg }}/
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Set npm version from tag
+        working-directory: npm/${{ matrix.npm_pkg }}
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          npm version --no-git-tag-version --allow-same-version "$VERSION"
+
+      - name: Determine npm tag
+        id: npm-tag
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          if [[ "$VERSION" == *"-"* ]]; then
+            echo "tag=$(echo "$VERSION" | sed 's/.*-\([a-z]*\).*/\1/')" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish platform package
+        working-directory: npm/${{ matrix.npm_pkg }}
+        run: npm publish --tag ${{ steps.npm-tag.outputs.tag }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-meta:
+    name: Publish meta-package
+    needs: build
+    if: ${{ always() && needs.build.result != 'cancelled' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Determine npm tag
+        id: npm-tag
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          if [[ "$VERSION" == *"-"* ]]; then
+            echo "tag=$(echo "$VERSION" | sed 's/.*-\([a-z]*\).*/\1/')" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set version from tag
+        working-directory: npm/dotsec
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          node -e "
+            const pkg = require('./package.json');
+            pkg.version = '$VERSION';
+            for (const dep of Object.keys(pkg.optionalDependencies || {})) {
+              pkg.optionalDependencies[dep] = '$VERSION';
+            }
+            require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Publish meta-package
+        working-directory: npm/dotsec
+        run: npm publish --tag ${{ steps.npm-tag.outputs.tag }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

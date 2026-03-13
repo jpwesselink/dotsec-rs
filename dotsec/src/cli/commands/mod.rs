@@ -1,17 +1,22 @@
 mod base;
-mod config;
-pub mod create_schema;
-mod decrypt;
-mod encrypt;
-mod run;
+pub mod diff;
+pub mod export;
+pub mod import;
+pub mod init;
+pub mod run;
+pub mod set;
 pub mod show;
+pub mod validate;
 
 pub fn create_command() -> clap::Command {
     base::command()
+        .subcommand(init::command())
+        .subcommand(set::command())
+        .subcommand(import::command())
+        .subcommand(export::command())
         .subcommand(show::command())
-        .subcommand(encrypt::command())
-        .subcommand(decrypt::command())
         .subcommand(run::command())
-        .subcommand(config::command())
+        .subcommand(validate::command())
+        .subcommand(diff::command())
         .arg_required_else_help(true)
 }

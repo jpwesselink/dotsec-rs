@@ -1,0 +1,27 @@
+# Build
+target/
+
+# Environment / secrets
+.env
+.env.*
+.sec
+.sec.*
+
+# IDE
+.vscode/
+.idea/
+
+# Cargo
+.cargo/
+
+# OS
+.DS_Store
+
+# Legacy / obsolete
+dotsec.json
+
+# Temp
+meh.*
+settings.json
+*.swp
+*~
