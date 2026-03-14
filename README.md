@@ -278,4 +278,5 @@ Versioning is fully automated using [conventional commits](https://www.conventio
 - **`@dotsec/config`** — drop-in replacement for `dotenv/config` that reads `.sec` and decrypts transparently
 - **TypeScript type generation** — generate `env.d.ts` from `@type` directives
 - **Azure Key Vault provider** — envelope encryption using Azure Key Vault Keys API
-- **Additional providers** — GCP KMS, public-key encryption (no cloud dependency)
+- **GCP Cloud KMS provider** — envelope encryption using Google Cloud KMS
+- **Public-key encryption** — local encryption with no cloud dependency
