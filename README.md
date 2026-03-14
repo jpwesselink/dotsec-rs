@@ -277,4 +277,5 @@ Versioning is fully automated using [conventional commits](https://www.conventio
 - **`@dotsec/core`** — NAPI-RS native Node.js module exposing encrypt/decrypt/resolve programmatically
 - **`@dotsec/config`** — drop-in replacement for `dotenv/config` that reads `.sec` and decrypts transparently
 - **TypeScript type generation** — generate `env.d.ts` from `@type` directives
-- **Additional providers** — public-key encryption (no cloud dependency), GCP KMS, Azure Key Vault
+- **Azure Key Vault provider** — envelope encryption using Azure Key Vault Keys API
+- **Additional providers** — GCP KMS, public-key encryption (no cloud dependency)
