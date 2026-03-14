@@ -279,4 +279,4 @@ Versioning is fully automated using [conventional commits](https://www.conventio
 - **TypeScript type generation** — generate `env.d.ts` from `@type` directives
 - **Azure Key Vault provider** — envelope encryption using Azure Key Vault Keys API
 - **GCP Cloud KMS provider** — envelope encryption using Google Cloud KMS
-- **Public-key encryption** — local encryption with no cloud dependency
+- **PKI provider** — asymmetric encryption using public/private key pairs (no cloud dependency)
