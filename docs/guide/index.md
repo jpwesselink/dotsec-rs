@@ -2,25 +2,85 @@
 
 `.env` is plaintext, `.sec` is its encrypted counterpart — committed to git as the single source of truth for secrets.
 
-## Install
+## Node.js
+
+### CLI
 
 ```bash
-# stable
 npm install -g dotsec
 
-# beta (latest from main)
-npm install -g dotsec@beta
+# or use directly
+npx dotsec init
+```
 
-# cargo
+### Library (planned)
+
+```bash
+npm install @dotsec/core
+```
+
+```ts
+import { encrypt, decrypt } from "@dotsec/core";
+
+const encrypted = await encrypt("my-secret", {
+  keyId: "alias/dotsec",
+  region: "us-east-1",
+});
+```
+
+### Config loader (planned)
+
+Drop-in replacement for `dotenv/config` — reads `.sec` and decrypts transparently:
+
+```bash
+npm install @dotsec/config
+```
+
+```ts
+import "@dotsec/config";
+
+// process.env.DATABASE_URL is now available, decrypted from .sec
+```
+
+### Channels
+
+| Channel | Version | Install |
+|---------|---------|---------|
+| `latest` | `5.0.0` | `npm install dotsec` |
+| `beta` | `5.0.0-beta.abc1234` | `npm install dotsec@beta` |
+| `pr-N` | `5.0.0-pr-42.abc1234` | `npm install dotsec@pr-42` |
+
+## Rust
+
+### CLI
+
+```bash
 cargo install dotsec
 ```
 
-| Channel | Trigger | Version | Install |
-|---------|---------|---------|---------|
-| `latest` | Release PR merge | `5.0.0` | `npm install dotsec` |
-| `beta` | Every commit on `main` | `5.0.0-beta.abc1234` | `npm install dotsec@beta` |
-| `pr-N` | Every commit on a PR | `5.0.0-pr-42.abc1234` | `npm install dotsec@pr-42` |
-| crates.io | Release PR merge | `5.0.0` | `cargo install dotsec` |
+### Library
+
+Add `dotsec` as a dependency:
+
+```toml
+[dependencies]
+dotsec = { version = "5", features = ["library"] }
+```
+
+```rust
+use dotsec;
+
+// Parse and decrypt a .sec file
+// See the dotsec crate docs for full API
+```
+
+The `dotenv` and `aws` crates are internal and not published separately.
+
+### Channels
+
+| Channel | Version | Install |
+|---------|---------|---------|
+| crates.io | `5.0.0` | `cargo install dotsec` |
 
 ## Quick start
 
@@ -51,11 +111,3 @@ dotsec/                  CLI binary crate
 dotenv/                  .env/.sec parser (internal)
 aws/                     AWS KMS encryption (internal)
 ```
-
-## npm packages
-
-| Package | Description |
-|---------|-------------|
-| `dotsec` | CLI binary (platform-specific via `optionalDependencies`) |
-| `@dotsec/core` | NAPI-RS bindings for programmatic use (planned) |
-| `@dotsec/config` | Drop-in `dotenv/config` replacement — `import '@dotsec/config'` (planned) |
