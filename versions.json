@@ -1,0 +1,10 @@
+{
+  "stable": [],
+  "beta": null,
+  "prs": [
+    {
+      "label": "PR #1",
+      "path": "/pr-1/"
+    }
+  ]
+}
