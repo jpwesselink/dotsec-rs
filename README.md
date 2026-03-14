@@ -7,11 +7,39 @@ Encrypt and manage `.env` files with AWS KMS envelope encryption.
 ## Install
 
 ```bash
-# npm
+# stable
 npm install -g dotsec
+
+# beta (latest from main)
+npm install -g dotsec@beta
+
+# PR preview
+npm install -g dotsec@pr-42
 
 # cargo
 cargo install dotsec
+```
+
+| Channel | Trigger | Version | Install |
+|---------|---------|---------|---------|
+| `latest` | Release PR merge | `5.0.0` | `npm install dotsec` |
+| `beta` | Every commit on `main` | `5.0.0-beta.abc1234` | `npm install dotsec@beta` |
+| `pr-N` | Every commit on a PR | `5.0.0-pr-42.abc1234` | `npm install dotsec@pr-42` |
+
+## Project structure
+
+```
+dotsec/                  CLI binary crate
+  npm/                   npm distribution packages
+    dotsec/              meta-package (optionalDependencies)
+    dotsec-darwin-arm64/ platform binaries
+    dotsec-darwin-x64/
+    dotsec-linux-arm64-gnu/
+    dotsec-linux-x64-gnu/
+    dotsec-win32-arm64-msvc/
+    dotsec-win32-x64-msvc/
+dotenv/                  .env/.sec parser (internal)
+aws/                     AWS KMS encryption (internal)
 ```
 
 ## Quick start
@@ -213,6 +241,35 @@ dotsec --sec-file .sec.production show
 | `dotsec` | CLI binary (platform-specific via `optionalDependencies`) |
 | `@dotsec/core` | NAPI-RS bindings for programmatic use (planned) |
 | `@dotsec/config` | Drop-in `dotenv/config` replacement — `import '@dotsec/config'` (planned) |
+
+## Release workflow
+
+Versioning is fully automated using [conventional commits](https://www.conventionalcommits.org/) and [release-plz](https://release-plz.ieni.dev/).
+
+### How it works
+
+1. Write code using conventional commit messages (`feat:`, `fix:`, `feat!:`)
+2. Release-plz analyzes commits and determines the next version (patch/minor/major)
+3. Release-plz opens a release PR that bumps `Cargo.toml`
+4. Merge the release PR → publishes to crates.io + creates a GitHub release
+5. GitHub release triggers npm publish → publishes to npm as `latest`
+
+### Distribution channels
+
+| Channel | Trigger | Version | Install |
+|---------|---------|---------|---------|
+| `latest` | Release PR merge | `5.1.0` | `npm install dotsec` |
+| `beta` | Every commit on `main` | `5.1.0-beta.abc1234` | `npm install dotsec@beta` |
+| `pr-N` | Every commit on a PR | `5.1.0-pr-42.abc1234` | `npm install dotsec@pr-42` |
+| crates.io | Release PR merge | `5.1.0` | `cargo install dotsec` |
+
+### Commit message → version bump
+
+| Commit | Bump |
+|--------|------|
+| `fix: handle empty values` | patch (`5.0.0` → `5.0.1`) |
+| `feat: add push command` | minor (`5.0.0` → `5.1.0`) |
+| `feat!: redesign directive syntax` | major (`5.0.0` → `6.0.0`) |
 
 ## Roadmap
 

@@ -1,0 +1,168 @@
+name: Deploy docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, closed]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: docs-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: github.event.action != 'closed' && (github.event_name != 'release' || startsWith(github.event.release.tag_name, 'dotsec-v'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Determine deploy target
+        id: target
+        run: |
+          CARGO_VERSION=$(grep '^version' dotsec/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "subdir=pr-${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+            echo "base=/dotsec-rs/pr-${{ github.event.pull_request.number }}/" >> "$GITHUB_OUTPUT"
+            echo "label=PR #${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+            echo "type=pr" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "release" ]; then
+            RELEASE_VERSION=$(echo "${{ github.event.release.tag_name }}" | sed 's/^.*-v//')
+            echo "subdir=v${RELEASE_VERSION}" >> "$GITHUB_OUTPUT"
+            echo "base=/dotsec-rs/v${RELEASE_VERSION}/" >> "$GITHUB_OUTPUT"
+            echo "label=v${RELEASE_VERSION}" >> "$GITHUB_OUTPUT"
+            echo "type=stable" >> "$GITHUB_OUTPUT"
+            echo "version=${RELEASE_VERSION}" >> "$GITHUB_OUTPUT"
+          else
+            echo "subdir=beta" >> "$GITHUB_OUTPUT"
+            echo "base=/dotsec-rs/beta/" >> "$GITHUB_OUTPUT"
+            echo "label=beta (${CARGO_VERSION})" >> "$GITHUB_OUTPUT"
+            echo "type=beta" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build docs
+        run: |
+          sed -i "s|base: \"/dotsec-rs/\"|base: \"${{ steps.target.outputs.base }}\"|" rspress.config.ts
+          npx rspress build
+
+      - name: Deploy to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./doc_build
+          destination_dir: ${{ steps.target.outputs.subdir }}
+          keep_files: true
+
+      - name: Update versions.json
+        run: |
+          git fetch origin gh-pages || true
+          if git rev-parse --verify origin/gh-pages >/dev/null 2>&1; then
+            git worktree add gh-pages-wt origin/gh-pages
+          else
+            git worktree add --orphan gh-pages-wt
+          fi
+
+          # Init versions.json if missing
+          if [ ! -f gh-pages-wt/versions.json ]; then
+            echo '{"stable":[],"beta":null,"prs":[]}' > gh-pages-wt/versions.json
+          fi
+
+          cd gh-pages-wt
+          TYPE="${{ steps.target.outputs.type }}"
+          SUBDIR="${{ steps.target.outputs.subdir }}"
+          LABEL="${{ steps.target.outputs.label }}"
+
+          node -e "
+            const fs = require('fs');
+            const v = JSON.parse(fs.readFileSync('versions.json', 'utf8'));
+
+            if ('${TYPE}' === 'stable') {
+              const entry = { version: '${LABEL}', path: '/${SUBDIR}/' };
+              v.stable = v.stable.filter(s => s.version !== '${LABEL}');
+              v.stable.unshift(entry);
+              v.latest = '/${SUBDIR}/';
+            } else if ('${TYPE}' === 'beta') {
+              v.beta = { label: '${LABEL}', path: '/${SUBDIR}/' };
+            } else if ('${TYPE}' === 'pr') {
+              const entry = { label: '${LABEL}', path: '/${SUBDIR}/' };
+              v.prs = v.prs.filter(p => p.path !== '/${SUBDIR}/');
+              v.prs.push(entry);
+            }
+
+            fs.writeFileSync('versions.json', JSON.stringify(v, null, 2) + '\n');
+          "
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add versions.json
+          git diff --cached --quiet || git commit -m "docs: update versions.json"
+          git push origin HEAD:gh-pages
+
+      - name: Update root redirect
+        if: steps.target.outputs.type == 'stable' || steps.target.outputs.type == 'beta'
+        run: |
+          cd gh-pages-wt
+          # Always update on stable; on beta, only if no index.html exists yet
+          if [ "${{ steps.target.outputs.type }}" = "stable" ] || [ ! -f index.html ]; then
+            cat > index.html << REDIRECT
+          <!DOCTYPE html>
+          <html>
+          <head><meta http-equiv="refresh" content="0; url=${{ steps.target.outputs.subdir }}/"></head>
+          <body><a href="${{ steps.target.outputs.subdir }}/">Redirecting...</a></body>
+          </html>
+          REDIRECT
+            git add index.html
+            git diff --cached --quiet || git commit -m "docs: update root redirect to ${{ steps.target.outputs.subdir }}"
+            git push origin HEAD:gh-pages
+          fi
+
+      - name: Comment PR with docs link
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: docs-preview
+          message: |
+            Docs preview: https://jpwesselink.github.io/dotsec-rs/pr-${{ github.event.pull_request.number }}/
+
+  cleanup:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+
+      - name: Remove PR docs and update versions.json
+        run: |
+          PR_NUM=${{ github.event.pull_request.number }}
+          rm -rf pr-${PR_NUM}
+
+          if [ -f versions.json ]; then
+            node -e "
+              const fs = require('fs');
+              const v = JSON.parse(fs.readFileSync('versions.json', 'utf8'));
+              v.prs = v.prs.filter(p => p.path !== '/pr-${PR_NUM}/');
+              fs.writeFileSync('versions.json', JSON.stringify(v, null, 2) + '\n');
+            "
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "docs: remove pr-${PR_NUM} preview"
+          git push

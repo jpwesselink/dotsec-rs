@@ -1,5 +1,7 @@
 # Build
 target/
+doc_build/
+node_modules/
 
 # Environment / secrets
 .env
