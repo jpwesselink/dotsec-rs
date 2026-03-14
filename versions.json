@@ -3,7 +3,7 @@
   "beta": null,
   "prs": [
     {
-      "label": "PR #1",
+      "label": "#1 feat/align-with-release-playground",
       "path": "/pr-1/"
     }
   ]
