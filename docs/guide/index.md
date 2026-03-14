@@ -13,35 +13,6 @@ npm install -g dotsec
 npx dotsec init
 ```
 
-### Library (planned)
-
-```bash
-npm install @dotsec/core
-```
-
-```ts
-import { encrypt, decrypt } from "@dotsec/core";
-
-const encrypted = await encrypt("my-secret", {
-  keyId: "alias/dotsec",
-  region: "us-east-1",
-});
-```
-
-### Config loader (planned)
-
-Drop-in replacement for `dotenv/config` — reads `.sec` and decrypts transparently:
-
-```bash
-npm install @dotsec/config
-```
-
-```ts
-import "@dotsec/config";
-
-// process.env.DATABASE_URL is now available, decrypted from .sec
-```
-
 ### Channels
 
 | Channel | Version | Install |
