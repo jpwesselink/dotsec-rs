@@ -58,11 +58,14 @@ dotsec show --table      # formatted table
 Decrypt `.sec` in memory, resolve `${VAR}` interpolation, inject env vars into a child process. Encrypted values are automatically redacted from stdout/stderr.
 
 ```bash
-dotsec run -- node server.js
-dotsec run --using env -- cargo test    # use .env instead of .sec
+dotsec run -- node server.js                        # from .sec (decrypts)
+dotsec run --using env -- cargo test                # from .env (plain)
+dotsec run --using env --env-file .env.local -- sh  # custom .env path
 ```
 
 The child process runs in a pseudo-terminal (PTY), so colors, interactive output, and `isatty()` detection work automatically.
+
+When using `--using env`, no `.sec` file or AWS credentials are needed — it reads the plain `.env` file directly.
 
 ## `dotsec validate`
 

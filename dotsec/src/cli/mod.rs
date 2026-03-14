@@ -13,6 +13,10 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
 
     let is_init = matches.subcommand_matches("init").is_some();
     let is_import = matches.subcommand_matches("import").is_some();
+    let is_run_env = matches
+        .subcommand_matches("run")
+        .and_then(|m| m.get_one::<String>("using"))
+        .is_some_and(|v| v == "env");
 
     // Resolve sec file from CLI arg or default
     let default_sec = ".sec".to_string();
@@ -27,8 +31,8 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
         let file_config = dotenv::extract_file_config(&lines);
         debug!("file_config from {}: {:?}", sec_file, file_config);
         EncryptionEngine::from(file_config)
-    } else if is_init || is_import {
-        debug!("{} does not exist yet, using defaults for {}", sec_file, if is_init { "init" } else { "import" });
+    } else if is_init || is_import || is_run_env {
+        debug!("{} does not exist yet or not needed, using defaults", sec_file);
         EncryptionEngine::None
     } else {
         return Err(format!("{} not found. Run `dotsec init` or `dotsec import` first.", sec_file).into());
