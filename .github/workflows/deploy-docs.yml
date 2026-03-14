@@ -39,7 +39,7 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "subdir=pr-${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
             echo "base=/dotsec-rs/pr-${{ github.event.pull_request.number }}/" >> "$GITHUB_OUTPUT"
-            echo "label=PR #${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+            echo "label=#${{ github.event.pull_request.number }} ${{ github.head_ref }}" >> "$GITHUB_OUTPUT"
             echo "type=pr" >> "$GITHUB_OUTPUT"
           elif [ "${{ github.event_name }}" = "release" ]; then
             RELEASE_VERSION=$(echo "${{ github.event.release.tag_name }}" | sed 's/^.*-v//')
