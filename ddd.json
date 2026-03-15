@@ -1,0 +1,10 @@
+{
+    "$schema": "./schema.json",
+    "encryption": {
+        "provider": "aws",
+        "keyId": "alias/dotsec",
+        "region": "eu-west-1"
+    },
+    "envFile": ".env",
+    "secFile": ".sec"
+}

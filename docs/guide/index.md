@@ -18,11 +18,11 @@ npx dotsec init
 Native Node.js bindings for parsing, validating, and formatting `.env` files:
 
 ```bash
-npm install @jpwesselink/dotsec-core
+npm install @dotsec/core
 ```
 
 ```js
-import { parse, validate, toJson, format } from '@jpwesselink/dotsec-core';
+import { parse, validate, toJson, format } from '@dotsec/core';
 
 const entries = parse('# @encrypt\nDB_URL="postgres://localhost"\nDEBUG=true\n');
 // [{ key: "DB_URL", value: "postgres://localhost", quoteType: "Double", directives: [{ name: "encrypt" }] }, ...]
@@ -95,7 +95,7 @@ dotsec diff --base .env .env.staging # compare env files
 ```
 dotsec/                  CLI binary crate
   npm/                   npm distribution packages (CLI)
-dotsec-napi/             Native Node.js bindings (@jpwesselink/dotsec-core)
+dotsec-napi/             Native Node.js bindings (@dotsec/core)
   npm/                   npm distribution packages (library)
 dotenv/                  .env/.sec parser (internal)
 aws/                     AWS KMS encryption (internal)

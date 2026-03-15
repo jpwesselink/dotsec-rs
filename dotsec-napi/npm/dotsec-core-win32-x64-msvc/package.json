@@ -1,5 +1,5 @@
 {
-  "name": "@jpwesselink/dotsec-core-win32-x64-msvc",
+  "name": "@dotsec/core-win32-x64-msvc",
   "version": "5.0.0",
   "description": "dotsec-core native bindings for Windows x64",
   "os": ["win32"],

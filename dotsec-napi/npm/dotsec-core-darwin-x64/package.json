@@ -1,5 +1,5 @@
 {
-  "name": "@jpwesselink/dotsec-core-darwin-x64",
+  "name": "@dotsec/core-darwin-x64",
   "version": "5.0.0",
   "description": "dotsec-core native bindings for macOS x64 (Intel)",
   "os": ["darwin"],

@@ -1,5 +1,5 @@
 {
-  "name": "@jpwesselink/dotsec-core-linux-x64-gnu",
+  "name": "@dotsec/core-linux-x64-gnu",
   "version": "5.0.0",
   "description": "dotsec-core native bindings for Linux x64 (glibc)",
   "os": ["linux"],

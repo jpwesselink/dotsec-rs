@@ -130,7 +130,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   publish-meta:
-    name: Publish @jpwesselink/dotsec-core
+    name: Publish @dotsec/core
     needs: [resolve-version, build]
     if: always() && needs.resolve-version.result == 'success' && needs.build.result != 'cancelled'
     runs-on: ubuntu-latest
