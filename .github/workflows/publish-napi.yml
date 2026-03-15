@@ -64,6 +64,7 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
             npm_pkg: dotsec-core-linux-x64-gnu
+            can_test: true
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-latest
             npm_pkg: dotsec-core-linux-arm64-gnu
@@ -71,12 +72,15 @@ jobs:
           - target: x86_64-apple-darwin
             runner: macos-latest
             npm_pkg: dotsec-core-darwin-x64
+            can_test: true
           - target: aarch64-apple-darwin
             runner: macos-14
             npm_pkg: dotsec-core-darwin-arm64
+            can_test: true
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
             npm_pkg: dotsec-core-win32-x64-msvc
+            can_test: true
           - target: aarch64-pc-windows-msvc
             runner: windows-latest
             npm_pkg: dotsec-core-win32-arm64-msvc
@@ -111,6 +115,23 @@ jobs:
           else
             cp target/${{ matrix.target }}/release/libdotsec_napi.so dotsec-napi/npm/${{ matrix.npm_pkg }}/dotsec-core.node
           fi
+
+      - name: Smoke test native module
+        if: matrix.can_test
+        shell: bash
+        run: |
+          node -e "
+            const m = require('./dotsec-napi/npm/${{ matrix.npm_pkg }}/dotsec-core.node');
+            const keys = Object.keys(m);
+            console.log('exports:', keys);
+            if (!keys.includes('parse')) throw new Error('missing parse export');
+            if (!keys.includes('validate')) throw new Error('missing validate export');
+            if (!keys.includes('toJson')) throw new Error('missing toJson export');
+            if (!keys.includes('format')) throw new Error('missing format export');
+            const entries = m.parse('FOO=\"bar\"\n');
+            if (entries[0].key !== 'FOO') throw new Error('parse returned wrong key');
+            console.log('smoke test passed');
+          "
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

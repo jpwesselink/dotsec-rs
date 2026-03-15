@@ -66,6 +66,7 @@ jobs:
             runner: ubuntu-latest
             npm_pkg: dotsec-linux-x64-gnu
             binary: dotsec
+            can_test: true
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-latest
             npm_pkg: dotsec-linux-arm64-gnu
@@ -75,14 +76,17 @@ jobs:
             runner: macos-latest
             npm_pkg: dotsec-darwin-x64
             binary: dotsec
+            can_test: true
           - target: aarch64-apple-darwin
             runner: macos-14
             npm_pkg: dotsec-darwin-arm64
             binary: dotsec
+            can_test: true
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
             npm_pkg: dotsec-win32-x64-msvc
             binary: dotsec.exe
+            can_test: true
           - target: aarch64-pc-windows-msvc
             runner: windows-latest
             npm_pkg: dotsec-win32-arm64-msvc
@@ -111,6 +115,14 @@ jobs:
       - name: Copy binary into npm package
         shell: bash
         run: cp target/${{ matrix.target }}/release/${{ matrix.binary }} dotsec/npm/${{ matrix.npm_pkg }}/
+
+      - name: Smoke test binary
+        if: matrix.can_test
+        shell: bash
+        run: |
+          chmod +x dotsec/npm/${{ matrix.npm_pkg }}/${{ matrix.binary }}
+          dotsec/npm/${{ matrix.npm_pkg }}/${{ matrix.binary }} --help
+          dotsec/npm/${{ matrix.npm_pkg }}/${{ matrix.binary }} --version
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
