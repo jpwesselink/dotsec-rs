@@ -13,13 +13,36 @@ npm install -g dotsec
 npx dotsec init
 ```
 
+### Library
+
+Native Node.js bindings for parsing, validating, and formatting `.env` files:
+
+```bash
+npm install @jpwesselink/dotsec-core
+```
+
+```js
+import { parse, validate, toJson, format } from '@jpwesselink/dotsec-core';
+
+const entries = parse('# @encrypt\nDB_URL="postgres://localhost"\nDEBUG=true\n');
+// [{ key: "DB_URL", value: "postgres://localhost", quoteType: "Double", directives: [{ name: "encrypt" }] }, ...]
+
+const errors = validate('# @bogus\nFOO="bar"\n');
+// [{ key: "FOO", message: "unknown directive @bogus..." }]
+
+const json = toJson('FOO=bar\nBAZ=123\n');
+// '[{"FOO":"bar"},{"BAZ":"123"}]'
+
+const formatted = format('FOO=bar\n');
+// 'FOO=bar\n'
+```
+
 ### Channels
 
 | Channel | Version | Install |
 |---------|---------|---------|
 | `latest` | `5.0.0` | `npm install dotsec` |
 | `beta` | `5.0.0-beta.abc1234` | `npm install dotsec@beta` |
-| `pr-N` | `5.0.0-pr-42.abc1234` | `npm install dotsec@pr-42` |
 
 ## Rust
 
@@ -71,14 +94,9 @@ dotsec diff --base .env .env.staging # compare env files
 
 ```
 dotsec/                  CLI binary crate
-  npm/                   npm distribution packages
-    dotsec/              meta-package (optionalDependencies)
-    dotsec-darwin-arm64/ platform binaries
-    dotsec-darwin-x64/
-    dotsec-linux-arm64-gnu/
-    dotsec-linux-x64-gnu/
-    dotsec-win32-arm64-msvc/
-    dotsec-win32-x64-msvc/
+  npm/                   npm distribution packages (CLI)
+dotsec-napi/             Native Node.js bindings (@jpwesselink/dotsec-core)
+  npm/                   npm distribution packages (library)
 dotenv/                  .env/.sec parser (internal)
 aws/                     AWS KMS encryption (internal)
 ```
