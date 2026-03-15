@@ -18,8 +18,13 @@
   },
   "files": [
     "index.js",
-    "index.d.ts"
+    "index.d.ts",
+    "README.md"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jpwesselink/dotsec-rs"
+  },
   "optionalDependencies": {
     "@dotsec/core-darwin-arm64": "5.0.0",
     "@dotsec/core-darwin-x64": "5.0.0",
