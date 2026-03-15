@@ -4,5 +4,10 @@
     "label": "beta (5.0.0)",
     "path": "/beta/"
   },
-  "prs": []
+  "prs": [
+    {
+      "label": "#2 release-plz-2026-03-15T14-50-47Z",
+      "path": "/pr-2/"
+    }
+  ]
 }
