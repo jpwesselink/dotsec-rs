@@ -2,8 +2,8 @@
 pageType: home
 hero:
   name: dotsec
-  text: Secrets belong in git
-  tagline: .env files without the .env files — encrypt with KMS, commit with confidence.
+  text: dotsec
+  tagline: Your .env, encrypted and committed to git. Secrets never touch disk — decrypted in memory, injected at runtime, redacted from output.
   actions:
     - theme: brand
       text: Get Started
