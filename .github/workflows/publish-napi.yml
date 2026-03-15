@@ -195,6 +195,20 @@ jobs:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
+      - name: Wait for npm propagation
+        run: |
+          VERSION="${{ needs.resolve-version.outputs.version }}"
+          for i in $(seq 1 30); do
+            if npm view "@dotsec/core@$VERSION" version 2>/dev/null; then
+              echo "Package available after ${i}0s"
+              exit 0
+            fi
+            echo "Waiting for @dotsec/core@$VERSION to appear on npm... (attempt $i/30)"
+            sleep 10
+          done
+          echo "Package not available after 5 minutes"
+          exit 1
+
       - name: Install and test @dotsec/core from npm
         run: |
           npm install @dotsec/core@${{ needs.resolve-version.outputs.version }}
