@@ -72,7 +72,6 @@ jobs:
           - target: x86_64-apple-darwin
             runner: macos-latest
             npm_pkg: dotsec-core-darwin-x64
-            can_test: true
           - target: aarch64-apple-darwin
             runner: macos-14
             npm_pkg: dotsec-core-darwin-arm64
