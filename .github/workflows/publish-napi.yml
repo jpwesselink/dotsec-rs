@@ -183,3 +183,28 @@ jobs:
         run: npm publish --tag ${{ needs.resolve-version.outputs.npm-tag }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  verify:
+    name: Verify published @dotsec/core
+    needs: [resolve-version, publish-meta]
+    if: needs.publish-meta.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install and test @dotsec/core from npm
+        run: |
+          npm install @dotsec/core@${{ needs.resolve-version.outputs.version }}
+          node -e "
+            const m = require('@dotsec/core');
+            const entries = m.parse('FOO=\"bar\"\n');
+            if (entries[0].key !== 'FOO') throw new Error('parse failed');
+            if (entries[0].value !== 'bar') throw new Error('wrong value');
+            const errors = m.validate('# @bogus\nX=1\n');
+            if (errors.length === 0) throw new Error('validate should have found errors');
+            console.log('verification passed');
+          "

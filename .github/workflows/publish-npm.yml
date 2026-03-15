@@ -174,3 +174,21 @@ jobs:
         run: npm publish --tag ${{ needs.resolve-version.outputs.npm-tag }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  verify:
+    name: Verify published CLI
+    needs: [resolve-version, publish-meta]
+    if: needs.publish-meta.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install and test CLI from npm
+        run: |
+          npm install -g dotsec@${{ needs.resolve-version.outputs.version }}
+          dotsec --version
+          dotsec --help
