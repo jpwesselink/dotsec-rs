@@ -54,15 +54,15 @@ cargo install dotsec
 
 ### Library
 
-Add `dotsec` as a dependency:
+Add `dotsec-core` as a dependency:
 
 ```toml
 [dependencies]
-dotsec = { version = "5", features = ["library"] }
+dotsec-core = "5"
 ```
 
 ```rust
-use dotenv::{parse_dotenv, lines_to_entries, validate_entries};
+use dotsec_core::dotenv::{parse_dotenv, lines_to_entries, validate_entries};
 
 // Parse a .env file
 let content = std::fs::read_to_string(".env").unwrap();
@@ -82,15 +82,28 @@ for err in &errors {
 ```
 
 ```rust
-use dotsec::{load_file, parse_content, encrypt_lines_to_sec, EncryptionEngine};
+use dotsec_core::{load_file, parse_content, encrypt_lines_to_sec};
+use dotsec_core::{EncryptionEngine, AwsEncryptionOptions};
 
 // Load, parse, and encrypt
 let content = load_file(".env").unwrap();
 let lines = parse_content(&content).unwrap();
-encrypt_lines_to_sec(&lines, ".sec", &EncryptionEngine::Aws {
-    key_id: "alias/dotsec".into(),
-    region: "eu-west-1".into(),
-}).await.unwrap();
+encrypt_lines_to_sec(&lines, ".sec", &EncryptionEngine::Aws(AwsEncryptionOptions {
+    key_id: Some("alias/dotsec".into()),
+    region: Some("eu-west-1".into()),
+})).await.unwrap();
+```
+
+```rust
+use dotsec_core::{decrypt_sec_to_lines, resolve_env_vars, collect_secret_values, redact};
+
+// Decrypt and use
+let lines = decrypt_sec_to_lines(".sec", &engine).await.unwrap();
+let env_vars = resolve_env_vars(&lines);
+let secrets = collect_secret_values(&lines, &env_vars);
+
+// Redact secrets from output
+let safe_output = redact("my password is s3cret", &secrets);
 ```
 
 ### Channels
@@ -116,10 +129,11 @@ dotsec diff --base .env .env.staging # compare env files
 ## Project structure
 
 ```
-dotsec/                  CLI binary crate
+dotsec-core/             Core library (encryption, decryption, interpolation, redaction)
+dotsec/                  CLI binary crate (uses dotsec-core)
   npm/                   npm distribution packages (CLI)
-dotsec-napi/             Native Node.js bindings (@dotsec/core)
+dotsec-napi/             Native Node.js bindings (uses dotsec-core, published as @dotsec/core)
   npm/                   npm distribution packages (library)
-dotenv/                  .env/.sec parser (internal)
+dotenv/                  .env/.sec parser (internal, re-exported by dotsec-core)
 aws/                     AWS KMS encryption (internal)
 ```
