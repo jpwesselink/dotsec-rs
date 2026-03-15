@@ -1,0 +1,11 @@
+{
+  "name": "@jpwesselink/dotsec-core-darwin-arm64",
+  "version": "5.0.0",
+  "description": "dotsec-core native bindings for macOS ARM64 (Apple Silicon)",
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "main": "dotsec-core.node",
+  "files": ["dotsec-core.node"],
+  "publishConfig": { "access": "public" },
+  "license": "MIT"
+}

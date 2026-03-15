@@ -1,0 +1,11 @@
+{
+  "name": "@jpwesselink/dotsec-core-win32-arm64-msvc",
+  "version": "5.0.0",
+  "description": "dotsec-core native bindings for Windows ARM64",
+  "os": ["win32"],
+  "cpu": ["arm64"],
+  "main": "dotsec-core.node",
+  "files": ["dotsec-core.node"],
+  "publishConfig": { "access": "public" },
+  "license": "MIT"
+}

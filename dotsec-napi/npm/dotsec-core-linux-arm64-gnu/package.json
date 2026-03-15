@@ -1,0 +1,11 @@
+{
+  "name": "@jpwesselink/dotsec-core-linux-arm64-gnu",
+  "version": "5.0.0",
+  "description": "dotsec-core native bindings for Linux ARM64 (glibc)",
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "main": "dotsec-core.node",
+  "files": ["dotsec-core.node"],
+  "publishConfig": { "access": "public" },
+  "license": "MIT"
+}
