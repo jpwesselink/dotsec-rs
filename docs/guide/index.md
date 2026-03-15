@@ -62,13 +62,36 @@ dotsec = { version = "5", features = ["library"] }
 ```
 
 ```rust
-use dotsec;
+use dotenv::{parse_dotenv, lines_to_entries, validate_entries};
 
-// Parse and decrypt a .sec file
-// See the dotsec crate docs for full API
+// Parse a .env file
+let content = std::fs::read_to_string(".env").unwrap();
+let lines = parse_dotenv(&content).unwrap();
+
+// Get structured entries with directives
+let entries = lines_to_entries(&lines);
+for entry in &entries {
+    println!("{} = {} (encrypt: {})", entry.key, entry.value, entry.has_directive("encrypt"));
+}
+
+// Validate directives and values
+let errors = validate_entries(&entries);
+for err in &errors {
+    eprintln!("{}: {}", err.key, err.message);
+}
 ```
 
-The `dotenv` and `aws` crates are internal and not published separately.
+```rust
+use dotsec::{load_file, parse_content, encrypt_lines_to_sec, EncryptionEngine};
+
+// Load, parse, and encrypt
+let content = load_file(".env").unwrap();
+let lines = parse_content(&content).unwrap();
+encrypt_lines_to_sec(&lines, ".sec", &EncryptionEngine::Aws {
+    key_id: "alias/dotsec".into(),
+    region: "eu-west-1".into(),
+}).await.unwrap();
+```
 
 ### Channels
 
