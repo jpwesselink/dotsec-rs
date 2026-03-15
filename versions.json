@@ -1,10 +1,5 @@
 {
   "stable": [],
   "beta": null,
-  "prs": [
-    {
-      "label": "#1 feat/align-with-release-playground",
-      "path": "/pr-1/"
-    }
-  ]
+  "prs": []
 }
