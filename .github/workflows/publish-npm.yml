@@ -2,11 +2,61 @@ name: Publish CLI to NPM
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize]
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g. 5.0.0)'
+        required: true
 
 jobs:
+  resolve-version:
+    name: Resolve version
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'dotsec-v')
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      npm-tag: ${{ steps.version.outputs.npm-tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          # Version comes from Cargo.toml (managed by release-plz)
+          CARGO_VERSION=$(grep '^version' dotsec/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            PR_NUM=${{ github.event.pull_request.number }}
+            BRANCH_SLUG=$(echo "${{ github.head_ref }}" | sed 's/[^a-zA-Z0-9.-]/-/g')
+            SHORT_SHA=$(echo "${{ github.event.pull_request.head.sha }}" | cut -c1-7)
+            echo "version=${CARGO_VERSION}-${BRANCH_SLUG}.${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+            echo "npm-tag=${BRANCH_SLUG}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "release" ]; then
+            RELEASE_VERSION=$(echo "${{ github.event.release.tag_name }}" | sed 's/^.*-v//')
+            echo "version=${RELEASE_VERSION}" >> "$GITHUB_OUTPUT"
+            echo "npm-tag=latest" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            echo "version=${CARGO_VERSION}-beta.${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+            echo "npm-tag=beta" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "npm-tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Print version
+        run: |
+          echo "Version: ${{ steps.version.outputs.version }}"
+          echo "NPM tag: ${{ steps.version.outputs.npm-tag }}"
+
   build:
     name: Build ${{ matrix.npm_pkg }}
+    needs: resolve-version
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -60,7 +110,7 @@ jobs:
 
       - name: Copy binary into npm package
         shell: bash
-        run: cp target/${{ matrix.target }}/release/${{ matrix.binary }} npm/${{ matrix.npm_pkg }}/
+        run: cp target/${{ matrix.target }}/release/${{ matrix.binary }} dotsec/npm/${{ matrix.npm_pkg }}/
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -68,34 +118,21 @@ jobs:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Set npm version from tag
-        working-directory: npm/${{ matrix.npm_pkg }}
+      - name: Set npm version
+        working-directory: dotsec/npm/${{ matrix.npm_pkg }}
         shell: bash
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          npm version --no-git-tag-version --allow-same-version "$VERSION"
-
-      - name: Determine npm tag
-        id: npm-tag
-        shell: bash
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          if [[ "$VERSION" == *"-"* ]]; then
-            echo "tag=$(echo "$VERSION" | sed 's/.*-\([a-z]*\).*/\1/')" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=latest" >> "$GITHUB_OUTPUT"
-          fi
+        run: npm version --no-git-tag-version --allow-same-version "${{ needs.resolve-version.outputs.version }}"
 
       - name: Publish platform package
-        working-directory: npm/${{ matrix.npm_pkg }}
-        run: npm publish --tag ${{ steps.npm-tag.outputs.tag }}
+        working-directory: dotsec/npm/${{ matrix.npm_pkg }}
+        run: npm publish --tag ${{ needs.resolve-version.outputs.npm-tag }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   publish-meta:
     name: Publish meta-package
-    needs: build
-    if: ${{ always() && needs.build.result != 'cancelled' }}
+    needs: [resolve-version, build]
+    if: always() && needs.resolve-version.result == 'success' && needs.build.result != 'cancelled'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -106,22 +143,11 @@ jobs:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Determine npm tag
-        id: npm-tag
+      - name: Set version
+        working-directory: dotsec/npm/dotsec
         shell: bash
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          if [[ "$VERSION" == *"-"* ]]; then
-            echo "tag=$(echo "$VERSION" | sed 's/.*-\([a-z]*\).*/\1/')" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=latest" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Set version from tag
-        working-directory: npm/dotsec
-        shell: bash
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
+          VERSION="${{ needs.resolve-version.outputs.version }}"
           node -e "
             const pkg = require('./package.json');
             pkg.version = '$VERSION';
@@ -132,7 +158,7 @@ jobs:
           "
 
       - name: Publish meta-package
-        working-directory: npm/dotsec
-        run: npm publish --tag ${{ steps.npm-tag.outputs.tag }}
+        working-directory: dotsec/npm/dotsec
+        run: npm publish --tag ${{ needs.resolve-version.outputs.npm-tag }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
