@@ -2,8 +2,8 @@
 pageType: home
 hero:
   name: dotsec
-  text: Encrypted .env management
-  tagline: AWS KMS envelope encryption for your environment variables
+  text: .env files without the .env files
+  tagline: Encrypt your secrets with KMS and commit them to git. One file, one source of truth.
   actions:
     - theme: brand
       text: Get Started
