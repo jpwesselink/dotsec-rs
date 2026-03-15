@@ -10,4 +10,9 @@ export default defineConfig({
   head: [
     ['script', { src: '/dotsec-rs/version-switcher.js', defer: '' }],
   ],
+  themeConfig: {
+    socialLinks: [
+      { icon: "github", mode: "link", content: "https://github.com/jpwesselink/dotsec-rs" },
+    ],
+  },
 });
