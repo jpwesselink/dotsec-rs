@@ -23,18 +23,30 @@ npm install @dotsec/core
 
 ```js
 import { parse, validate, toJson, format } from '@dotsec/core';
+import { readFileSync } from 'node:fs';
 
-const entries = parse('# @encrypt\nDB_URL="postgres://localhost"\nDEBUG=true\n');
-// [{ key: "DB_URL", value: "postgres://localhost", quoteType: "Double", directives: [{ name: "encrypt" }] }, ...]
+// Load and parse a .env file
+const source = readFileSync('.env', 'utf8');
+const entries = parse(source);
 
-const errors = validate('# @bogus\nFOO="bar"\n');
-// [{ key: "FOO", message: "unknown directive @bogus..." }]
+for (const entry of entries) {
+  console.log(`${entry.key} = ${entry.value}`);
+  if (entry.directives.length > 0) {
+    console.log(`  directives:`, entry.directives.map(d => d.name));
+  }
+}
 
-const json = toJson('FOO=bar\nBAZ=123\n');
-// '[{"FOO":"bar"},{"BAZ":"123"}]'
+// Validate directives and values
+const errors = validate(source);
+for (const err of errors) {
+  console.error(`${err.key}: ${err.message}`);
+}
 
-const formatted = format('FOO=bar\n');
-// 'FOO=bar\n'
+// Convert to JSON
+const json = toJson(source);
+
+// Roundtrip format
+const formatted = format(source);
 ```
 
 ### Channels
