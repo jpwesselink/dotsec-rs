@@ -2,8 +2,8 @@
 pageType: home
 hero:
   name: dotsec
-  text: .env files without the .env files
-  tagline: Encrypt your secrets with KMS and commit them to git. One file, one source of truth.
+  text: Secrets belong in git
+  tagline: .env files without the .env files — encrypt with KMS, commit with confidence.
   actions:
     - theme: brand
       text: Get Started
