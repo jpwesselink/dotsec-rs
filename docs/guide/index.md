@@ -21,11 +21,12 @@ Native Node.js bindings for parsing, validating, and formatting `.env` files:
 npm install @dotsec/core
 ```
 
+Parse a `.env` file into structured entries with their directives:
+
 ```js
-import { parse, validate, toJson, format } from '@dotsec/core';
+import { parse } from '@dotsec/core';
 import { readFileSync } from 'node:fs';
 
-// Load and parse a .env file
 const source = readFileSync('.env', 'utf8');
 const entries = parse(source);
 
@@ -35,18 +36,26 @@ for (const entry of entries) {
     console.log(`  directives:`, entry.directives.map(d => d.name));
   }
 }
+```
 
-// Validate directives and values
+Validate directives and values — catches unknown directives, type mismatches, and invalid push targets:
+
+```js
+import { validate } from '@dotsec/core';
+
 const errors = validate(source);
 for (const err of errors) {
   console.error(`${err.key}: ${err.message}`);
 }
+```
 
-// Convert to JSON
-const json = toJson(source);
+Convert to JSON or roundtrip-format back to `.env`:
 
-// Roundtrip format
-const formatted = format(source);
+```js
+import { toJson, format } from '@dotsec/core';
+
+const json = toJson(source);       // '[{"FOO":"bar"},{"PORT":"3000"}]'
+const formatted = format(source);  // normalized .env output
 ```
 
 ### Channels
@@ -73,31 +82,31 @@ Add `dotsec-core` as a dependency:
 dotsec-core = "5"
 ```
 
+Parse a `.env` file and inspect entries with their directives:
+
 ```rust
 use dotsec_core::dotenv::{parse_dotenv, lines_to_entries, validate_entries};
 
-// Parse a .env file
 let content = std::fs::read_to_string(".env").unwrap();
 let lines = parse_dotenv(&content).unwrap();
-
-// Get structured entries with directives
 let entries = lines_to_entries(&lines);
+
 for entry in &entries {
     println!("{} = {} (encrypt: {})", entry.key, entry.value, entry.has_directive("encrypt"));
 }
 
-// Validate directives and values
 let errors = validate_entries(&entries);
 for err in &errors {
     eprintln!("{}: {}", err.key, err.message);
 }
 ```
 
+Encrypt a `.env` file into a `.sec` file using AWS KMS:
+
 ```rust
 use dotsec_core::{load_file, parse_content, encrypt_lines_to_sec};
 use dotsec_core::{EncryptionEngine, AwsEncryptionOptions};
 
-// Load, parse, and encrypt
 let content = load_file(".env").unwrap();
 let lines = parse_content(&content).unwrap();
 encrypt_lines_to_sec(&lines, ".sec", &EncryptionEngine::Aws(AwsEncryptionOptions {
@@ -106,15 +115,15 @@ encrypt_lines_to_sec(&lines, ".sec", &EncryptionEngine::Aws(AwsEncryptionOptions
 })).await.unwrap();
 ```
 
+Decrypt a `.sec` file, resolve interpolation, and redact secrets from output:
+
 ```rust
 use dotsec_core::{decrypt_sec_to_lines, resolve_env_vars, collect_secret_values, redact};
 
-// Decrypt and use
 let lines = decrypt_sec_to_lines(".sec", &engine).await.unwrap();
 let env_vars = resolve_env_vars(&lines);
 let secrets = collect_secret_values(&lines, &env_vars);
 
-// Redact secrets from output
 let safe_output = redact("my password is s3cret", &secrets);
 ```
 
