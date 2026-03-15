@@ -12,7 +12,7 @@ crate-type = ["cdylib"]
 [dependencies]
 napi = { version = "3", default-features = false, features = ["napi9"] }
 napi-derive = "3"
-dotenv = { path = "../dotenv", version = "5.0.0" }
+dotsec-core = { path = "../dotsec-core", version = "5.0.0" }
 
 [build-dependencies]
 napi-build = "2"

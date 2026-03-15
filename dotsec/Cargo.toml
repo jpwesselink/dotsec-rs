@@ -4,7 +4,7 @@ version = "5.0.0"
 edition = "2021"
 
 [dependencies]
-aws = { path = "../aws" }
+dotsec-core = { path = "../dotsec-core" }
 colored = { workspace = true }
 dotenv = { path = "../dotenv" }
 clap = { version = "4.4.14", features = [
@@ -20,10 +20,8 @@ env_logger = { features = [
     "regex",
     "humantime",
 ], default-features = false, version = "0.11.2" }
-hex = "0.4"
 libc = "0.2"
 portable-pty = "0.9"
-rand = "0.8"
 inquire = "0.7"
 log = { workspace = true }
 signal-hook = "0.3"

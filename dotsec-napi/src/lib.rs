@@ -23,9 +23,9 @@ pub struct ParsedValidationError {
 /// Parse a .env file string and return entries with their directives.
 #[napi]
 pub fn parse(source: String) -> napi::Result<Vec<ParsedEntry>> {
-    let lines = dotenv::parse_dotenv(&source)
+    let lines = dotsec_core::dotenv::parse_dotenv(&source)
         .map_err(|e| napi::Error::from_reason(format!("Parse error: {e}")))?;
-    let entries = dotenv::lines_to_entries(&lines);
+    let entries = dotsec_core::dotenv::lines_to_entries(&lines);
 
     Ok(entries
         .into_iter()
@@ -45,10 +45,10 @@ pub fn parse(source: String) -> napi::Result<Vec<ParsedEntry>> {
 /// Validate entries from a .env file string. Returns a list of validation errors.
 #[napi]
 pub fn validate(source: String) -> napi::Result<Vec<ParsedValidationError>> {
-    let lines = dotenv::parse_dotenv(&source)
+    let lines = dotsec_core::dotenv::parse_dotenv(&source)
         .map_err(|e| napi::Error::from_reason(format!("Parse error: {e}")))?;
-    let entries = dotenv::lines_to_entries(&lines);
-    let errors = dotenv::validate_entries(&entries);
+    let entries = dotsec_core::dotenv::lines_to_entries(&lines);
+    let errors = dotsec_core::dotenv::validate_entries(&entries);
 
     Ok(errors
         .into_iter()
@@ -62,15 +62,15 @@ pub fn validate(source: String) -> napi::Result<Vec<ParsedValidationError>> {
 /// Convert a .env file string to JSON.
 #[napi]
 pub fn to_json(source: String) -> napi::Result<String> {
-    let lines = dotenv::parse_dotenv(&source)
+    let lines = dotsec_core::dotenv::parse_dotenv(&source)
         .map_err(|e| napi::Error::from_reason(format!("Parse error: {e}")))?;
-    dotenv::lines_to_json(&lines).map_err(|e| napi::Error::from_reason(format!("JSON error: {e}")))
+    dotsec_core::dotenv::lines_to_json(&lines).map_err(|e| napi::Error::from_reason(format!("JSON error: {e}")))
 }
 
 /// Roundtrip: parse a .env file string and serialize it back.
 #[napi]
 pub fn format(source: String) -> napi::Result<String> {
-    let lines = dotenv::parse_dotenv(&source)
+    let lines = dotsec_core::dotenv::parse_dotenv(&source)
         .map_err(|e| napi::Error::from_reason(format!("Parse error: {e}")))?;
-    Ok(dotenv::lines_to_string(&lines))
+    Ok(dotsec_core::dotenv::lines_to_string(&lines))
 }

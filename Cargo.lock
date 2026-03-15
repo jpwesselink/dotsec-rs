@@ -816,28 +816,37 @@ dependencies = [
 name = "dotsec"
 version = "5.0.0"
 dependencies = [
- "aws",
  "clap",
  "colored",
  "comfy-table",
  "dotenv",
+ "dotsec-core",
  "env_logger",
- "hex",
  "inquire",
  "libc",
  "log",
  "portable-pty",
- "rand",
  "serde_json",
  "signal-hook",
  "tokio",
 ]
 
 [[package]]
+name = "dotsec-core"
+version = "5.0.0"
+dependencies = [
+ "aws",
+ "dotenv",
+ "hex",
+ "rand",
+ "serde_json",
+]
+
+[[package]]
 name = "dotsec-napi"
 version = "5.0.0"
 dependencies = [
- "dotenv",
+ "dotsec-core",
  "napi",
  "napi-build",
  "napi-derive",

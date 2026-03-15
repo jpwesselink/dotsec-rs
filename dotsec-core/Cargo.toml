@@ -1,0 +1,13 @@
+[package]
+name = "dotsec-core"
+version = "5.0.0"
+edition = "2021"
+description = "Core library for dotsec — encryption, decryption, interpolation, and redaction"
+license = "MIT"
+
+[dependencies]
+aws = { path = "../aws" }
+dotenv = { path = "../dotenv" }
+hex = "0.4"
+rand = "0.8"
+serde_json = "1.0"
