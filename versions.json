@@ -4,5 +4,10 @@
     "label": "beta (5.0.0)",
     "path": "/beta/"
   },
-  "prs": []
+  "prs": [
+    {
+      "label": "#7 feat/push",
+      "path": "/pr-7/"
+    }
+  ]
 }
