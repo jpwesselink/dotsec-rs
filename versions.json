@@ -4,10 +4,5 @@
     "label": "beta (5.0.0)",
     "path": "/beta/"
   },
-  "prs": [
-    {
-      "label": "#5 feat/envelope-encryption",
-      "path": "/pr-5/"
-    }
-  ]
+  "prs": []
 }
