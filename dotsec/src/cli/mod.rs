@@ -1,4 +1,4 @@
-use self::commands::{create_command, diff, export, import, init, rotate_key, run, set, show, validate};
+use self::commands::{create_command, diff, export, import, init, migrate, rotate_key, run, set, show, validate};
 use crate::default_options::DefaultOptions;
 use dotsec::EncryptionEngine;
 use log::debug;
@@ -45,6 +45,7 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
 
     let is_init = matches.subcommand_matches("init").is_some();
     let is_import = matches.subcommand_matches("import").is_some();
+    let is_migrate = matches.subcommand_matches("migrate").is_some();
     let is_diff = matches.subcommand_matches("diff").is_some();
     let is_run_env = matches
         .subcommand_matches("run")
@@ -64,7 +65,7 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
         let file_config = dotenv::extract_file_config(&lines);
         debug!("file_config from {}: {:?}", sec_file, file_config);
         EncryptionEngine::from(file_config)
-    } else if is_init || is_import || is_diff || is_run_env {
+    } else if is_init || is_import || is_migrate || is_diff || is_run_env {
         debug!("{} does not exist yet or not needed, using defaults", sec_file);
         EncryptionEngine::None
     } else {
@@ -87,6 +88,7 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
     validate::match_args(&matches, &default_options).await?;
     diff::match_args(&matches, &default_options).await?;
     rotate_key::match_args(&matches, &default_options).await?;
+    migrate::match_args(&matches, &default_options).await?;
 
     Ok(())
 }
