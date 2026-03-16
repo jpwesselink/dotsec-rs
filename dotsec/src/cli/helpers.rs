@@ -1,5 +1,15 @@
 use colored::Colorize;
 use inquire::{Confirm, Select, Text};
+use std::future::Future;
+
+/// Run an async operation with a dark_n_stormy glow animation as progress indicator.
+/// When done, the label fades to the terminal's foreground color.
+pub async fn with_progress<T>(label: &str, fut: impl Future<Output = T>) -> T {
+    let anim = chromakopia::animate::glow(chromakopia::presets::dark_n_stormy(), label, 1.0);
+    let result = fut.await;
+    anim.fade_to_foreground(std::time::Duration::from_millis(400)).await;
+    result
+}
 
 /// Heuristic: does this key name look like it holds a secret?
 pub fn looks_like_secret(key: &str) -> bool {

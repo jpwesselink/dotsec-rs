@@ -4,9 +4,6 @@
   "description": "dotsec native binary for macOS x64 (Intel)",
   "os": ["darwin"],
   "cpu": ["x64"],
-  "bin": {
-    "dotsec": "dotsec"
-  },
   "files": ["dotsec"],
   "publishConfig": {
     "access": "public"

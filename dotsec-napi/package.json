@@ -1,0 +1,43 @@
+{
+  "name": "@dotsec/core",
+  "version": "5.0.0",
+  "description": "Native Node.js bindings for dotsec — parse, validate, and format .env files",
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "napi": {
+    "binaryName": "dotsec-core",
+    "targets": [
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-pc-windows-msvc",
+      "aarch64-pc-windows-msvc"
+    ]
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jpwesselink/dotsec-rs"
+  },
+  "optionalDependencies": {
+    "@dotsec/core-darwin-arm64": "5.0.0",
+    "@dotsec/core-darwin-x64": "5.0.0",
+    "@dotsec/core-linux-x64-gnu": "5.0.0",
+    "@dotsec/core-linux-arm64-gnu": "5.0.0",
+    "@dotsec/core-win32-x64-msvc": "5.0.0",
+    "@dotsec/core-win32-arm64-msvc": "5.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

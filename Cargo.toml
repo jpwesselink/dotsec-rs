@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["dotsec", "aws", "dotenv"]
+members = ["dotsec", "dotsec-core", "aws", "dotenv", "dotsec-napi"]
 
 [workspace.dependencies]
 base64 = "0.21.7"

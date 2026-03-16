@@ -1,84 +1,150 @@
 # Getting Started
 
-`.env` is plaintext, `.sec` is its encrypted counterpart — committed to git as the single source of truth for secrets.
+dotsec encrypts your `.env` files into `.sec` files using AWS KMS. The `.sec` file is committed to git as the single source of truth for your secrets — no more sharing credentials over Slack or managing secret vaults.
 
-## Node.js
+## Install
 
-### CLI
+:::tabs
+
+@tab npm
 
 ```bash
 npm install -g dotsec
-
-# or use directly
-npx dotsec init
 ```
 
-### Channels
-
-| Channel | Version | Install |
-|---------|---------|---------|
-| `latest` | `5.0.0` | `npm install dotsec` |
-| `beta` | `5.0.0-beta.abc1234` | `npm install dotsec@beta` |
-| `pr-N` | `5.0.0-pr-42.abc1234` | `npm install dotsec@pr-42` |
-
-## Rust
-
-### CLI
+@tab cargo
 
 ```bash
 cargo install dotsec
 ```
 
-### Library
+@tab npx
 
-Add `dotsec` as a dependency:
-
-```toml
-[dependencies]
-dotsec = { version = "5", features = ["library"] }
+```bash
+npx dotsec init
 ```
 
-```rust
-use dotsec;
-
-// Parse and decrypt a .sec file
-// See the dotsec crate docs for full API
-```
-
-The `dotenv` and `aws` crates are internal and not published separately.
-
-### Channels
-
-| Channel | Version | Install |
-|---------|---------|---------|
-| crates.io | `5.0.0` | `cargo install dotsec` |
+:::
 
 ## Quick start
 
 ```bash
-dotsec init                          # set up encryption config
-dotsec set                           # add a variable interactively
-dotsec set API_KEY sk-live-xxx --encrypt  # add inline
-dotsec import                        # migrate .env → .sec
-dotsec export                        # .sec → .env (decrypts)
-dotsec show                          # show decrypted .sec contents
-dotsec run -- node server.js         # run with decrypted env vars
-dotsec validate                      # check directives and values
-dotsec diff --base .env .env.staging # compare env files
+dotsec init                              # set up AWS KMS key
+dotsec set API_KEY sk-live-xxx --encrypt # add a secret
+dotsec import                            # migrate existing .env → .sec
+dotsec run -- node server.js             # run with decrypted env vars
 ```
+
+That's it. Your `.sec` file goes into git, your `.env` stays in `.gitignore`.
+
+## Core workflow
+
+```
+.env (plaintext, gitignored)          .sec (encrypted, committed)
+┌─────────────────────────┐           ┌─────────────────────────┐
+│ DATABASE_URL=postgres://│  encrypt  │ DATABASE_URL=AQICAHh... │
+│ API_KEY=sk-live-xxx     │ ───────▶  │ API_KEY=AQICAHh...      │
+│ DEBUG=true              │           │ DEBUG=true               │
+└─────────────────────────┘           └─────────────────────────┘
+                                 ◀───────
+                                  decrypt
+```
+
+```bash
+dotsec import              # .env → .sec (encrypts values marked with @encrypt)
+dotsec export              # .sec → .env (decrypts)
+dotsec show                # display decrypted .sec contents
+dotsec validate            # check directives and values
+dotsec diff .env .env.staging  # compare env files
+dotsec run -- npm start    # inject decrypted vars into a command
+```
+
+## Library
+
+### Node.js — `@dotsec/core`
+
+Native bindings for parsing, validating, and formatting `.env` files:
+
+```bash
+npm install @dotsec/core
+```
+
+```js
+import { parse, validate, toJson, format } from '@dotsec/core';
+import { readFileSync } from 'node:fs';
+
+const source = readFileSync('.env', 'utf8');
+
+// Parse into structured entries
+const entries = parse(source);
+for (const entry of entries) {
+  console.log(`${entry.key} = ${entry.value}`);
+}
+
+// Validate directives
+const errors = validate(source);
+for (const err of errors) {
+  console.error(`${err.key}: ${err.message}`);
+}
+
+// Convert to JSON or normalize formatting
+const json = toJson(source);
+const formatted = format(source);
+```
+
+### Rust — `dotsec-core`
+
+```toml
+[dependencies]
+dotsec-core = "5"
+```
+
+```rust
+use dotsec_core::dotenv::{parse_dotenv, lines_to_entries, validate_entries};
+
+let content = std::fs::read_to_string(".env").unwrap();
+let lines = parse_dotenv(&content).unwrap();
+let entries = lines_to_entries(&lines);
+
+for entry in &entries {
+    println!("{} = {}", entry.key, entry.value);
+}
+
+let errors = validate_entries(&entries);
+for err in &errors {
+    eprintln!("{}: {}", err.key, err.message);
+}
+```
+
+Encrypt and decrypt with AWS KMS:
+
+```rust
+use dotsec_core::{load_file, parse_content, encrypt_lines_to_sec};
+use dotsec_core::{EncryptionEngine, AwsEncryptionOptions};
+
+let content = load_file(".env").unwrap();
+let lines = parse_content(&content).unwrap();
+encrypt_lines_to_sec(&lines, ".sec", &EncryptionEngine::Aws(AwsEncryptionOptions {
+    key_id: Some("alias/dotsec".into()),
+    region: Some("eu-west-1".into()),
+})).await.unwrap();
+```
+
+## Channels
+
+| Channel | npm | Cargo |
+|---------|-----|-------|
+| Stable | `npm install dotsec` | `cargo install dotsec` |
+| Beta | `npm install dotsec@beta` | — |
 
 ## Project structure
 
 ```
-dotsec/                  CLI binary crate
-  npm/                   npm distribution packages
-    dotsec/              meta-package (optionalDependencies)
-    dotsec-darwin-arm64/ platform binaries
-    dotsec-darwin-x64/
-    dotsec-linux-arm64-gnu/
-    dotsec-linux-x64-gnu/
-    dotsec-win32-arm64-msvc/
-    dotsec-win32-x64-msvc/
-dotenv/                  .env/.sec parser (internal)
-aws/                     AWS KMS encryption (internal)
+dotsec-core/       Core library (encryption, decryption, interpolation, redaction)
+dotsec/            CLI binary (uses dotsec-core)
+  npm/             npm platform packages
+dotsec-napi/       Node.js bindings (published as @dotsec/core)
+  npm/             npm platform packages
+dotenv/            .env/.sec parser (internal)
+aws/               AWS KMS encryption (internal)
 ```

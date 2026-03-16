@@ -2,7 +2,7 @@ use clap::{Arg, Command};
 use colored::Colorize;
 use inquire::Select;
 
-use crate::cli::helpers;
+use crate::cli::helpers::{self, with_progress};
 use crate::default_options::DefaultOptions;
 
 pub fn command() -> Command {
@@ -246,10 +246,10 @@ pub async fn match_args(
             new_lines.push(dotenv::Line::Newline);
         }
 
-        dotsec::encrypt_lines_to_sec(&new_lines, sec_file, encryption_engine).await?;
+        with_progress("Encrypting...", dotsec::encrypt_lines_to_sec(&new_lines, sec_file, encryption_engine)).await?;
     } else {
         // New-only mode: decrypt existing .sec, append new variables
-        let mut existing_lines = dotsec::decrypt_sec_to_lines(sec_file, encryption_engine).await?;
+        let mut existing_lines = with_progress("Decrypting...", dotsec::decrypt_sec_to_lines(sec_file, encryption_engine)).await?;
 
         let mut var_index = 0;
         for line in &lines {
@@ -279,7 +279,7 @@ pub async fn match_args(
             }
         }
 
-        dotsec::encrypt_lines_to_sec(&existing_lines, sec_file, encryption_engine).await?;
+        with_progress("Encrypting...", dotsec::encrypt_lines_to_sec(&existing_lines, sec_file, encryption_engine)).await?;
     }
 
     println!(

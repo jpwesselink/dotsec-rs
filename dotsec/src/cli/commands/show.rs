@@ -3,6 +3,7 @@ use dotsec::OutputFormat;
 use clap::{arg, value_parser, Command};
 use log::debug;
 
+use crate::cli::helpers::with_progress;
 use crate::default_options::DefaultOptions;
 
 pub fn command() -> Command {
@@ -28,7 +29,7 @@ pub async fn match_args(
         let sec_file = default_options.sec_file;
         debug!("Showing decrypted {}", sec_file);
 
-        let output = dotsec::show(sec_file, &default_options.encryption_engine, output_format).await?;
+        let output = with_progress("Decrypting...", dotsec::show(sec_file, &default_options.encryption_engine, output_format)).await?;
         println!("{}", output);
     }
     Ok(())

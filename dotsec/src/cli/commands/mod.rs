@@ -18,5 +18,5 @@ pub fn create_command() -> clap::Command {
         .subcommand(run::command())
         .subcommand(validate::command())
         .subcommand(diff::command())
-        .arg_required_else_help(true)
+        .arg_required_else_help(false)
 }

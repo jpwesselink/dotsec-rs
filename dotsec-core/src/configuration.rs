@@ -1,5 +1,3 @@
-use clap::ValueEnum;
-
 /// Internal encryption engine used for dispatch.
 #[derive(Clone, Debug, Default)]
 pub enum EncryptionEngine {
@@ -24,13 +22,4 @@ impl From<dotenv::FileConfig> for EncryptionEngine {
             _ => EncryptionEngine::None,
         }
     }
-}
-
-#[derive(Clone, Debug, ValueEnum, Default)]
-pub enum OutputFormat {
-    #[default]
-    Raw,
-    Json,
-    Text,
-    Csv,
 }

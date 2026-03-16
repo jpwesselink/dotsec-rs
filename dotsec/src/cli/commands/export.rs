@@ -1,6 +1,7 @@
 use clap::{Arg, Command};
 use colored::Colorize;
 
+use crate::cli::helpers::with_progress;
 use crate::default_options::DefaultOptions;
 
 pub fn command() -> Command {
@@ -27,7 +28,7 @@ pub async fn match_args(
     let sec_file = default_options.sec_file;
     let encryption_engine = &default_options.encryption_engine;
 
-    let lines = dotsec::decrypt_sec_to_lines(sec_file, encryption_engine).await?;
+    let lines = with_progress("Decrypting...", dotsec::decrypt_sec_to_lines(sec_file, encryption_engine)).await?;
     let output = dotenv::lines_to_string(&lines);
 
     if let Some(out_file) = sub.get_one::<String>("output") {

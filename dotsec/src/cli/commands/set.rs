@@ -2,7 +2,7 @@ use clap::{Arg, Command};
 use colored::Colorize;
 use inquire::Text;
 
-use crate::cli::helpers;
+use crate::cli::helpers::{self, with_progress};
 use crate::default_options::DefaultOptions;
 
 pub fn command() -> Command {
@@ -164,7 +164,7 @@ pub async fn match_args(
 
     if needs_kms {
         // Decrypt → modify → re-encrypt (full KMS round trip)
-        let mut lines = dotsec::decrypt_sec_to_lines(sec_file, encryption_engine).await?;
+        let mut lines = with_progress("Decrypting...", dotsec::decrypt_sec_to_lines(sec_file, encryption_engine)).await?;
 
         let existing_pos = lines.iter().position(|l| matches!(l, dotenv::Line::Kv(k, _, _) if k == &key));
         let kv_line = dotenv::Line::Kv(key.clone(), value, dotenv::QuoteType::Double);
@@ -188,7 +188,7 @@ pub async fn match_args(
             action = "Added";
         }
 
-        dotsec::encrypt_lines_to_sec(&lines, sec_file, encryption_engine).await?;
+        with_progress("Encrypting...", dotsec::encrypt_lines_to_sec(&lines, sec_file, encryption_engine)).await?;
         println!("{} {} {} in {}", "✓".green(), action, key.bold(), sec_file);
     } else {
         // Plaintext — modify raw .sec lines directly, no KMS needed

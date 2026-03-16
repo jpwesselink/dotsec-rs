@@ -23,6 +23,7 @@ node_modules/
 dotsec.json
 
 # Temp
+ddd.json
 meh.*
 settings.json
 *.swp

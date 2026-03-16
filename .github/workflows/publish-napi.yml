@@ -1,4 +1,4 @@
-name: Publish CLI to NPM
+name: Publish Core npm package
 
 on:
   push:
@@ -16,7 +16,7 @@ on:
 jobs:
   resolve-version:
     name: Resolve version
-    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'dotsec-v')
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'dotsec-core-v')
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -28,8 +28,7 @@ jobs:
         id: version
         shell: bash
         run: |
-          # Version comes from Cargo.toml (managed by release-plz)
-          CARGO_VERSION=$(grep '^version' dotsec/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          CARGO_VERSION=$(grep '^version' dotsec-napi/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           SHORT_SHA=$(git rev-parse --short HEAD)
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             PR_NUM=${{ github.event.pull_request.number }}
@@ -64,32 +63,26 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
-            npm_pkg: dotsec-linux-x64-gnu
-            binary: dotsec
+            npm_pkg: dotsec-core-linux-x64-gnu
             can_test: true
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-latest
-            npm_pkg: dotsec-linux-arm64-gnu
-            binary: dotsec
+            npm_pkg: dotsec-core-linux-arm64-gnu
             cross: true
           - target: x86_64-apple-darwin
             runner: macos-latest
-            npm_pkg: dotsec-darwin-x64
-            binary: dotsec
+            npm_pkg: dotsec-core-darwin-x64
           - target: aarch64-apple-darwin
             runner: macos-14
-            npm_pkg: dotsec-darwin-arm64
-            binary: dotsec
+            npm_pkg: dotsec-core-darwin-arm64
             can_test: true
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
-            npm_pkg: dotsec-win32-x64-msvc
-            binary: dotsec.exe
+            npm_pkg: dotsec-core-win32-x64-msvc
             can_test: true
           - target: aarch64-pc-windows-msvc
             runner: windows-latest
-            npm_pkg: dotsec-win32-arm64-msvc
-            binary: dotsec.exe
+            npm_pkg: dotsec-core-win32-arm64-msvc
     steps:
       - uses: actions/checkout@v4
 
@@ -102,26 +95,42 @@ jobs:
         if: matrix.cross
         run: cargo install cross --locked
 
-      - name: Build binary
+      - name: Build native module
         shell: bash
         run: |
           if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }} -p dotsec
+            cross build --release --target ${{ matrix.target }} -p dotsec-napi
           else
-            cargo build --release --target ${{ matrix.target }} -p dotsec
+            cargo build --release --target ${{ matrix.target }} -p dotsec-napi
           fi
 
-      - name: Copy binary into npm package
+      - name: Copy .node file into npm package
         shell: bash
-        run: cp target/${{ matrix.target }}/release/${{ matrix.binary }} dotsec/npm/${{ matrix.npm_pkg }}/
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp target/${{ matrix.target }}/release/dotsec_napi.dll dotsec-napi/npm/${{ matrix.npm_pkg }}/dotsec-core.node
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            cp target/${{ matrix.target }}/release/libdotsec_napi.dylib dotsec-napi/npm/${{ matrix.npm_pkg }}/dotsec-core.node
+          else
+            cp target/${{ matrix.target }}/release/libdotsec_napi.so dotsec-napi/npm/${{ matrix.npm_pkg }}/dotsec-core.node
+          fi
 
-      - name: Smoke test binary
+      - name: Smoke test native module
         if: matrix.can_test
         shell: bash
         run: |
-          chmod +x dotsec/npm/${{ matrix.npm_pkg }}/${{ matrix.binary }}
-          dotsec/npm/${{ matrix.npm_pkg }}/${{ matrix.binary }} --help
-          dotsec/npm/${{ matrix.npm_pkg }}/${{ matrix.binary }} --version
+          node -e "
+            const m = require('./dotsec-napi/npm/${{ matrix.npm_pkg }}/dotsec-core.node');
+            const keys = Object.keys(m);
+            console.log('exports:', keys);
+            if (!keys.includes('parse')) throw new Error('missing parse export');
+            if (!keys.includes('validate')) throw new Error('missing validate export');
+            if (!keys.includes('toJson')) throw new Error('missing toJson export');
+            if (!keys.includes('format')) throw new Error('missing format export');
+            const entries = m.parse('FOO=\"bar\"\n');
+            if (entries[0].key !== 'FOO') throw new Error('parse returned wrong key');
+            console.log('smoke test passed');
+          "
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -130,18 +139,18 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
 
       - name: Set npm version
-        working-directory: dotsec/npm/${{ matrix.npm_pkg }}
+        working-directory: dotsec-napi/npm/${{ matrix.npm_pkg }}
         shell: bash
         run: npm version --no-git-tag-version --allow-same-version "${{ needs.resolve-version.outputs.version }}"
 
       - name: Publish platform package
-        working-directory: dotsec/npm/${{ matrix.npm_pkg }}
+        working-directory: dotsec-napi/npm/${{ matrix.npm_pkg }}
         run: npm publish --tag ${{ needs.resolve-version.outputs.npm-tag }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   publish-meta:
-    name: Publish meta-package
+    name: Publish @dotsec/core
     needs: [resolve-version, build]
     if: always() && needs.resolve-version.result == 'success' && needs.build.result != 'cancelled'
     runs-on: ubuntu-latest
@@ -155,7 +164,7 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
 
       - name: Set version
-        working-directory: dotsec/npm/dotsec
+        working-directory: dotsec-napi
         shell: bash
         run: |
           VERSION="${{ needs.resolve-version.outputs.version }}"
@@ -169,13 +178,13 @@ jobs:
           "
 
       - name: Publish meta-package
-        working-directory: dotsec/npm/dotsec
+        working-directory: dotsec-napi
         run: npm publish --tag ${{ needs.resolve-version.outputs.npm-tag }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   verify:
-    name: Verify published CLI
+    name: Verify published @dotsec/core
     needs: [resolve-version, publish-meta]
     if: needs.publish-meta.result == 'success'
     runs-on: ubuntu-latest
@@ -190,18 +199,25 @@ jobs:
         run: |
           VERSION="${{ needs.resolve-version.outputs.version }}"
           for i in $(seq 1 30); do
-            if npm view dotsec@"$VERSION" version 2>/dev/null; then
+            if npm view "@dotsec/core@$VERSION" version 2>/dev/null; then
               echo "Package available after ${i}0s"
               exit 0
             fi
-            echo "Waiting for dotsec@$VERSION to appear on npm... (attempt $i/30)"
+            echo "Waiting for @dotsec/core@$VERSION to appear on npm... (attempt $i/30)"
             sleep 10
           done
           echo "Package not available after 5 minutes"
           exit 1
 
-      - name: Install and test CLI from npm
+      - name: Install and test @dotsec/core from npm
         run: |
-          npm install -g dotsec@${{ needs.resolve-version.outputs.version }}
-          dotsec --version
-          dotsec --help
+          npm install @dotsec/core@${{ needs.resolve-version.outputs.version }}
+          node -e "
+            const m = require('@dotsec/core');
+            const entries = m.parse('FOO=\"bar\"\n');
+            if (entries[0].key !== 'FOO') throw new Error('parse failed');
+            if (entries[0].value !== 'bar') throw new Error('wrong value');
+            const errors = m.validate('# @bogus\nX=1\n');
+            if (errors.length === 0) throw new Error('validate should have found errors');
+            console.log('verification passed');
+          "
