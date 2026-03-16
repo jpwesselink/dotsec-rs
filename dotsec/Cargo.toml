@@ -27,7 +27,7 @@ log = { workspace = true }
 signal-hook = "0.3"
 serde_json = "1.0"
 tokio = { workspace = true }
-chromakopia = "=0.1.0-beta.8832a4a"
+chromakopia = "=0.1.0-beta.2ad179b"
 
 [features]
 default = ["cli"]
