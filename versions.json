@@ -6,10 +6,6 @@
   },
   "prs": [
     {
-      "label": "#7 feat/push",
-      "path": "/pr-7/"
-    },
-    {
       "label": "#8 feat/init-kms-validation",
       "path": "/pr-8/"
     }
