@@ -1,6 +1,7 @@
 use clap::{arg, Command};
 use log::debug;
 
+use crate::cli::helpers::with_progress;
 use crate::default_options::DefaultOptions;
 
 pub fn command() -> Command {
@@ -50,7 +51,7 @@ pub async fn match_args(
             _ => {
                 let encryption_engine = &default_options.encryption_engine;
                 debug!("Decrypting {} for run", default_options.sec_file);
-                dotsec::decrypt_sec_to_lines(default_options.sec_file, encryption_engine).await?
+                with_progress("Decrypting...", dotsec::decrypt_sec_to_lines(default_options.sec_file, encryption_engine)).await?
             }
         };
 

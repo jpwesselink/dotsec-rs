@@ -2,6 +2,7 @@ use clap::Command;
 use colored::Colorize;
 use log::debug;
 
+use crate::cli::helpers::with_progress;
 use crate::default_options::DefaultOptions;
 
 pub fn command() -> Command {
@@ -16,11 +17,10 @@ pub async fn match_args(
     if matches.subcommand_matches("validate").is_some() {
         let sec_file = default_options.sec_file;
         debug!("Decrypting {} for validation", sec_file);
-        let lines = dotsec::decrypt_sec_to_lines(
+        let lines = with_progress("Decrypting...", dotsec::decrypt_sec_to_lines(
             sec_file,
             &default_options.encryption_engine,
-        )
-        .await?;
+        )).await?;
 
         let entries = dotenv::lines_to_entries(&lines);
         let errors = dotenv::validate_entries_with_env(&entries);

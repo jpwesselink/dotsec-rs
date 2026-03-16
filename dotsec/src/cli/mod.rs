@@ -3,13 +3,45 @@ use crate::default_options::DefaultOptions;
 use dotsec::EncryptionEngine;
 use log::debug;
 use std::error::Error;
+use std::time::Duration;
 
 pub mod commands;
 pub mod helpers;
 
+const BANNER: &str = r#"       __      __
+  ____/ /___  / /_________  _____
+ / __  / __ \/ __/ ___/ _ \/ ___/
+/ /_/ / /_/ / /_(__  )  __/ /__
+\__,_/\____/\__/____/\___/\___/"#;
+
+async fn show_banner() {
+    use chromakopia::{animate, presets};
+
+    // Print figlet with static dark_n_stormy gradient
+    println!("{}", presets::dark_n_stormy().multiline(BANNER));
+    println!();
+
+    // Animate tagline with mist glow below
+    animate::Sequence::new("  Your .env, encrypted and version-controlled.")
+        .glow(presets::mist(), Duration::from_secs(3))
+        .fade_to_foreground(Duration::from_millis(500))
+        .run(1.0)
+        .await;
+
+    println!();
+    println!("  Run `dotsec --help` for usage.");
+    println!();
+}
+
 pub async fn parse_args() -> Result<(), Box<dyn Error>> {
     let command = create_command();
     let matches = command.get_matches();
+
+    // No subcommand — show animated banner
+    if matches.subcommand_name().is_none() {
+        show_banner().await;
+        return Ok(());
+    }
 
     let is_init = matches.subcommand_matches("init").is_some();
     let is_import = matches.subcommand_matches("import").is_some();
