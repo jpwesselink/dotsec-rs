@@ -8,10 +8,6 @@
     {
       "label": "#2 release-plz-2026-03-15T14-50-47Z",
       "path": "/pr-2/"
-    },
-    {
-      "label": "#3 feat/napi-bindings",
-      "path": "/pr-3/"
     }
   ]
 }
