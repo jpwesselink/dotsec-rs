@@ -283,11 +283,11 @@ fn append_entry(lines: &mut Vec<dotenv::Line>, directives: Vec<dotenv::Line>, kv
     lines.push(dotenv::Line::Newline);
 }
 
-/// Find the start of the __DOTSEC__ block (comment + KV).
-/// Returns the position of the comment or the newline before __DOTSEC__.
+/// Find the start of the __DOTSEC__ or __DOTSEC_KEY__ block (comment + KV).
+/// Returns the position of the comment or the newline before the block.
 fn find_dotsec_block_start(lines: &[dotenv::Line]) -> Option<usize> {
-    // Find the __DOTSEC__ KV
-    let dotsec_kv = lines.iter().position(|l| matches!(l, dotenv::Line::Kv(k, _, _) if k == "__DOTSEC__"))?;
+    // Find the __DOTSEC__ or __DOTSEC_KEY__ KV
+    let dotsec_kv = lines.iter().position(|l| matches!(l, dotenv::Line::Kv(k, _, _) if k == "__DOTSEC__" || k == "__DOTSEC_KEY__"))?;
 
     // Walk back to find the managed comment
     let mut start = dotsec_kv;

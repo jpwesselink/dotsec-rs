@@ -1,27 +1,31 @@
-use std::time::Duration;
-
-use aes_gcm::Aes256Gcm;
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng, Payload},
+    AeadCore, Aes256Gcm,
+};
 use aws_config::{meta::region::RegionProviderChain, BehaviorVersion};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use envelopers::{
-    CacheOptions, CachingKeyWrapper, EncryptedRecord, EnvelopeCipher, KMSKeyProvider,
-};
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 use thiserror::Error;
+use zeroize::Zeroize;
+
+type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Error, Debug)]
 pub enum DataStoreError {
     #[error("encryption failed: {0}")]
-    EncryptionError(#[from] envelopers::EncryptionError),
-    #[error("decryption failed: {0}")]
-    DecryptionError(#[from] envelopers::DecryptionError),
+    AesError(String),
+    #[error("KMS error: {0}")]
+    KmsError(String),
     #[error("base64 decoding failed: {0}")]
     DecodeError(#[from] base64::DecodeError),
+    #[error("invalid encrypted format")]
+    InvalidFormat,
+    #[error("key commitment verification failed")]
+    KeyCommitmentFailed,
 }
 
-async fn create_kms_cipher(
-    key_id: &str,
-    region: Option<&str>,
-) -> EnvelopeCipher<CachingKeyWrapper<Aes256Gcm, KMSKeyProvider<Aes256Gcm>>> {
+async fn create_kms_client(region: Option<&str>) -> aws_sdk_kms::Client {
     let region_provider = match region {
         Some(r) => RegionProviderChain::default_provider()
             .or_else(aws_config::Region::new(r.to_string())),
@@ -31,50 +35,283 @@ async fn create_kms_cipher(
         .region(region_provider)
         .load()
         .await;
-    let client = aws_sdk_kms::Client::new(&config);
-
-    let provider = KMSKeyProvider::<Aes256Gcm>::new(client, key_id.to_string());
-    EnvelopeCipher::init(CachingKeyWrapper::new(
-        provider,
-        CacheOptions::default()
-            .with_max_age(Duration::from_secs(30))
-            .with_max_bytes(100 * 1024)
-            .with_max_messages(10)
-            .with_max_entries(10),
-    ))
+    aws_sdk_kms::Client::new(&config)
 }
 
-/// Encrypt a raw string and return base64-encoded ciphertext.
-pub async fn encrypt_raw(
-    plaintext: &str,
+/// Generate a new AES-256 data encryption key via KMS.
+/// Returns (plaintext_dek, wrapped_dek) where wrapped_dek is KMS-encrypted.
+pub async fn generate_data_key(
     key_id: &str,
     region: Option<&str>,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let cipher = create_kms_cipher(key_id, region).await;
-
-    let encrypted = cipher
-        .encrypt(plaintext.as_bytes())
+) -> Result<(Vec<u8>, Vec<u8>), Box<dyn std::error::Error>> {
+    let client = create_kms_client(region).await;
+    let resp = client
+        .generate_data_key()
+        .key_id(key_id)
+        .key_spec(aws_sdk_kms::types::DataKeySpec::Aes256)
+        .send()
         .await
-        .map_err(DataStoreError::EncryptionError)?;
-    let vec = encrypted.to_vec()?;
-    Ok(STANDARD.encode(vec))
+        .map_err(|e| DataStoreError::KmsError(e.to_string()))?;
+
+    let plaintext = resp
+        .plaintext()
+        .ok_or_else(|| DataStoreError::KmsError("no plaintext in response".into()))?
+        .as_ref()
+        .to_vec();
+
+    let wrapped = resp
+        .ciphertext_blob()
+        .ok_or_else(|| DataStoreError::KmsError("no ciphertext_blob in response".into()))?
+        .as_ref()
+        .to_vec();
+
+    Ok((plaintext, wrapped))
 }
 
-/// Decrypt base64-encoded ciphertext and return the plaintext string.
-pub async fn decrypt_raw(
-    ciphertext: &str,
-    key_id: &str,
+/// Unwrap a KMS-encrypted data key back to plaintext.
+pub async fn unwrap_data_key(
+    wrapped_dek: &[u8],
     region: Option<&str>,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let decoded = STANDARD.decode(ciphertext)?;
-    let encrypted = EncryptedRecord::from_vec(decoded)
-        .map_err(|e| format!("invalid encrypted record: {}", e))?;
-
-    let cipher = create_kms_cipher(key_id, region).await;
-
-    let decrypted = cipher
-        .decrypt(&encrypted)
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let client = create_kms_client(region).await;
+    let resp = client
+        .decrypt()
+        .ciphertext_blob(aws_sdk_kms::primitives::Blob::new(wrapped_dek))
+        .send()
         .await
-        .map_err(DataStoreError::DecryptionError)?;
-    Ok(String::from_utf8(decrypted)?)
+        .map_err(|e| DataStoreError::KmsError(e.to_string()))?;
+
+    let plaintext = resp
+        .plaintext()
+        .ok_or_else(|| DataStoreError::KmsError("no plaintext in decrypt response".into()))?
+        .as_ref()
+        .to_vec();
+
+    Ok(plaintext)
+}
+
+/// Compute a 32-byte key commitment: HMAC-SHA256(key=DEK, msg="dotsec-key-commit").
+/// Stored alongside ciphertext to prove which key encrypted it.
+fn compute_key_commitment(dek: &[u8]) -> Vec<u8> {
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(dek).expect("HMAC accepts any key length");
+    mac.update(b"dotsec-key-commit");
+    mac.finalize().into_bytes().to_vec()
+}
+
+/// Verify key commitment matches the DEK.
+fn verify_key_commitment(dek: &[u8], commitment: &[u8]) -> Result<(), DataStoreError> {
+    let expected = compute_key_commitment(dek);
+    if expected.as_slice() != commitment {
+        return Err(DataStoreError::KeyCommitmentFailed);
+    }
+    Ok(())
+}
+
+/// Pad plaintext with random bytes so ciphertext length doesn't leak
+/// the original value length. Adds 0–1 extra 64-byte blocks randomly,
+/// so the same plaintext can land in different length buckets across
+/// re-encryptions.
+fn pad(data: &[u8]) -> Vec<u8> {
+    use rand::RngCore;
+
+    // Format: [2-byte big-endian original length] [original data] [random padding]
+    let header_len = 2;
+    let total = header_len + data.len();
+    let base_padded = total.div_ceil(64) * 64;
+
+    // Add 0–1 extra 64-byte blocks randomly
+    let extra_blocks = (OsRng.next_u32() % 2) as usize;
+    let padded_len = base_padded + (extra_blocks * 64);
+
+    let mut buf = vec![0u8; padded_len];
+    OsRng.fill_bytes(&mut buf); // fill everything with random bytes first
+    let len = data.len() as u16;
+    buf[0..2].copy_from_slice(&len.to_be_bytes());
+    buf[2..2 + data.len()].copy_from_slice(data);
+    buf
+}
+
+/// Remove padding and return the original plaintext bytes.
+fn unpad(data: &[u8]) -> Result<&[u8], DataStoreError> {
+    if data.len() < 2 {
+        return Err(DataStoreError::InvalidFormat);
+    }
+    let len = u16::from_be_bytes([data[0], data[1]]) as usize;
+    if 2 + len > data.len() {
+        return Err(DataStoreError::InvalidFormat);
+    }
+    Ok(&data[2..2 + len])
+}
+
+/// Encrypt a single value with AES-256-GCM using the given DEK.
+///
+/// The variable name is used as AAD (additional authenticated data),
+/// binding the ciphertext to its key name — prevents swapping encrypted
+/// values between variables.
+///
+/// Format: `ENC[base64(commitment || nonce || ciphertext || tag)]`
+/// - commitment: 32 bytes (HMAC-SHA256 key commitment)
+/// - nonce: 12 bytes
+/// - ciphertext + tag: variable length (padded plaintext + 16-byte GCM tag)
+pub fn encrypt_value(plaintext: &str, dek: &[u8], aad: &str) -> Result<String, DataStoreError> {
+    let cipher =
+        Aes256Gcm::new_from_slice(dek).map_err(|e| DataStoreError::AesError(e.to_string()))?;
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+    let mut padded = pad(plaintext.as_bytes());
+    let commitment = compute_key_commitment(dek);
+
+    let payload = Payload {
+        msg: &padded,
+        aad: aad.as_bytes(),
+    };
+    let ciphertext = cipher
+        .encrypt(&nonce, payload)
+        .map_err(|e| DataStoreError::AesError(e.to_string()))?;
+
+    padded.zeroize();
+
+    // commitment (32 bytes) || nonce (12 bytes) || ciphertext+tag
+    let mut blob = Vec::with_capacity(32 + 12 + ciphertext.len());
+    blob.extend_from_slice(&commitment);
+    blob.extend_from_slice(&nonce);
+    blob.extend_from_slice(&ciphertext);
+
+    Ok(format!("ENC[{}]", STANDARD.encode(&blob)))
+}
+
+/// Decrypt a value in `ENC[base64(...)]` format using the given DEK.
+///
+/// The variable name must be provided as AAD — must match what was used
+/// during encryption or decryption will fail (GCM authentication check).
+pub fn decrypt_value(enc_str: &str, dek: &[u8], aad: &str) -> Result<String, DataStoreError> {
+    let inner = enc_str
+        .strip_prefix("ENC[")
+        .and_then(|s| s.strip_suffix(']'))
+        .ok_or(DataStoreError::InvalidFormat)?;
+
+    let blob = STANDARD.decode(inner)?;
+    // commitment (32) + nonce (12) + at least 16 bytes (GCM tag)
+    if blob.len() < 32 + 12 + 16 {
+        return Err(DataStoreError::InvalidFormat);
+    }
+
+    let (commitment, rest) = blob.split_at(32);
+    let (nonce_bytes, ciphertext) = rest.split_at(12);
+
+    // Verify key commitment before attempting decryption
+    verify_key_commitment(dek, commitment)?;
+
+    let nonce = aes_gcm::Nonce::from_slice(nonce_bytes);
+    let cipher =
+        Aes256Gcm::new_from_slice(dek).map_err(|e| DataStoreError::AesError(e.to_string()))?;
+
+    let payload = Payload {
+        msg: ciphertext,
+        aad: aad.as_bytes(),
+    };
+    let mut decrypted = cipher
+        .decrypt(nonce, payload)
+        .map_err(|e| DataStoreError::AesError(e.to_string()))?;
+
+    let plaintext = unpad(&decrypted)?.to_vec();
+    decrypted.zeroize();
+
+    String::from_utf8(plaintext).map_err(|e| DataStoreError::AesError(e.to_string()))
+}
+
+/// Check if a value is in the `ENC[...]` envelope format.
+pub fn is_encrypted_value(value: &str) -> bool {
+    value.starts_with("ENC[") && value.ends_with(']')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encrypt_decrypt_roundtrip() {
+        let dek = [0x42u8; 32];
+        let plaintext = "hello world secret";
+        let aad = "API_KEY";
+        let encrypted = encrypt_value(plaintext, &dek, aad).unwrap();
+        assert!(encrypted.starts_with("ENC["));
+        assert!(encrypted.ends_with(']'));
+        let decrypted = decrypt_value(&encrypted, &dek, aad).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn encrypt_produces_different_ciphertexts() {
+        let dek = [0x42u8; 32];
+        let plaintext = "same input";
+        let a = encrypt_value(plaintext, &dek, "KEY").unwrap();
+        let b = encrypt_value(plaintext, &dek, "KEY").unwrap();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn decrypt_wrong_aad_fails() {
+        let dek = [0x42u8; 32];
+        let encrypted = encrypt_value("secret", &dek, "API_KEY").unwrap();
+        // Decrypting with different AAD must fail
+        assert!(decrypt_value(&encrypted, &dek, "DB_PASSWORD").is_err());
+    }
+
+    #[test]
+    fn decrypt_wrong_key_fails_commitment() {
+        let dek1 = [0x42u8; 32];
+        let dek2 = [0x43u8; 32];
+        let encrypted = encrypt_value("secret", &dek1, "KEY").unwrap();
+        let err = decrypt_value(&encrypted, &dek2, "KEY").unwrap_err();
+        assert!(matches!(err, DataStoreError::KeyCommitmentFailed));
+    }
+
+    #[test]
+    fn decrypt_invalid_format() {
+        let dek = [0x42u8; 32];
+        assert!(decrypt_value("not encrypted", &dek, "").is_err());
+        assert!(decrypt_value("ENC[]", &dek, "").is_err());
+        assert!(decrypt_value("ENC[dG9vc2hvcnQ=]", &dek, "").is_err());
+    }
+
+    #[test]
+    fn is_encrypted_value_checks() {
+        assert!(is_encrypted_value("ENC[abc123]"));
+        assert!(!is_encrypted_value("plaintext"));
+        assert!(!is_encrypted_value("ENC[no closing"));
+        assert!(!is_encrypted_value("prefix ENC[abc]"));
+    }
+
+    #[test]
+    fn encrypt_empty_string() {
+        let dek = [0x42u8; 32];
+        let encrypted = encrypt_value("", &dek, "EMPTY").unwrap();
+        let decrypted = decrypt_value(&encrypted, &dek, "EMPTY").unwrap();
+        assert_eq!(decrypted, "");
+    }
+
+    #[test]
+    fn encrypt_unicode() {
+        let dek = [0x42u8; 32];
+        let plaintext = "héllo wörld 🔑";
+        let encrypted = encrypt_value(plaintext, &dek, "UNI").unwrap();
+        let decrypted = decrypt_value(&encrypted, &dek, "UNI").unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn key_commitment_deterministic() {
+        let dek = [0x42u8; 32];
+        let a = compute_key_commitment(&dek);
+        let b = compute_key_commitment(&dek);
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 32);
+    }
+
+    #[test]
+    fn key_commitment_differs_per_key() {
+        let a = compute_key_commitment(&[0x42u8; 32]);
+        let b = compute_key_commitment(&[0x43u8; 32]);
+        assert_ne!(a, b);
+    }
 }

@@ -7,7 +7,7 @@ license = "MIT"
 
 [dependencies]
 aws = { path = "../aws" }
+base64 = { workspace = true }
 dotenv = { path = "../dotenv" }
-hex = "0.4"
-rand = "0.8"
 serde_json = "1.0"
+zeroize = "1.8"

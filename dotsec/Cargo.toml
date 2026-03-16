@@ -4,6 +4,8 @@ version = "5.0.0"
 edition = "2021"
 
 [dependencies]
+aws = { path = "../aws" }
+base64 = { workspace = true }
 dotsec-core = { path = "../dotsec-core" }
 colored = { workspace = true }
 dotenv = { path = "../dotenv" }
@@ -27,6 +29,7 @@ log = { workspace = true }
 signal-hook = "0.3"
 serde_json = "1.0"
 tokio = { workspace = true }
+zeroize = "1.8"
 chromakopia = "=0.1.0-beta.2ad179b"
 
 [features]
