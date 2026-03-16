@@ -4,10 +4,5 @@
     "label": "beta (5.0.0)",
     "path": "/beta/"
   },
-  "prs": [
-    {
-      "label": "#6 feat/migrate-v4",
-      "path": "/pr-6/"
-    }
-  ]
+  "prs": []
 }
