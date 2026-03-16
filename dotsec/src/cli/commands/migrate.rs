@@ -12,6 +12,7 @@ pub fn command() -> Command {
         .arg(
             Arg::new("env-file")
                 .help("Path to .env file with plaintext values")
+                .env("ENV_FILE")
                 .default_value(".env"),
         )
         .arg(
