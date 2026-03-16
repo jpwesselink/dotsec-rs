@@ -4,9 +4,6 @@
   "description": "dotsec native binary for Windows ARM64",
   "os": ["win32"],
   "cpu": ["arm64"],
-  "bin": {
-    "dotsec": "dotsec.exe"
-  },
   "files": ["dotsec.exe"],
   "publishConfig": {
     "access": "public"
