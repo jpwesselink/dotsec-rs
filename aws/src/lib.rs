@@ -23,6 +23,10 @@ pub enum DataStoreError {
     InvalidFormat,
     #[error("key commitment verification failed")]
     KeyCommitmentFailed,
+    #[error("SSM error: {0}")]
+    SsmError(String),
+    #[error("Secrets Manager error: {0}")]
+    SecretsManagerError(String),
 }
 
 async fn create_kms_client(region: Option<&str>) -> aws_sdk_kms::Client {
@@ -217,6 +221,105 @@ pub fn decrypt_value(enc_str: &str, dek: &[u8], aad: &str) -> Result<String, Dat
     decrypted.zeroize();
 
     String::from_utf8(plaintext).map_err(|e| DataStoreError::AesError(e.to_string()))
+}
+
+// --- Push to AWS services ---
+
+async fn create_ssm_client(region: Option<&str>) -> aws_sdk_ssm::Client {
+    let region_provider = match region {
+        Some(r) => RegionProviderChain::default_provider()
+            .or_else(aws_config::Region::new(r.to_string())),
+        None => RegionProviderChain::default_provider(),
+    };
+    let config = aws_config::defaults(BehaviorVersion::latest())
+        .region(region_provider)
+        .load()
+        .await;
+    aws_sdk_ssm::Client::new(&config)
+}
+
+async fn create_secrets_manager_client(
+    region: Option<&str>,
+) -> aws_sdk_secretsmanager::Client {
+    let region_provider = match region {
+        Some(r) => RegionProviderChain::default_provider()
+            .or_else(aws_config::Region::new(r.to_string())),
+        None => RegionProviderChain::default_provider(),
+    };
+    let config = aws_config::defaults(BehaviorVersion::latest())
+        .region(region_provider)
+        .load()
+        .await;
+    aws_sdk_secretsmanager::Client::new(&config)
+}
+
+/// Push a value to AWS SSM Parameter Store.
+/// Uses SecureString for sensitive values, String for plaintext.
+pub async fn push_to_ssm(
+    name: &str,
+    value: &str,
+    secure: bool,
+    region: Option<&str>,
+) -> Result<(), DataStoreError> {
+    let client = create_ssm_client(region).await;
+    let param_type = if secure {
+        aws_sdk_ssm::types::ParameterType::SecureString
+    } else {
+        aws_sdk_ssm::types::ParameterType::String
+    };
+
+    client
+        .put_parameter()
+        .name(name)
+        .value(value)
+        .r#type(param_type)
+        .overwrite(true)
+        .send()
+        .await
+        .map_err(|e| DataStoreError::SsmError(e.to_string()))?;
+
+    Ok(())
+}
+
+/// Push a value to AWS Secrets Manager.
+/// Creates the secret if it doesn't exist, updates it if it does.
+pub async fn push_to_secrets_manager(
+    name: &str,
+    value: &str,
+    region: Option<&str>,
+) -> Result<(), DataStoreError> {
+    let client = create_secrets_manager_client(region).await;
+
+    // Try updating first
+    let result = client
+        .put_secret_value()
+        .secret_id(name)
+        .secret_string(value)
+        .send()
+        .await;
+
+    match result {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            // If the secret doesn't exist, create it
+            let is_not_found = err
+                .as_service_error()
+                .is_some_and(|e| e.is_resource_not_found_exception());
+
+            if is_not_found {
+                client
+                    .create_secret()
+                    .name(name)
+                    .secret_string(value)
+                    .send()
+                    .await
+                    .map_err(|e| DataStoreError::SecretsManagerError(e.to_string()))?;
+                Ok(())
+            } else {
+                Err(DataStoreError::SecretsManagerError(err.to_string()))
+            }
+        }
+    }
 }
 
 /// Check if a value is in the `ENC[...]` envelope format.

@@ -4,6 +4,7 @@ pub mod export;
 pub mod import;
 pub mod init;
 pub mod migrate;
+pub mod push;
 pub mod rotate_key;
 pub mod run;
 pub mod set;
@@ -22,5 +23,6 @@ pub fn create_command() -> clap::Command {
         .subcommand(diff::command())
         .subcommand(rotate_key::command())
         .subcommand(migrate::command())
+        .subcommand(push::command())
         .arg_required_else_help(false)
 }
