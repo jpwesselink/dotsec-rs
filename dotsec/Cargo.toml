@@ -27,6 +27,7 @@ portable-pty = "0.9"
 inquire = "0.7"
 log = { workspace = true }
 signal-hook = "0.3"
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { workspace = true }
 zeroize = "1.8"
