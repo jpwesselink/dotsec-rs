@@ -347,6 +347,18 @@ mod tests {
     }
 
     #[test]
+    fn hyphenated_key() {
+        let lines = parse_dotenv("cliff-is=\"something\"\n").unwrap();
+        assert!(matches!(&lines[0], Line::Kv(k, v, QuoteType::Double) if k == "cliff-is" && v == "something"));
+    }
+
+    #[test]
+    fn dotted_key() {
+        let lines = parse_dotenv("spring.datasource.url=jdbc:foo\n").unwrap();
+        assert!(matches!(&lines[0], Line::Kv(k, _, QuoteType::None) if k == "spring.datasource.url"));
+    }
+
+    #[test]
     fn quoted_values() {
         let lines = parse_dotenv("A=\"hello\"\nB='world'\n").unwrap();
         assert!(matches!(&lines[0], Line::Kv(_, v, QuoteType::Double) if v == "hello"));

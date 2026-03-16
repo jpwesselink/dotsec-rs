@@ -13,7 +13,7 @@ directive_name     = @{ (ASCII_ALPHA | "_" | "-")+ }
 directive_value    = @{ (!(NEW_LINE | " @") ~ ANY)+ }
 
 export     = _{ "export" }
-key        = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+key        = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_" | "-" | ".")* }
 value      = @{ string }
 escaped_dq =  { "\"" }
 escaped_sq =  { "'" }
