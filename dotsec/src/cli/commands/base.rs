@@ -9,7 +9,7 @@ pub fn command() -> Command {
             arg!(-s --"sec-file" <FILE> "Sets a custom sec file")
                 .global(true)
                 .required(false)
-                .env("DOTSEC_SEC_FILE")
+                .env("SEC_FILE")
                 .default_value(".sec"),
         )
 }

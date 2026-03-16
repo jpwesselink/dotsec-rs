@@ -1,6 +1,6 @@
 use clap::{Arg, Command};
 use colored::Colorize;
-use inquire::Text;
+use inquire::{Password, PasswordDisplayMode, Text};
 
 use crate::cli::helpers::{self, with_progress};
 use crate::default_options::DefaultOptions;
@@ -102,15 +102,22 @@ pub async fn match_args(
         None // Can't show encrypted value without KMS
     };
 
-    // Resolve value
+    // Resolve value — mask input for secret-looking keys
     let value = match value {
         Some(v) => v.clone(),
         None => {
-            let mut prompt = Text::new("Value?");
-            if let Some(current) = current_plaintext_value {
-                prompt = prompt.with_default(current);
+            if helpers::looks_like_secret(&key) {
+                Password::new("Value (hidden)?")
+                    .with_display_mode(PasswordDisplayMode::Masked)
+                    .without_confirmation()
+                    .prompt()?
+            } else {
+                let mut prompt = Text::new("Value?");
+                if let Some(current) = current_plaintext_value {
+                    prompt = prompt.with_default(current);
+                }
+                prompt.prompt()?
             }
-            prompt.prompt()?
         }
     };
 

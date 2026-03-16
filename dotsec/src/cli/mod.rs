@@ -45,6 +45,7 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
 
     let is_init = matches.subcommand_matches("init").is_some();
     let is_import = matches.subcommand_matches("import").is_some();
+    let is_diff = matches.subcommand_matches("diff").is_some();
     let is_run_env = matches
         .subcommand_matches("run")
         .and_then(|m| m.get_one::<String>("using"))
@@ -63,7 +64,7 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
         let file_config = dotenv::extract_file_config(&lines);
         debug!("file_config from {}: {:?}", sec_file, file_config);
         EncryptionEngine::from(file_config)
-    } else if is_init || is_import || is_run_env {
+    } else if is_init || is_import || is_diff || is_run_env {
         debug!("{} does not exist yet or not needed, using defaults", sec_file);
         EncryptionEngine::None
     } else {

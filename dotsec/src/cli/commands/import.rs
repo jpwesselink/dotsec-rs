@@ -1,4 +1,4 @@
-use clap::{Arg, Command};
+use clap::{Arg, ArgAction, Command};
 use colored::Colorize;
 use inquire::Select;
 
@@ -13,6 +13,13 @@ pub fn command() -> Command {
                 .help("Path to .env file to import")
                 .default_value(".env"),
         )
+        .arg(
+            Arg::new("yes")
+                .short('y')
+                .long("yes")
+                .action(ArgAction::SetTrue)
+                .help("Accept all variables with auto-detected types (skip per-variable prompts)"),
+        )
 }
 
 pub async fn match_args(
@@ -26,7 +33,7 @@ pub async fn match_args(
 
     let env_file = sub.get_one::<String>("env-file").unwrap();
     let sec_file = default_options.sec_file;
-    let encryption_engine = &default_options.encryption_engine;
+    let auto_yes = sub.get_flag("yes");
 
     if !std::path::Path::new(env_file).exists() {
         return Err(format!("{} not found", env_file).into());
@@ -119,6 +126,7 @@ pub async fn match_args(
                 existing_config = Some(sec_config);
             }
         } else {
+            // -y or no source config: keep existing .sec config
             existing_config = Some(sec_config);
         }
     } else if source_config.provider.is_some() {
@@ -130,6 +138,17 @@ pub async fn match_args(
         println!("\n{}", "No .sec file found. Setting up config:".bold());
         existing_config = Some(helpers::prompt_config()?);
     }
+
+    // Build encryption engine: use existing engine from .sec if available,
+    // otherwise build from the resolved config (new .sec case)
+    let resolved_engine;
+    let encryption_engine = if !matches!(default_options.encryption_engine, dotsec::EncryptionEngine::None) {
+        &default_options.encryption_engine
+    } else {
+        let effective_config = existing_config.as_ref().unwrap_or(&source_config);
+        resolved_engine = dotsec::EncryptionEngine::from(effective_config.clone());
+        &resolved_engine
+    };
 
     // Filter entries to import
     let import_entries: Vec<&dotenv::Entry> = entries
@@ -149,43 +168,66 @@ pub async fn match_args(
             let label = if val { "encrypt all" } else { "encrypt none" };
             println!("{} Using existing default: {}", "✓".green(), label);
             val
+        } else if auto_yes {
+            // -y without explicit default: encrypt all (safe default)
+            println!("{} Defaulting to: encrypt all", "✓".green());
+            true
         } else {
             helpers::resolve_encrypt_default(&source_config)?
         }
+    } else if auto_yes {
+        true
     } else {
         helpers::resolve_encrypt_default(&source_config)?
     };
 
     // --- Per-variable configuration ---
     let num_vars = import_entries.len();
-    println!(
-        "\n{}",
-        format!("Configuring {} variables from {}", num_vars, env_file).bold()
-    );
-
-    // Collect new directives per variable by prompting
     let import_keys: std::collections::HashSet<&str> =
         import_entries.iter().map(|e| e.key.as_str()).collect();
     let mut var_directives: Vec<Vec<dotenv::Line>> = Vec::new();
-    let mut var_idx = 0;
-    for entry in &entries {
-        if !import_keys.contains(entry.key.as_str()) {
-            continue;
-        }
-        let i = var_idx;
-        var_idx += 1;
 
+    if auto_yes {
         println!(
-            "\n{} {} = \"{}\"",
-            format!("[{}/{}]", i + 1, num_vars).dimmed(),
-            entry.key.bold(),
-            helpers::truncate_value(&entry.value, 40).dimmed(),
+            "\n{} Auto-configuring {} variables from {}",
+            "✓".green(),
+            num_vars,
+            env_file
         );
+        for entry in &entries {
+            if !import_keys.contains(entry.key.as_str()) {
+                continue;
+            }
+            let directives = auto_directives(&entry.key, &entry.value, encrypt_all, &entry.directives);
+            var_directives.push(directives);
+        }
+    } else {
+        println!(
+            "\n{}",
+            format!("Configuring {} variables from {}", num_vars, env_file).bold()
+        );
+        let mut var_idx = 0;
+        for entry in &entries {
+            if !import_keys.contains(entry.key.as_str()) {
+                continue;
+            }
+            let i = var_idx;
+            var_idx += 1;
 
-        let source_dirs = if entry.directives.is_empty() { None } else { Some(entry.directives.as_slice()) };
-        let directives = helpers::prompt_variable_directives(&entry.key, &entry.value, encrypt_all, source_dirs)?;
-        var_directives.push(directives);
+            println!(
+                "\n{} {} = \"{}\"",
+                format!("[{}/{}]", i + 1, num_vars).dimmed(),
+                entry.key.bold(),
+                helpers::truncate_value(&entry.value, 40).dimmed(),
+            );
+
+            let source_dirs = if entry.directives.is_empty() { None } else { Some(entry.directives.as_slice()) };
+            let directives = helpers::prompt_variable_directives(&entry.key, &entry.value, encrypt_all, source_dirs)?;
+            var_directives.push(directives);
+        }
     }
+
+    let effective_config = existing_config.as_ref().unwrap_or(&source_config);
 
     if skip_keys.is_empty() {
         // Full import: build output from .env, preserve comments
@@ -195,7 +237,6 @@ pub async fn match_args(
         let mut inserted_config = false;
 
         // Build config directive lines from resolved config
-        let effective_config = existing_config.as_ref().unwrap_or(&source_config);
         let config_lines = helpers::build_config_directives(effective_config, encrypt_all);
 
         for line in &lines {
@@ -293,3 +334,54 @@ pub async fn match_args(
     Ok(())
 }
 
+/// Auto-generate directives for a variable without prompting.
+/// Uses heuristics for type detection and the file's encryption default.
+fn auto_directives(
+    key: &str,
+    value: &str,
+    encrypt_all: bool,
+    source_directives: &[(String, Option<String>)],
+) -> Vec<dotenv::Line> {
+    let mut directives = Vec::new();
+
+    // Encryption: use source directives if present, otherwise use heuristic
+    let source_has_encrypt = source_directives.iter().any(|(n, _)| n == "encrypt");
+    let source_has_plaintext = source_directives.iter().any(|(n, _)| n == "plaintext");
+
+    let is_secret = helpers::looks_like_secret(key);
+    if encrypt_all {
+        // Only add @plaintext for non-secrets (exceptions to encrypt-all)
+        if source_has_plaintext || (!source_has_encrypt && !is_secret) {
+            directives.push(dotenv::Line::Directive("plaintext".to_string(), None));
+        }
+    } else {
+        // Only add @encrypt for secrets (exceptions to plaintext-all)
+        if source_has_encrypt || (!source_has_plaintext && is_secret) {
+            directives.push(dotenv::Line::Directive("encrypt".to_string(), None));
+        }
+    }
+
+    // Type: use source directive if present, otherwise auto-detect
+    let source_type = source_directives
+        .iter()
+        .find(|(n, _)| n == "type")
+        .and_then(|(_, v)| v.as_deref());
+
+    if let Some(st) = source_type {
+        directives.push(dotenv::Line::Directive("type".to_string(), Some(st.to_string())));
+    } else {
+        let type_name = match helpers::guess_type(value) {
+            1 => "number",
+            2 => "boolean",
+            _ => "string",
+        };
+        directives.push(dotenv::Line::Directive("type".to_string(), Some(type_name.to_string())));
+    }
+
+    // Push: carry over from source if present
+    if let Some((_, v)) = source_directives.iter().find(|(n, _)| n == "push") {
+        directives.push(dotenv::Line::Directive("push".to_string(), v.clone()));
+    }
+
+    directives
+}
