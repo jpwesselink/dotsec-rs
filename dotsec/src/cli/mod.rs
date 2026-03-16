@@ -1,4 +1,4 @@
-use self::commands::{create_command, diff, export, import, init, run, set, show, validate};
+use self::commands::{create_command, diff, export, import, init, rotate_key, run, set, show, validate};
 use crate::default_options::DefaultOptions;
 use dotsec::EncryptionEngine;
 use log::debug;
@@ -86,6 +86,7 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
     run::match_args(&matches, &default_options).await?;
     validate::match_args(&matches, &default_options).await?;
     diff::match_args(&matches, &default_options).await?;
+    rotate_key::match_args(&matches, &default_options).await?;
 
     Ok(())
 }

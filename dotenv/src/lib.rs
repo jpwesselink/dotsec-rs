@@ -206,6 +206,11 @@ pub fn diff_entries(base: &[Entry], target: &[Entry]) -> Vec<DiffItem> {
     diffs
 }
 
+/// Check if a value is in the `ENC[...]` envelope encryption format.
+pub fn is_encrypted_value(value: &str) -> bool {
+    value.starts_with("ENC[") && value.ends_with(']')
+}
+
 pub fn get_value(source: &[Line], key: &str) -> Option<String> {
     source.iter().find_map(|line| {
         if let Line::Kv(k, v, _) = line {

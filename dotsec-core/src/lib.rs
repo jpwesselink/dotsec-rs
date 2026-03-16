@@ -1,6 +1,7 @@
 pub use dotenv;
+use base64::Engine as _;
 use dotenv::{lines_to_entries, Line};
-use std::collections::HashMap;
+use zeroize::Zeroize;
 
 mod configuration;
 pub use configuration::*;
@@ -15,17 +16,43 @@ pub fn parse_content(content: &str) -> Result<Vec<Line>, Box<dyn std::error::Err
     Ok(dotenv::parse_dotenv(content)?)
 }
 
-// --- Encrypt ---
+// --- Constants ---
+
+const DOTSEC_KEY_NAME: &str = "__DOTSEC_KEY__";
+const DOTSEC_V1_NAME: &str = "__DOTSEC__";
+
+// --- Format detection ---
+
+/// Detect whether a .sec file uses v1 (blob) or v2 (per-value) format.
+fn detect_format(lines: &[Line]) -> SecFormat {
+    for line in lines {
+        if let Line::Kv(key, _, _) = line {
+            if key == DOTSEC_KEY_NAME {
+                return SecFormat::V2;
+            }
+            if key == DOTSEC_V1_NAME {
+                return SecFormat::V1;
+            }
+        }
+    }
+    SecFormat::None
+}
+
+#[derive(Debug, PartialEq)]
+enum SecFormat {
+    V1,   // Old blob format with __DOTSEC__
+    V2,   // New per-value format with __DOTSEC_KEY__
+    None, // No encryption markers
+}
+
+// --- Encrypt (v2) ---
 
 /// Encrypt in-memory lines and write the result to a .sec file.
 ///
 /// For each entry with `@encrypt`:
-///   - Generate a random opaque ID
-///   - Replace the value with that ID in the output lines
-///   - Store {id: real_value} in a hashmap
+///   - Encrypt the value with the DEK → `ENC[base64(nonce||ciphertext||tag)]`
 ///
-/// The hashmap is serialized to JSON, encrypted via the encryption engine,
-/// and appended as `__DOTSEC__="<base64 blob>"`.
+/// The DEK is wrapped by KMS and stored as `__DOTSEC_KEY__="base64(wrapped_dek)"`.
 pub async fn encrypt_lines_to_sec(
     lines: &[Line],
     sec_file: &str,
@@ -33,52 +60,95 @@ pub async fn encrypt_lines_to_sec(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let entries = lines_to_entries(lines);
 
-    // Try to load existing .sec file to reuse IDs for unchanged values
-    let old_value_to_id: HashMap<String, String> =
-        match load_existing_secrets(sec_file, encryption_engine).await {
-            Ok(old_secrets) => old_secrets
-                .into_iter()
-                .map(|(id, value)| (value, id))
-                .collect(),
-            Err(_) => HashMap::new(),
-        };
+    let (key_id, region) = match encryption_engine {
+        EncryptionEngine::Aws(opts) => (
+            opts.key_id.as_deref().ok_or("AWS key_id is required")?,
+            opts.region.as_deref(),
+        ),
+        EncryptionEngine::None => return Err("Encryption engine is required".into()),
+    };
 
-    let mut secrets: HashMap<String, String> = HashMap::new();
+    // Check if there's an existing __DOTSEC_KEY__ we can reuse
+    let (mut dek, wrapped_dek) = match load_existing_dek(sec_file, region).await {
+        Ok((dek, wrapped)) => (dek, wrapped),
+        Err(_) => {
+            let (plaintext, wrapped) = aws::generate_data_key(key_id, region).await?;
+            (plaintext, wrapped)
+        }
+    };
+
+    let result = encrypt_with_dek(lines, &entries, &dek, &wrapped_dek, sec_file);
+
+    // Zeroize DEK from memory regardless of success/failure
+    dek.zeroize();
+
+    result
+}
+
+/// Inner encryption logic, separated so the caller can zeroize the DEK.
+fn encrypt_with_dek(
+    lines: &[Line],
+    entries: &[dotenv::Entry],
+    dek: &[u8],
+    wrapped_dek: &[u8],
+    sec_file: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let wrapped_dek_b64 = base64::engine::general_purpose::STANDARD.encode(wrapped_dek);
+
     let mut sec_lines: Vec<Line> = Vec::new();
+    let mut has_key_line = false;
 
     for line in lines {
         match line {
             Line::Kv(key, value, quote_type) => {
+                if key == DOTSEC_KEY_NAME {
+                    sec_lines.push(Line::Kv(
+                        DOTSEC_KEY_NAME.to_string(),
+                        wrapped_dek_b64.clone(),
+                        dotenv::QuoteType::Double,
+                    ));
+                    has_key_line = true;
+                    continue;
+                }
+
+                if key == DOTSEC_V1_NAME {
+                    continue;
+                }
+
                 let entry = entries.iter().find(|e| e.key == *key);
                 let should_encrypt = entry.is_some_and(|e| e.has_directive("encrypt"));
 
                 if should_encrypt {
-                    let id = match old_value_to_id.get(value) {
-                        Some(existing_id) => existing_id.clone(),
-                        None => generate_random_id(),
-                    };
-                    secrets.insert(id.clone(), value.clone());
-                    sec_lines.push(Line::Kv(key.clone(), id, quote_type.clone()));
+                    if aws::is_encrypted_value(value) {
+                        sec_lines.push(line.clone());
+                    } else {
+                        let encrypted = aws::encrypt_value(value, dek, key)?;
+                        sec_lines.push(Line::Kv(key.clone(), encrypted, quote_type.clone()));
+                    }
                 } else {
                     sec_lines.push(line.clone());
                 }
+            }
+            Line::Comment(c) if c.contains("do not edit the line below, it is managed by dotsec") => {
+                continue;
             }
             other => sec_lines.push(other.clone()),
         }
     }
 
-    if !secrets.is_empty() {
-        let secrets_json = serde_json::to_string(&secrets)?;
-        let encrypted_blob = encrypt_blob(&secrets_json, encryption_engine).await?;
-
+    if !has_key_line {
+        let last_is_newline = matches!(sec_lines.last(), Some(Line::Newline));
+        if !sec_lines.is_empty() && !last_is_newline {
+            sec_lines.push(Line::Newline);
+        }
         sec_lines.push(Line::Newline);
         sec_lines.push(Line::Comment(
             "# do not edit the line below, it is managed by dotsec".to_string(),
         ));
         sec_lines.push(Line::Newline);
         sec_lines.push(Line::Kv(
-            "__DOTSEC__".to_string(),
-            encrypted_blob,
+            DOTSEC_KEY_NAME.to_string(),
+            wrapped_dek_b64,
             dotenv::QuoteType::Double,
         ));
         sec_lines.push(Line::Newline);
@@ -92,7 +162,7 @@ pub async fn encrypt_lines_to_sec(
 
 // --- Decrypt ---
 
-/// Decrypt a .sec file and return resolved lines (for injecting into a process).
+/// Decrypt a .sec file and return resolved lines with plaintext values.
 pub async fn decrypt_sec_to_lines(
     sec_file: &str,
     encryption_engine: &EncryptionEngine,
@@ -100,19 +170,73 @@ pub async fn decrypt_sec_to_lines(
     let content = load_file(sec_file)?;
     let lines = dotenv::parse_dotenv(&content)?;
 
-    // If there's no __DOTSEC__ blob, nothing is encrypted — return lines as-is
-    let dotsec_value = match dotenv::get_value(&lines, "__DOTSEC__") {
-        Some(v) => v,
-        None => return Ok(lines),
+    match detect_format(&lines) {
+        SecFormat::V2 => decrypt_v2(&lines, encryption_engine).await,
+        SecFormat::V1 => decrypt_v1(&lines, encryption_engine).await,
+        SecFormat::None => Ok(lines),
+    }
+}
+
+/// Decrypt v2 format: unwrap DEK from __DOTSEC_KEY__, then decrypt each ENC[...] value.
+async fn decrypt_v2(
+    lines: &[Line],
+    encryption_engine: &EncryptionEngine,
+) -> Result<Vec<Line>, Box<dyn std::error::Error>> {
+    let region = match encryption_engine {
+        EncryptionEngine::Aws(opts) => opts.region.as_deref(),
+        EncryptionEngine::None => return Err("Encryption engine is required".into()),
     };
 
-    let secrets_json = decrypt_blob(&dotsec_value, encryption_engine).await?;
-    let secrets: HashMap<String, String> = serde_json::from_str(&secrets_json)?;
+    // Find and unwrap the DEK
+    let wrapped_dek_b64 = dotenv::get_value(lines, DOTSEC_KEY_NAME)
+        .ok_or("No __DOTSEC_KEY__ found in .sec file")?;
+    let wrapped_dek = base64::engine::general_purpose::STANDARD.decode(&wrapped_dek_b64)?;
+    let mut dek = aws::unwrap_data_key(&wrapped_dek, region).await?;
+
+    let mut resolved: Vec<Line> = Vec::new();
+
+    for line in lines {
+        match line {
+            Line::Kv(key, value, quote_type) => {
+                if key == DOTSEC_KEY_NAME {
+                    continue;
+                }
+                if aws::is_encrypted_value(value) {
+                    let plaintext = aws::decrypt_value(value, &dek, key)?;
+                    resolved.push(Line::Kv(key.clone(), plaintext, quote_type.clone()));
+                } else {
+                    resolved.push(line.clone());
+                }
+            }
+            Line::Comment(c)
+                if c.contains("do not edit the line below, it is managed by dotsec") =>
+            {
+                continue;
+            }
+            _ => resolved.push(line.clone()),
+        }
+    }
+
+    dek.zeroize();
+    Ok(resolved)
+}
+
+/// Decrypt v1 format (legacy blob): decrypt __DOTSEC__ blob, resolve ID references.
+async fn decrypt_v1(
+    lines: &[Line],
+    encryption_engine: &EncryptionEngine,
+) -> Result<Vec<Line>, Box<dyn std::error::Error>> {
+    let dotsec_value = dotenv::get_value(lines, DOTSEC_V1_NAME)
+        .ok_or("No __DOTSEC__ entry found")?;
+
+    let secrets_json = decrypt_blob_v1(&dotsec_value, encryption_engine).await?;
+    let secrets: std::collections::HashMap<String, String> =
+        serde_json::from_str(&secrets_json)?;
 
     let mut resolved: Vec<Line> = Vec::new();
     let mut skip_dotsec_comment = false;
 
-    for line in &lines {
+    for line in lines {
         match line {
             Line::Comment(c)
                 if c.contains("do not edit the line below, it is managed by dotsec") =>
@@ -121,7 +245,7 @@ pub async fn decrypt_sec_to_lines(
                 continue;
             }
             Line::Kv(key, value, quote_type) => {
-                if key == "__DOTSEC__" {
+                if key == DOTSEC_V1_NAME {
                     continue;
                 }
                 if let Some(real_value) = secrets.get(value) {
@@ -145,56 +269,35 @@ pub async fn decrypt_sec_to_lines(
     Ok(resolved)
 }
 
-// --- Encryption plumbing ---
-
-async fn encrypt_blob(
-    plaintext: &str,
-    engine: &EncryptionEngine,
+/// Decrypt a v1 blob using the old envelopers-based path.
+/// This calls KMS Decrypt directly since we removed envelopers.
+/// V1 blobs are base64-encoded envelopers::EncryptedRecord — we can't decrypt them
+/// without the envelopers crate. For migration, users need to decrypt with the old
+/// version first, then re-encrypt with the new version.
+async fn decrypt_blob_v1(
+    _ciphertext: &str,
+    _engine: &EncryptionEngine,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    match engine {
-        EncryptionEngine::Aws(opts) => {
-            let key_id = opts.key_id.as_deref().ok_or("AWS key_id is required")?;
-            let region = opts.region.as_deref();
-            aws::encrypt_raw(plaintext, key_id, region).await
-        }
-        EncryptionEngine::None => Err("Encryption engine is required".into()),
-    }
+    Err("This .sec file uses the legacy v1 format (single encrypted blob). \
+         Please decrypt it with dotsec v4.x first, then re-encrypt with v5.x to migrate \
+         to the new per-value encryption format."
+        .into())
 }
 
-async fn decrypt_blob(
-    ciphertext: &str,
-    engine: &EncryptionEngine,
-) -> Result<String, Box<dyn std::error::Error>> {
-    match engine {
-        EncryptionEngine::Aws(opts) => {
-            let key_id = opts.key_id.as_deref().ok_or("AWS key_id is required")?;
-            let region = opts.region.as_deref();
-            aws::decrypt_raw(ciphertext, key_id, region).await
-        }
-        EncryptionEngine::None => Err("Encryption engine is required".into()),
-    }
-}
+// --- DEK helpers ---
 
-/// Load and decrypt the existing secrets map from a .sec file.
-async fn load_existing_secrets(
+/// Try to load and unwrap the existing DEK from a .sec file.
+async fn load_existing_dek(
     sec_file: &str,
-    encryption_engine: &EncryptionEngine,
-) -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
+    region: Option<&str>,
+) -> Result<(Vec<u8>, Vec<u8>), Box<dyn std::error::Error>> {
     let content = load_file(sec_file)?;
     let lines = dotenv::parse_dotenv(&content)?;
-    let dotsec_value =
-        dotenv::get_value(&lines, "__DOTSEC__").ok_or("No __DOTSEC__ entry found")?;
-    let secrets_json = decrypt_blob(&dotsec_value, encryption_engine).await?;
-    let secrets: HashMap<String, String> = serde_json::from_str(&secrets_json)?;
-    Ok(secrets)
-}
-
-/// Generate a cryptographically random hex ID (32 bytes = 64 hex chars).
-fn generate_random_id() -> String {
-    use rand::RngCore;
-    let mut buf = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut buf);
-    hex::encode(buf)
+    let wrapped_b64 = dotenv::get_value(&lines, DOTSEC_KEY_NAME)
+        .ok_or("No __DOTSEC_KEY__ found")?;
+    let wrapped_dek = base64::engine::general_purpose::STANDARD.decode(&wrapped_b64)?;
+    let dek = aws::unwrap_data_key(&wrapped_dek, region).await?;
+    Ok((dek, wrapped_dek))
 }
 
 // --- Run helpers ---
@@ -206,7 +309,7 @@ pub fn resolve_env_vars(lines: &[Line]) -> Vec<(String, String)> {
 
     for line in lines {
         if let Line::Kv(key, value, quote_type) = line {
-            if key == "__DOTSEC__" {
+            if key == DOTSEC_KEY_NAME || key == DOTSEC_V1_NAME {
                 continue;
             }
             let final_value = match quote_type {
@@ -386,7 +489,19 @@ mod tests {
     }
 
     #[test]
-    fn resolve_env_vars_skips_dotsec_entry() {
+    fn resolve_env_vars_skips_dotsec_key() {
+        let lines = vec![
+            Line::Kv("FOO".into(), "bar".into(), QuoteType::Double),
+            Line::Newline,
+            Line::Kv("__DOTSEC_KEY__".into(), "wrapped".into(), QuoteType::Double),
+        ];
+        let resolved = resolve_env_vars(&lines);
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].0, "FOO");
+    }
+
+    #[test]
+    fn resolve_env_vars_skips_dotsec_v1() {
         let lines = vec![
             Line::Kv("FOO".into(), "bar".into(), QuoteType::Double),
             Line::Newline,
@@ -395,6 +510,36 @@ mod tests {
         let resolved = resolve_env_vars(&lines);
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].0, "FOO");
+    }
+
+    // --- format detection ---
+
+    #[test]
+    fn detect_v2_format() {
+        let lines = vec![
+            Line::Kv("FOO".into(), "ENC[abc]".into(), QuoteType::Double),
+            Line::Newline,
+            Line::Kv("__DOTSEC_KEY__".into(), "wrapped".into(), QuoteType::Double),
+        ];
+        assert_eq!(detect_format(&lines), SecFormat::V2);
+    }
+
+    #[test]
+    fn detect_v1_format() {
+        let lines = vec![
+            Line::Kv("FOO".into(), "hexid".into(), QuoteType::Double),
+            Line::Newline,
+            Line::Kv("__DOTSEC__".into(), "blob".into(), QuoteType::Double),
+        ];
+        assert_eq!(detect_format(&lines), SecFormat::V1);
+    }
+
+    #[test]
+    fn detect_no_format() {
+        let lines = vec![
+            Line::Kv("FOO".into(), "bar".into(), QuoteType::Double),
+        ];
+        assert_eq!(detect_format(&lines), SecFormat::None);
     }
 
     // --- redact ---

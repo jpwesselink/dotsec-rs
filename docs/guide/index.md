@@ -41,14 +41,16 @@ That's it. Your `.sec` file goes into git, your `.env` stays in `.gitignore`.
 
 ```
 .env (plaintext, gitignored)          .sec (encrypted, committed)
-┌─────────────────────────┐           ┌─────────────────────────┐
-│ DATABASE_URL=postgres://│  encrypt  │ DATABASE_URL=AQICAHh... │
-│ API_KEY=sk-live-xxx     │ ───────▶  │ API_KEY=AQICAHh...      │
-│ DEBUG=true              │           │ DEBUG=true               │
-└─────────────────────────┘           └─────────────────────────┘
-                                 ◀───────
-                                  decrypt
+┌─────────────────────────┐           ┌──────────────────────────┐
+│ DATABASE_URL=postgres://│  encrypt  │ DATABASE_URL=ENC[base64] │
+│ API_KEY=sk-live-xxx     │ ───────▶  │ API_KEY=ENC[base64]      │
+│ DEBUG=true              │           │ DEBUG=true                │
+└─────────────────────────┘           │ __DOTSEC_KEY__="wrapped" │
+                                 ◀─── └──────────────────────────┘
+                                decrypt
 ```
+
+Each secret is encrypted individually with AES-256-GCM using a local data key (DEK) wrapped by KMS. This makes `.sec` files git-mergeable — changing one secret only affects that line.
 
 ```bash
 dotsec import              # .env → .sec (encrypts values marked with @encrypt)

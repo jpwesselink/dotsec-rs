@@ -20,6 +20,8 @@ dotsec set PORT 3000 --type number            # with type directive
 
 Plaintext variables are written directly — no KMS round trip. Encrypted variables trigger decrypt → modify → re-encrypt.
 
+Secret-looking variable names (containing `KEY`, `SECRET`, `PASSWORD`, `TOKEN`, etc.) automatically use masked input in interactive mode.
+
 ## `dotsec import`
 
 Migrate a `.env` file into `.sec`. Walks through each variable prompting for encryption, type, and push targets.
@@ -27,11 +29,14 @@ Migrate a `.env` file into `.sec`. Walks through each variable prompting for enc
 ```bash
 dotsec import                  # import from .env (default)
 dotsec import .env.production  # import from specific file
+dotsec import -y               # auto-accept variables with heuristic type detection
 ```
 
 If `.sec` already exists, offers: import new variables only, overwrite all, or cancel. Source `.env` directives pre-populate the prompts as defaults.
 
 If `.sec` doesn't exist, prompts for encryption config (like `init`).
+
+The `-y` flag skips per-variable prompts only (auto-detects types using heuristics). Config prompts (provider, key, region, import mode) still appear.
 
 ## `dotsec export`
 
@@ -80,11 +85,22 @@ Validates: unknown directives, type mismatches (number, boolean, enum membership
 
 ## `dotsec diff`
 
-Compare environment files for structural differences:
+Compare `.sec` files for structural differences. Auto-selects the most recently modified file as the reference:
 
 ```bash
-dotsec diff --base .env .env.staging .env.production
-dotsec diff --base .env .env.staging --values  # include value diffs
+dotsec diff .sec.staging                  # compare default .sec vs .sec.staging
+dotsec diff .sec.staging .sec.production  # compare all three (default .sec included)
+dotsec diff --values .sec.staging         # include value differences
 ```
 
 Reports: missing keys, extra keys, directive mismatches, ordering differences, and optionally value differences.
+
+## `dotsec rotate-key`
+
+Generate a new data encryption key (DEK) and re-encrypt all values:
+
+```bash
+dotsec rotate-key
+```
+
+This decrypts all values with the old DEK, generates a new DEK via KMS, re-encrypts everything, and updates `__DOTSEC_KEY__`. Use this periodically or after a suspected key compromise.
