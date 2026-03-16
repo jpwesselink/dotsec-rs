@@ -45,15 +45,22 @@ pub async fn match_args(
         return Err(format!("{} not found", config_file).into());
     }
 
-    // Check if .sec already exists
-    if std::path::Path::new(sec_file).exists() {
-        let overwrite = inquire::Confirm::new(&format!("{} already exists. Overwrite?", sec_file))
-            .with_default(false)
-            .prompt()?;
-        if !overwrite {
-            println!("Aborted.");
-            return Ok(());
-        }
+    // Confirm migration
+    let confirm_msg = if std::path::Path::new(sec_file).exists() {
+        format!(
+            "Migrate {} → {} (using {})? {} will be overwritten.",
+            env_file, sec_file, config_file, sec_file
+        )
+    } else {
+        format!("Migrate {} → {} (using {})?", env_file, sec_file, config_file)
+    };
+
+    let proceed = inquire::Confirm::new(&confirm_msg)
+        .with_default(true)
+        .prompt()?;
+    if !proceed {
+        println!("Aborted.");
+        return Ok(());
     }
 
     // --- Step 1: Parse v4 config via npx tsx / node ---
