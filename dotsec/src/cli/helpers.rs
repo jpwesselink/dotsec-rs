@@ -106,8 +106,11 @@ pub fn prompt_config() -> Result<dotenv::FileConfig, Box<dyn std::error::Error>>
     let key_id = Text::new("KMS key ID?")
         .with_default("alias/dotsec")
         .prompt()?;
+    let default_region = std::env::var("AWS_REGION")
+        .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
+        .unwrap_or_else(|_| "us-east-1".to_string());
     let region = Text::new("AWS region?")
-        .with_default("us-east-1")
+        .with_default(&default_region)
         .prompt()?;
 
     Ok(dotenv::FileConfig {
