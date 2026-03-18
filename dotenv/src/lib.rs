@@ -371,56 +371,52 @@ pub fn diff_entries(base: &[Entry], target: &[Entry]) -> Vec<DiffItem> {
 /// File-level directives and leading comments are preserved at the top.
 /// Keys not in the schema are appended at the end.
 pub fn format_lines_by_schema(lines: &[Line], schema: &Schema) -> Vec<Line> {
-    // 1. Separate file-level header (everything before first KV) from entries
+    // 1. Separate file-level header (directives + whitespace before first KV or comment) from entries
     let mut header: Vec<Line> = Vec::new();
     let mut found_first_kv = false;
 
     for line in lines {
-        if matches!(line, Line::Kv(_, _, _)) {
-            found_first_kv = true;
-            break;
+        match line {
+            Line::Kv(_, _, _) => { found_first_kv = true; break; }
+            Line::Comment(_) => { break; } // comments belong to entries, not header
+            _ => { header.push(line.clone()); }
         }
-        header.push(line.clone());
     }
 
-    // 2. Group entries: each KV with its preceding directives
+    // 2. Group entries: each KV with its preceding lines (comments, directives, whitespace)
     struct EntryBlock {
-        directives: Vec<Line>,
+        preceding: Vec<Line>, // comments + directives + newlines before the KV
         kv: Line,
         key: String,
     }
 
     let mut blocks: Vec<EntryBlock> = Vec::new();
     let mut pending: Vec<Line> = Vec::new();
-    let mut past_header = !found_first_kv;
+    let header_len = header.len();
 
-    for line in lines {
-        if !past_header {
-            if matches!(line, Line::Kv(_, _, _)) {
-                past_header = true;
-            } else {
-                continue; // skip header lines, already captured
-            }
+    for (i, line) in lines.iter().enumerate() {
+        // Skip lines already captured in the header
+        if i < header_len {
+            continue;
         }
 
         match line {
-            Line::Directive(_, _) => {
-                pending.push(line.clone());
-            }
             Line::Kv(k, _, _) => {
                 blocks.push(EntryBlock {
-                    directives: std::mem::take(&mut pending),
+                    preceding: std::mem::take(&mut pending),
                     kv: line.clone(),
                     key: k.clone(),
                 });
             }
-            Line::Comment(_) => {
-                // Comments between entries break directive chains
-                pending.clear();
+            _ => {
+                // Comments, directives, newlines, whitespace — all travel with the next KV
+                pending.push(line.clone());
             }
-            _ => {} // skip newlines/whitespace between entries
         }
     }
+
+    // Orphaned trailing lines (comments/newlines after last KV, no following KV)
+    let trailing = std::mem::take(&mut pending);
 
     // 3. Build output: header + entries in schema order + extras
     let mut output = header;
@@ -445,16 +441,13 @@ pub fn format_lines_by_schema(lines: &[Line], schema: &Schema) -> Vec<Line> {
     // Emit entries in schema order
     for schema_key in &schema_keys {
         if let Some(block) = blocks.iter().find(|b| b.key == *schema_key) {
-            if !first_entry {
+            if !first_entry && block.preceding.is_empty() {
                 output.push(Line::Newline);
             }
             first_entry = false;
             used.insert(block.key.clone());
 
-            for dir in &block.directives {
-                output.push(dir.clone());
-                output.push(Line::Newline);
-            }
+            output.extend(block.preceding.clone());
             output.push(block.kv.clone());
             output.push(Line::Newline);
         }
@@ -468,18 +461,20 @@ pub fn format_lines_by_schema(lines: &[Line], schema: &Schema) -> Vec<Line> {
                 dotsec_key_block = Some(block);
                 continue;
             }
-            if !first_entry {
+            if !first_entry && block.preceding.is_empty() {
                 output.push(Line::Newline);
             }
             first_entry = false;
 
-            for dir in &block.directives {
-                output.push(dir.clone());
-                output.push(Line::Newline);
-            }
+            output.extend(block.preceding.clone());
             output.push(block.kv.clone());
             output.push(Line::Newline);
         }
+    }
+
+    // Orphaned trailing lines (comments after last KV)
+    if !trailing.is_empty() {
+        output.extend(trailing);
     }
 
     // __DOTSEC_KEY__ always goes at the very end
@@ -487,12 +482,8 @@ pub fn format_lines_by_schema(lines: &[Line], schema: &Schema) -> Vec<Line> {
         if !first_entry {
             output.push(Line::Newline);
         }
-        // Preserve the "do not edit" comment if it was in the original
-        let has_managed_comment = lines.iter().any(|l| matches!(l, Line::Comment(c) if c.contains("do not edit")));
-        if has_managed_comment {
-            output.push(Line::Comment("# do not edit the line below, it is managed by dotsec".to_string()));
-            output.push(Line::Newline);
-        }
+        // Emit its preceding lines (includes "do not edit" comment if present)
+        output.extend(block.preceding.clone());
         output.push(block.kv.clone());
         output.push(Line::Newline);
     }
@@ -2298,5 +2289,65 @@ mod tests {
         let schema = parse_schema("# @type=string\nFOO\n").unwrap();
         let ts = schema_to_typescript(&schema);
         assert!(ts.contains("throw new Error(`Environment validation failed"));
+    }
+
+    // --- format_lines_by_schema tests ---
+
+    #[test]
+    fn format_preserves_comments_before_entries() {
+        let schema = parse_schema("FOO\nBAR\n").unwrap();
+        let lines = parse_dotenv("# a comment\nFOO=\"1\"\n\n# another comment\nBAR=\"2\"\n").unwrap();
+        let formatted = format_lines_by_schema(&lines, &schema);
+        let output = lines_to_string(&formatted);
+        assert!(output.contains("# a comment"), "comment before FOO lost");
+        assert!(output.contains("# another comment"), "comment before BAR lost");
+    }
+
+    #[test]
+    fn format_comments_travel_with_entry() {
+        // Schema order: BAR, FOO — reverse of file order
+        let schema = parse_schema("BAR\nFOO\n").unwrap();
+        let lines = parse_dotenv("# foo comment\nFOO=\"1\"\n\n# bar comment\nBAR=\"2\"\n").unwrap();
+        let formatted = format_lines_by_schema(&lines, &schema);
+        let output = lines_to_string(&formatted);
+        // BAR should come first, with its comment
+        let bar_pos = output.find("BAR=").unwrap();
+        let foo_pos = output.find("FOO=").unwrap();
+        assert!(bar_pos < foo_pos, "BAR should come before FOO");
+        let bar_comment_pos = output.find("# bar comment").unwrap();
+        assert!(bar_comment_pos < bar_pos, "bar comment should precede BAR");
+        let foo_comment_pos = output.find("# foo comment").unwrap();
+        assert!(foo_comment_pos < foo_pos, "foo comment should precede FOO");
+        assert!(foo_comment_pos > bar_pos, "foo comment should come after BAR");
+    }
+
+    #[test]
+    fn format_preserves_trailing_comment() {
+        let schema = parse_schema("FOO\n").unwrap();
+        let lines = parse_dotenv("FOO=\"1\"\n\n# trailing comment\n").unwrap();
+        let formatted = format_lines_by_schema(&lines, &schema);
+        let output = lines_to_string(&formatted);
+        assert!(output.contains("# trailing comment"), "trailing comment lost");
+    }
+
+    #[test]
+    fn format_preserves_blank_lines_between_comment_and_kv() {
+        let schema = parse_schema("FOO\n").unwrap();
+        let lines = parse_dotenv("# section header\n\nFOO=\"1\"\n").unwrap();
+        let formatted = format_lines_by_schema(&lines, &schema);
+        let output = lines_to_string(&formatted);
+        assert!(output.contains("# section header\n\nFOO="), "blank line between comment and KV lost");
+    }
+
+    #[test]
+    fn format_dotsec_key_stays_last() {
+        let schema = parse_schema("FOO\nBAR\n").unwrap();
+        let lines = parse_dotenv("FOO=\"1\"\nBAR=\"2\"\n\n# do not edit the line below, it is managed by dotsec\n__DOTSEC_KEY__=\"wrapped\"\n").unwrap();
+        let formatted = format_lines_by_schema(&lines, &schema);
+        let output = lines_to_string(&formatted);
+        let key_pos = output.find("__DOTSEC_KEY__=").unwrap();
+        let bar_pos = output.find("BAR=").unwrap();
+        assert!(key_pos > bar_pos, "__DOTSEC_KEY__ should be after BAR");
+        assert!(output.contains("do not edit"), "managed comment should be preserved");
     }
 }
