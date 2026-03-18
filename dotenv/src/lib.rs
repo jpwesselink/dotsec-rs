@@ -1029,9 +1029,14 @@ fn parse_kv(pair: Pair<Rule>) -> Option<(String, String, QuoteType)> {
     }
     let mut inner = pair.into_inner();
     let key = inner.next()?.as_str().to_string();
-    let value_pair = inner.next()?;
-    let (value, quote_type) = parse_value(value_pair)?;
-    Some((key, value, quote_type))
+    // Value is optional: KEY= (empty) is valid
+    match inner.next() {
+        Some(value_pair) => {
+            let (value, quote_type) = parse_value(value_pair)?;
+            Some((key, value, quote_type))
+        }
+        None => Some((key, String::new(), QuoteType::None)),
+    }
 }
 
 /// Parse a value, which might be a quoted string or a naked variable.
@@ -1114,6 +1119,26 @@ mod tests {
     fn simple_kv() {
         let lines = parse_dotenv("FOO=bar\n").unwrap();
         assert!(matches!(&lines[0], Line::Kv(k, v, QuoteType::None) if k == "FOO" && v == "bar"));
+    }
+
+    #[test]
+    fn empty_value() {
+        let lines = parse_dotenv("FOO=\n").unwrap();
+        assert!(matches!(&lines[0], Line::Kv(k, v, QuoteType::None) if k == "FOO" && v.is_empty()));
+    }
+
+    #[test]
+    fn empty_value_quoted() {
+        let lines = parse_dotenv("FOO=\"\"\n").unwrap();
+        assert!(matches!(&lines[0], Line::Kv(k, v, QuoteType::Double) if k == "FOO" && v.is_empty()));
+    }
+
+    #[test]
+    fn empty_value_roundtrip() {
+        let source = "FOO=\n";
+        let lines = parse_dotenv(source).unwrap();
+        let output = lines_to_string(&lines);
+        assert_eq!(output, source);
     }
 
     #[test]
