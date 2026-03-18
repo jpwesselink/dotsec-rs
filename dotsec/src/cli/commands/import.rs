@@ -437,6 +437,11 @@ fn auto_directives(
         directives.push(dotenv::Line::Directive("type".to_string(), Some(type_name.to_string())));
     }
 
+    // Optional: empty values are treated as optional
+    if value.is_empty() {
+        directives.push(dotenv::Line::Directive("optional".to_string(), None));
+    }
+
     // Push: carry over from source if present
     if let Some((_, v)) = source_directives.iter().find(|(n, _)| n == "push") {
         directives.push(dotenv::Line::Directive("push".to_string(), v.clone()));
