@@ -6,7 +6,7 @@ use crate::default_options::DefaultOptions;
 
 pub fn command() -> Command {
     Command::new("init")
-        .about("Initialize an empty .sec file with encryption config")
+        .about("Initialize a .sec file with encryption config")
 }
 
 pub async fn match_args(

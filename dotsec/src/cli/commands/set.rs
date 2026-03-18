@@ -62,6 +62,19 @@ pub async fn match_args(
         return Err("Variable name cannot be empty".into());
     }
 
+    // Discover schema
+    let schema_path = dotenv::schema::discover_schema(
+        sec_file,
+        default_options.schema_path.as_deref(),
+    );
+    let mut schema = if let Some(ref path) = schema_path {
+        let content = std::fs::read_to_string(path)?;
+        Some(dotenv::parse_schema(&content)?)
+    } else {
+        None
+    };
+    let key_in_schema = schema.as_ref().is_some_and(|s| s.get(&key).is_some());
+
     // Read raw .sec lines (not decrypted) for the prompts — we may not need KMS at all
     let raw_lines = if std::path::Path::new(sec_file).exists() {
         let content = std::fs::read_to_string(sec_file)?;
@@ -77,14 +90,19 @@ pub async fn match_args(
 
     // Check if the existing variable was encrypted (has @encrypt directive or inherits from default)
     let old_was_encrypted = if let Some(kv_pos) = existing_pos {
-        let dir_start = find_directive_start(&raw_lines, kv_pos);
-        let has_explicit_encrypt = raw_lines[dir_start..kv_pos].iter()
-            .any(|l| matches!(l, dotenv::Line::Directive(n, _) if n == "encrypt"));
-        let has_explicit_plaintext = raw_lines[dir_start..kv_pos].iter()
-            .any(|l| matches!(l, dotenv::Line::Directive(n, _) if n == "plaintext"));
-        if has_explicit_encrypt { true }
-        else if has_explicit_plaintext { false }
-        else { file_default_encrypt }
+        if key_in_schema {
+            // When schema exists, check schema for encrypt directive
+            schema.as_ref().unwrap().get(&key).unwrap().has_directive("encrypt") || file_default_encrypt
+        } else {
+            let dir_start = find_directive_start(&raw_lines, kv_pos);
+            let has_explicit_encrypt = raw_lines[dir_start..kv_pos].iter()
+                .any(|l| matches!(l, dotenv::Line::Directive(n, _) if n == "encrypt"));
+            let has_explicit_plaintext = raw_lines[dir_start..kv_pos].iter()
+                .any(|l| matches!(l, dotenv::Line::Directive(n, _) if n == "plaintext"));
+            if has_explicit_encrypt { true }
+            else if has_explicit_plaintext { false }
+            else { file_default_encrypt }
+        }
     } else {
         false
     };
@@ -123,6 +141,7 @@ pub async fn match_args(
 
     // Build directives for this variable
     let mut new_directives: Vec<dotenv::Line> = Vec::new();
+    let mut schema_directives: Vec<(String, Option<String>)> = Vec::new();
     let mut new_is_encrypted = false;
 
     let has_encrypt_flag = sub.get_flag("encrypt");
@@ -130,11 +149,39 @@ pub async fn match_args(
     let type_arg = sub.get_one::<String>("type");
     let push_arg = sub.get_one::<String>("push");
 
-    if interactive {
-        // Interactive: prompt for each directive
-        new_directives = helpers::prompt_variable_directives(&key, &value, file_default_encrypt, None)?;
+    if key_in_schema {
+        // Key already in schema — no directive prompts needed, just update value
+        // Determine encryption from schema
+        let schema_entry = schema.as_ref().unwrap().get(&key).unwrap();
+        let has_schema_encrypt = schema_entry.has_directive("encrypt");
+        let has_schema_plaintext = schema_entry.has_directive("plaintext");
+        if has_schema_encrypt {
+            new_is_encrypted = true;
+        } else if has_schema_plaintext {
+            new_is_encrypted = false;
+        } else {
+            new_is_encrypted = file_default_encrypt;
+        }
+        // No directives go inline in .sec
+    } else if schema.is_some() {
+        // Schema exists but key is new — prompt for directives, write to schema
+        if interactive {
+            new_directives = helpers::prompt_variable_directives(&key, &value, file_default_encrypt, None)?;
+        } else {
+            if has_encrypt_flag {
+                new_directives.push(dotenv::Line::Directive("encrypt".to_string(), None));
+            } else if has_plaintext_flag {
+                new_directives.push(dotenv::Line::Directive("plaintext".to_string(), None));
+            }
+            if let Some(t) = type_arg {
+                new_directives.push(dotenv::Line::Directive("type".to_string(), Some(t.clone())));
+            }
+            if let Some(p) = push_arg {
+                new_directives.push(dotenv::Line::Directive("push".to_string(), Some(p.clone())));
+            }
+        }
 
-        // Determine if this variable will be encrypted
+        // Determine encryption from the directives we just built
         let has_explicit_encrypt = new_directives.iter()
             .any(|l| matches!(l, dotenv::Line::Directive(n, _) if n == "encrypt"));
         let has_explicit_plaintext = new_directives.iter()
@@ -146,24 +193,57 @@ pub async fn match_args(
         } else {
             new_is_encrypted = file_default_encrypt;
         }
+
+        // Move directives to schema, not inline in .sec
+        for dir in &new_directives {
+            if let dotenv::Line::Directive(name, value) = dir {
+                schema_directives.push((name.clone(), value.clone()));
+            }
+        }
+        new_directives.clear(); // Don't write directives inline in .sec
+
+        // Add to schema and write back
+        if let Some(ref mut s) = schema {
+            s.entries.push(dotenv::SchemaEntry {
+                directives: schema_directives,
+                key: key.clone(),
+            });
+            let schema_output = dotenv::schema_to_string(s);
+            std::fs::write(schema_path.as_ref().unwrap(), &schema_output)?;
+        }
     } else {
-        // Non-interactive: use flags
-        if has_encrypt_flag {
-            new_is_encrypted = true;
-            new_directives.push(dotenv::Line::Directive("encrypt".to_string(), None));
-        } else if has_plaintext_flag {
-            new_directives.push(dotenv::Line::Directive("plaintext".to_string(), None));
+        // No schema — current behavior: directives inline in .sec
+        if interactive {
+            new_directives = helpers::prompt_variable_directives(&key, &value, file_default_encrypt, None)?;
+
+            let has_explicit_encrypt = new_directives.iter()
+                .any(|l| matches!(l, dotenv::Line::Directive(n, _) if n == "encrypt"));
+            let has_explicit_plaintext = new_directives.iter()
+                .any(|l| matches!(l, dotenv::Line::Directive(n, _) if n == "plaintext"));
+            if has_explicit_encrypt {
+                new_is_encrypted = true;
+            } else if has_explicit_plaintext {
+                new_is_encrypted = false;
+            } else {
+                new_is_encrypted = file_default_encrypt;
+            }
         } else {
-            // No explicit flag — inherit file default
-            new_is_encrypted = file_default_encrypt;
-        }
+            if has_encrypt_flag {
+                new_is_encrypted = true;
+                new_directives.push(dotenv::Line::Directive("encrypt".to_string(), None));
+            } else if has_plaintext_flag {
+                new_directives.push(dotenv::Line::Directive("plaintext".to_string(), None));
+            } else {
+                new_is_encrypted = file_default_encrypt;
+            }
 
-        if let Some(t) = type_arg {
-            new_directives.push(dotenv::Line::Directive("type".to_string(), Some(t.clone())));
-        }
+            if let Some(t) = type_arg {
+                new_directives.push(dotenv::Line::Directive("type".to_string(), Some(t.clone())));
+            }
 
-        if let Some(p) = push_arg {
-            new_directives.push(dotenv::Line::Directive("push".to_string(), Some(p.clone())));
+            if let Some(p) = push_arg {
+                new_directives.push(dotenv::Line::Directive("push".to_string(), Some(p.clone())));
+            }
         }
     }
 

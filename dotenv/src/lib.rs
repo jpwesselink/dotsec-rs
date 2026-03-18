@@ -2,11 +2,19 @@ use pest::iterators::Pair;
 use pest::Parser;
 use pest_derive::Parser;
 use std::collections::HashMap;
+pub mod schema;
 pub mod types;
 #[derive(Parser)]
 #[grammar = "dotenv.pest"]
 struct DotenvLineParser;
-pub use types::{DiffItem, Entry, FileConfig, Line, PushTarget, QuoteType, SecretsManagerOptions, SsmOptions, ValidationError, VarType};
+pub use types::{
+    DiffItem, Entry, FileConfig, FormatType, Line, PushTarget, QuoteType, Schema, SchemaEntry,
+    SecretsManagerOptions, Severity, SsmOptions, ValidationError, VarType,
+    SCHEMA_DIRECTIVES, SCHEMA_FILE_LEVEL_DIRECTIVES, ENV_DIRECTIVES,
+};
+
+/// Directives whose values need quoting in output: @pattern="...", @deprecated="..."
+const QUOTED_VALUE_DIRECTIVES: &[&str] = &["pattern", "deprecated"];
 
 pub fn lines_to_string(lines: &[Line]) -> String {
     let mut output = String::new();
@@ -23,7 +31,13 @@ pub fn lines_to_string(lines: &[Line]) -> String {
                     in_directive = true;
                 }
                 match value {
-                    Some(v) => output.push_str(&format!("@{}={}", name, v)),
+                    Some(v) => {
+                        if QUOTED_VALUE_DIRECTIVES.contains(&name.as_str()) {
+                            output.push_str(&format!("@{}=\"{}\"", name, v));
+                        } else {
+                            output.push_str(&format!("@{}={}", name, v));
+                        }
+                    }
                     None => output.push_str(&format!("@{}", name)),
                 }
             }
@@ -148,6 +162,153 @@ pub fn validate_entries_with_env(entries: &[Entry]) -> Vec<ValidationError> {
     errors
 }
 
+/// Validate entries against an external schema.
+pub fn validate_entries_against_schema(
+    entries: &[Entry],
+    schema: &Schema,
+) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+
+    let entry_keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
+
+    // Check for missing keys (in schema but not in .sec)
+    for schema_entry in &schema.entries {
+        if !entry_keys.contains(&schema_entry.key.as_str()) {
+            if schema_entry.has_directive("optional") {
+                continue;
+            }
+            errors.push(ValidationError::error(
+                &schema_entry.key,
+                "required by schema but missing from .sec file",
+            ));
+        }
+    }
+
+    // Check for extra keys (in .sec but not in schema)
+    let schema_keys = schema.keys();
+    for entry in entries {
+        if !schema_keys.contains(&entry.key.as_str()) {
+            errors.push(ValidationError::warning(
+                &entry.key,
+                "not defined in schema",
+            ));
+        }
+    }
+
+    // Validate each entry against its schema definition
+    for entry in entries {
+        if let Some(schema_entry) = schema.get(&entry.key) {
+            // Warn about inline per-key directives when schema exists
+            for (name, _) in &entry.directives {
+                if SCHEMA_DIRECTIVES.contains(&name.as_str()) {
+                    errors.push(ValidationError::warning(
+                        &entry.key,
+                        format!("inline @{} directive ignored, using schema", name),
+                    ));
+                }
+            }
+
+            // Validate type from schema
+            if let Some(var_type) = schema_entry.var_type() {
+                entry.validate_value(&var_type, &entry.value, &mut errors);
+            }
+
+            // Validate format from schema
+            if let Some(format_type) = schema_entry.format_type() {
+                if let Some(msg) = format_type.validate(&entry.value) {
+                    errors.push(ValidationError::error(&entry.key, msg));
+                }
+            }
+
+            // Validate pattern from schema
+            if let Some(Some(pattern)) = schema_entry.get_directive("pattern") {
+                match regex::Regex::new(pattern) {
+                    Ok(re) => {
+                        if !re.is_match(&entry.value) {
+                            errors.push(ValidationError::error(
+                                &entry.key,
+                                format!("value \"{}\" does not match pattern \"{}\"", entry.value, pattern),
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        errors.push(ValidationError::error(
+                            &entry.key,
+                            format!("invalid regex pattern \"{}\": {}", pattern, e),
+                        ));
+                    }
+                }
+            }
+
+            // Validate min/max from schema (only with @type=number)
+            if let Some(var_type) = schema_entry.var_type() {
+                if var_type == VarType::Number {
+                    if let Ok(val) = entry.value.parse::<f64>() {
+                        if let Some(Some(min_str)) = schema_entry.get_directive("min") {
+                            if let Ok(min) = min_str.parse::<f64>() {
+                                if val < min {
+                                    errors.push(ValidationError::error(
+                                        &entry.key,
+                                        format!("value {} is less than minimum {}", val, min),
+                                    ));
+                                }
+                            }
+                        }
+                        if let Some(Some(max_str)) = schema_entry.get_directive("max") {
+                            if let Ok(max) = max_str.parse::<f64>() {
+                                if val > max {
+                                    errors.push(ValidationError::error(
+                                        &entry.key,
+                                        format!("value {} is greater than maximum {}", val, max),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Validate min-length/max-length from schema
+            if let Some(Some(min_len_str)) = schema_entry.get_directive("min-length") {
+                if let Ok(min_len) = min_len_str.parse::<usize>() {
+                    if entry.value.len() < min_len {
+                        errors.push(ValidationError::error(
+                            &entry.key,
+                            format!("value length {} is less than minimum length {}", entry.value.len(), min_len),
+                        ));
+                    }
+                }
+            }
+            if let Some(Some(max_len_str)) = schema_entry.get_directive("max-length") {
+                if let Ok(max_len) = max_len_str.parse::<usize>() {
+                    if entry.value.len() > max_len {
+                        errors.push(ValidationError::error(
+                            &entry.key,
+                            format!("value length {} exceeds maximum length {}", entry.value.len(), max_len),
+                        ));
+                    }
+                }
+            }
+
+            // Validate not-empty from schema
+            if schema_entry.has_directive("not-empty") && entry.value.is_empty() {
+                errors.push(ValidationError::error(&entry.key, "value must not be empty"));
+            }
+
+            // Warn on deprecated from schema
+            if schema_entry.has_directive("deprecated") {
+                let msg = match schema_entry.get_directive("deprecated") {
+                    Some(Some(message)) => format!("deprecated: {}", message),
+                    _ => "deprecated".to_string(),
+                };
+                errors.push(ValidationError::warning(&entry.key, msg));
+            }
+        }
+    }
+
+    errors
+}
+
 /// Compare base entries against target entries and report differences.
 pub fn diff_entries(base: &[Entry], target: &[Entry]) -> Vec<DiffItem> {
     let mut diffs = Vec::new();
@@ -206,6 +367,139 @@ pub fn diff_entries(base: &[Entry], target: &[Entry]) -> Vec<DiffItem> {
     diffs
 }
 
+/// Reorder lines in a .sec file to match the key ordering in a schema.
+/// File-level directives and leading comments are preserved at the top.
+/// Keys not in the schema are appended at the end.
+pub fn format_lines_by_schema(lines: &[Line], schema: &Schema) -> Vec<Line> {
+    // 1. Separate file-level header (everything before first KV) from entries
+    let mut header: Vec<Line> = Vec::new();
+    let mut found_first_kv = false;
+
+    for line in lines {
+        if matches!(line, Line::Kv(_, _, _)) {
+            found_first_kv = true;
+            break;
+        }
+        header.push(line.clone());
+    }
+
+    // 2. Group entries: each KV with its preceding directives
+    struct EntryBlock {
+        directives: Vec<Line>,
+        kv: Line,
+        key: String,
+    }
+
+    let mut blocks: Vec<EntryBlock> = Vec::new();
+    let mut pending: Vec<Line> = Vec::new();
+    let mut past_header = !found_first_kv;
+
+    for line in lines {
+        if !past_header {
+            if matches!(line, Line::Kv(_, _, _)) {
+                past_header = true;
+            } else {
+                continue; // skip header lines, already captured
+            }
+        }
+
+        match line {
+            Line::Directive(_, _) => {
+                pending.push(line.clone());
+            }
+            Line::Kv(k, _, _) => {
+                blocks.push(EntryBlock {
+                    directives: std::mem::take(&mut pending),
+                    kv: line.clone(),
+                    key: k.clone(),
+                });
+            }
+            Line::Comment(_) => {
+                // Comments between entries break directive chains
+                pending.clear();
+            }
+            _ => {} // skip newlines/whitespace between entries
+        }
+    }
+
+    // 3. Build output: header + entries in schema order + extras
+    let mut output = header;
+
+    // Ensure header ends with a blank line
+    if !output.is_empty() {
+        let ends_with_double_newline = output.len() >= 2
+            && matches!(output[output.len() - 1], Line::Newline)
+            && matches!(output[output.len() - 2], Line::Newline);
+        if !ends_with_double_newline {
+            if !matches!(output.last(), Some(Line::Newline)) {
+                output.push(Line::Newline);
+            }
+            output.push(Line::Newline);
+        }
+    }
+
+    let schema_keys = schema.keys();
+    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut first_entry = true;
+
+    // Emit entries in schema order
+    for schema_key in &schema_keys {
+        if let Some(block) = blocks.iter().find(|b| b.key == *schema_key) {
+            if !first_entry {
+                output.push(Line::Newline);
+            }
+            first_entry = false;
+            used.insert(block.key.clone());
+
+            for dir in &block.directives {
+                output.push(dir.clone());
+                output.push(Line::Newline);
+            }
+            output.push(block.kv.clone());
+            output.push(Line::Newline);
+        }
+    }
+
+    // Emit entries not in schema (extras) at the end, but hold __DOTSEC_KEY__ for last
+    let mut dotsec_key_block: Option<&EntryBlock> = None;
+    for block in &blocks {
+        if !used.contains(&block.key) {
+            if block.key == "__DOTSEC_KEY__" || block.key == "__DOTSEC__" {
+                dotsec_key_block = Some(block);
+                continue;
+            }
+            if !first_entry {
+                output.push(Line::Newline);
+            }
+            first_entry = false;
+
+            for dir in &block.directives {
+                output.push(dir.clone());
+                output.push(Line::Newline);
+            }
+            output.push(block.kv.clone());
+            output.push(Line::Newline);
+        }
+    }
+
+    // __DOTSEC_KEY__ always goes at the very end
+    if let Some(block) = dotsec_key_block {
+        if !first_entry {
+            output.push(Line::Newline);
+        }
+        // Preserve the "do not edit" comment if it was in the original
+        let has_managed_comment = lines.iter().any(|l| matches!(l, Line::Comment(c) if c.contains("do not edit")));
+        if has_managed_comment {
+            output.push(Line::Comment("# do not edit the line below, it is managed by dotsec".to_string()));
+            output.push(Line::Newline);
+        }
+        output.push(block.kv.clone());
+        output.push(Line::Newline);
+    }
+
+    output
+}
+
 /// Check if a value is in the `ENC[...]` envelope encryption format.
 pub fn is_encrypted_value(value: &str) -> bool {
     value.starts_with("ENC[") && value.ends_with(']')
@@ -218,6 +512,61 @@ pub fn get_value(source: &[Line], key: &str) -> Option<String> {
         }
         None
     })
+}
+
+/// Parse directives from a pest directive pair into Line::Directive items.
+/// Shared between parse_dotenv and parse_schema.
+fn parse_directive(pair: Pair<Rule>) -> Vec<Line> {
+    let mut output = Vec::new();
+    for single in pair.into_inner() {
+        if single.as_rule() == Rule::single_directive {
+            let typed = single.into_inner().next().unwrap();
+            match typed.as_rule() {
+                Rule::flag_directive => {
+                    let name = typed.into_inner().next().unwrap().as_str().to_string();
+                    output.push(Line::Directive(name, None));
+                }
+                Rule::push_directive => {
+                    let value = typed.as_str().strip_prefix("@push=").unwrap().to_string();
+                    output.push(Line::Directive("push".to_string(), Some(value)));
+                }
+                Rule::type_directive => {
+                    let value = typed.as_str().strip_prefix("@type=").unwrap().to_string();
+                    output.push(Line::Directive("type".to_string(), Some(value)));
+                }
+                Rule::format_directive => {
+                    let value = typed.as_str().strip_prefix("@format=").unwrap().to_string();
+                    output.push(Line::Directive("format".to_string(), Some(value)));
+                }
+                Rule::numeric_directive => {
+                    let mut inner = typed.into_inner();
+                    let name = inner.next().unwrap().as_str().to_string();
+                    let value = inner.next().unwrap().as_str().to_string();
+                    output.push(Line::Directive(name, Some(value)));
+                }
+                Rule::pattern_directive => {
+                    let value = typed.into_inner()
+                        .find(|p| p.as_rule() == Rule::pattern_value)
+                        .unwrap().as_str().to_string();
+                    output.push(Line::Directive("pattern".to_string(), Some(value)));
+                }
+                Rule::deprecated_directive => {
+                    let message = typed.into_inner()
+                        .find(|p| p.as_rule() == Rule::deprecated_message)
+                        .map(|p| p.as_str().to_string());
+                    output.push(Line::Directive("deprecated".to_string(), message));
+                }
+                Rule::text_directive => {
+                    let mut inner = typed.into_inner();
+                    let name = inner.next().unwrap().as_str().to_string();
+                    let value = inner.next().unwrap().as_str().trim().to_string();
+                    output.push(Line::Directive(name, Some(value)));
+                }
+                _ => {}
+            }
+        }
+    }
+    output
 }
 
 /// Parse the .env file source.
@@ -234,14 +583,7 @@ pub fn parse_dotenv(source: &str) -> Result<Vec<Line>, Box<pest::error::Error<Ru
                 output.push(Line::Comment(pair.as_str().to_string()));
             }
             Rule::directive => {
-                for single in pair.into_inner() {
-                    if single.as_rule() == Rule::single_directive {
-                        let mut inner = single.into_inner();
-                        let name = inner.next().unwrap().as_str().to_string();
-                        let value = inner.next().map(|v| v.as_str().trim().to_string());
-                        output.push(Line::Directive(name, value));
-                    }
-                }
+                output.extend(parse_directive(pair));
             }
             Rule::WHITESPACE => {
                 output.push(Line::Whitespace(pair.as_str().to_string()));
@@ -256,6 +598,428 @@ pub fn parse_dotenv(source: &str) -> Result<Vec<Line>, Box<pest::error::Error<Ru
     }
 
     Ok(output)
+}
+
+/// Parse a schema file source. Schema files have bare keys (no = value) with directives.
+pub fn parse_schema(source: &str) -> Result<Schema, Box<pest::error::Error<Rule>>> {
+    let mut entries = Vec::new();
+    let mut pending_directives: Vec<(String, Option<String>)> = Vec::new();
+
+    let pairs = DotenvLineParser::parse(Rule::schema, source)?;
+    for pair in pairs {
+        match pair.as_rule() {
+            Rule::directive => {
+                for line in parse_directive(pair) {
+                    if let Line::Directive(name, value) = line {
+                        pending_directives.push((name, value));
+                    }
+                }
+            }
+            Rule::schema_key => {
+                let key = pair.into_inner().next().unwrap().as_str().to_string();
+                let directives = std::mem::take(&mut pending_directives);
+                entries.push(SchemaEntry { directives, key });
+            }
+            Rule::COMMENT => {
+                pending_directives.clear();
+            }
+            _ => {}
+        }
+    }
+
+    Ok(Schema { entries })
+}
+
+/// Serialize a schema back to file format.
+pub fn schema_to_string(schema: &Schema) -> String {
+    let mut output = String::new();
+    let mut first = true;
+
+    for entry in &schema.entries {
+        if !first && !entry.directives.is_empty() {
+            output.push('\n');
+        }
+        first = false;
+
+        if !entry.directives.is_empty() {
+            output.push_str("# ");
+            for (i, (name, value)) in entry.directives.iter().enumerate() {
+                if i > 0 {
+                    output.push(' ');
+                }
+                match value {
+                    Some(v) => {
+                        if QUOTED_VALUE_DIRECTIVES.contains(&name.as_str()) {
+                            output.push_str(&format!("@{}=\"{}\"", name, v));
+                        } else {
+                            output.push_str(&format!("@{}={}", name, v));
+                        }
+                    }
+                    None => output.push_str(&format!("@{}", name)),
+                }
+            }
+            output.push('\n');
+        }
+
+        output.push_str(&entry.key);
+        output.push('\n');
+    }
+
+    output
+}
+
+/// Convert a schema to a JSON Schema object.
+pub fn schema_to_json_schema(schema: &Schema) -> serde_json::Value {
+    let mut properties = serde_json::Map::new();
+    let mut required = Vec::new();
+
+    for entry in &schema.entries {
+        let mut prop = serde_json::Map::new();
+
+        // Type
+        match entry.var_type() {
+            Some(VarType::String) => { prop.insert("type".into(), "string".into()); }
+            Some(VarType::Number) => { prop.insert("type".into(), "number".into()); }
+            Some(VarType::Boolean) => { prop.insert("type".into(), "boolean".into()); }
+            Some(VarType::Enum(variants)) => {
+                prop.insert("type".into(), "string".into());
+                prop.insert("enum".into(), variants.into_iter().map(serde_json::Value::String).collect());
+            }
+            None => { prop.insert("type".into(), "string".into()); }
+        }
+
+        // Format
+        if let Some(fmt) = entry.format_type() {
+            let json_format = match fmt {
+                FormatType::Email => "email",
+                FormatType::Url => "uri",
+                FormatType::Uuid => "uuid",
+                FormatType::Ipv4 => "ipv4",
+                FormatType::Ipv6 => "ipv6",
+                FormatType::Date => "date",
+                FormatType::Semver => {
+                    // No native JSON Schema format — use pattern
+                    prop.entry("pattern").or_insert_with(|| "^\\d+\\.\\d+\\.\\d+".into());
+                    ""
+                }
+            };
+            if !json_format.is_empty() {
+                prop.insert("format".into(), json_format.into());
+            }
+        }
+
+        // Pattern
+        if let Some(pattern) = entry.pattern() {
+            prop.insert("pattern".into(), pattern.into());
+        }
+
+        // Numeric constraints
+        if let Some(min) = entry.min() {
+            prop.insert("minimum".into(), f64_to_json_number(min));
+        }
+        if let Some(max) = entry.max() {
+            prop.insert("maximum".into(), f64_to_json_number(max));
+        }
+
+        // Length constraints
+        if let Some(min_len) = entry.min_length() {
+            prop.insert("minLength".into(), min_len.into());
+        }
+        if let Some(max_len) = entry.max_length() {
+            prop.insert("maxLength".into(), max_len.into());
+        }
+
+        // not-empty → minLength: 1
+        if entry.has_directive("not-empty") && !prop.contains_key("minLength") {
+            prop.insert("minLength".into(), 1.into());
+        }
+
+        // Description
+        if let Some(desc) = entry.description() {
+            prop.insert("description".into(), desc.into());
+        }
+
+        // Deprecated
+        if let Some(msg) = entry.deprecated_message() {
+            prop.insert("deprecated".into(), true.into());
+            if let Some(text) = msg {
+                prop.entry("description")
+                    .and_modify(|v| {
+                        if let serde_json::Value::String(existing) = v {
+                            *existing = format!("[Deprecated: {}] {}", text, existing);
+                        }
+                    })
+                    .or_insert_with(|| format!("Deprecated: {}", text).into());
+            }
+        }
+
+        // Required
+        if entry.is_required() {
+            required.push(serde_json::Value::String(entry.key.clone()));
+        }
+
+        properties.insert(entry.key.clone(), serde_json::Value::Object(prop));
+    }
+
+    let mut schema_obj = serde_json::Map::new();
+    schema_obj.insert("$schema".into(), "http://json-schema.org/draft-07/schema#".into());
+    schema_obj.insert("type".into(), "object".into());
+    if !required.is_empty() {
+        schema_obj.insert("required".into(), serde_json::Value::Array(required));
+    }
+    schema_obj.insert("properties".into(), serde_json::Value::Object(properties));
+
+    serde_json::Value::Object(schema_obj)
+}
+
+/// Generate TypeScript code from a schema (interface + parseEnv function).
+pub fn schema_to_typescript(schema: &Schema) -> String {
+    let mut out = String::new();
+    out.push_str("// Generated by dotsec — do not edit\n\n");
+
+    // --- Interface ---
+    out.push_str("export interface Env {\n");
+    for entry in &schema.entries {
+        let ts_type = match entry.var_type() {
+            Some(VarType::String) | None => "string".to_string(),
+            Some(VarType::Number) => "number".to_string(),
+            Some(VarType::Boolean) => "boolean".to_string(),
+            Some(VarType::Enum(variants)) => {
+                variants.iter().map(|v| format!("\"{}\"", v)).collect::<Vec<_>>().join(" | ")
+            }
+        };
+        let optional = if entry.is_optional() { "?" } else { "" };
+        // JSDoc from @description and @deprecated
+        let has_desc = entry.description().is_some();
+        let has_deprecated = entry.deprecated_message().is_some();
+        if has_desc || has_deprecated {
+            out.push_str("  /**\n");
+            if let Some(desc) = entry.description() {
+                out.push_str(&format!("   * {}\n", desc));
+            }
+            if let Some(msg) = entry.deprecated_message() {
+                match msg {
+                    Some(text) => out.push_str(&format!("   * @deprecated {}\n", text)),
+                    None => out.push_str("   * @deprecated\n"),
+                }
+            }
+            out.push_str("   */\n");
+        }
+        out.push_str(&format!("  {}{}: {}\n", entry.key, optional, ts_type));
+    }
+    out.push_str("}\n\n");
+
+    // --- parseEnv function ---
+    out.push_str("export function parseEnv(\n");
+    out.push_str("  source: Record<string, string | undefined> = process.env\n");
+    out.push_str("): Env {\n");
+    out.push_str("  const errors: string[] = []\n\n");
+
+    // Required checks
+    let required_entries: Vec<&SchemaEntry> = schema.entries.iter().filter(|e| e.is_required()).collect();
+    if !required_entries.is_empty() {
+        for entry in &required_entries {
+            out.push_str(&format!(
+                "  if (source.{} === undefined) errors.push(\"{} is required\")\n",
+                entry.key, entry.key
+            ));
+        }
+        out.push('\n');
+    }
+
+    // Validation checks
+    for entry in &schema.entries {
+        let key = &entry.key;
+        let mut checks = Vec::new();
+
+        // not-empty
+        if entry.has_directive("not-empty") {
+            checks.push(format!(
+                "  if (source.{k} !== undefined && source.{k}.length === 0)\n    errors.push(\"{k} must not be empty\")",
+                k = key
+            ));
+        }
+
+        // type=number validation
+        if entry.var_type() == Some(VarType::Number) {
+            checks.push(format!(
+                "  if (source.{k} !== undefined && isNaN(Number(source.{k})))\n    errors.push(\"{k} must be a number\")",
+                k = key
+            ));
+            if let Some(min) = entry.min() {
+                let min_s = format_f64(min);
+                checks.push(format!(
+                    "  if (source.{k} !== undefined && Number(source.{k}) < {min})\n    errors.push(\"{k} must be >= {min}\")",
+                    k = key, min = min_s
+                ));
+            }
+            if let Some(max) = entry.max() {
+                let max_s = format_f64(max);
+                checks.push(format!(
+                    "  if (source.{k} !== undefined && Number(source.{k}) > {max})\n    errors.push(\"{k} must be <= {max}\")",
+                    k = key, max = max_s
+                ));
+            }
+        }
+
+        // type=boolean validation
+        if entry.var_type() == Some(VarType::Boolean) {
+            checks.push(format!(
+                "  if (source.{k} !== undefined && ![\"true\", \"false\", \"1\", \"0\"].includes(source.{k}))\n    errors.push(\"{k} must be a boolean (true/false/1/0)\")",
+                k = key
+            ));
+        }
+
+        // enum validation
+        if let Some(VarType::Enum(ref variants)) = entry.var_type() {
+            let items = variants.iter().map(|v| format!("\"{}\"", v)).collect::<Vec<_>>().join(", ");
+            checks.push(format!(
+                "  if (source.{k} !== undefined && ![{items}].includes(source.{k}))\n    errors.push(`{k} must be one of: {display}`)",
+                k = key,
+                items = items,
+                display = variants.join(", ")
+            ));
+        }
+
+        // format validation
+        if let Some(fmt) = entry.format_type() {
+            let check = match fmt {
+                FormatType::Email => Some(format!(
+                    "  if (source.{k} !== undefined && source.{k}.length > 0 && !source.{k}.includes(\"@\"))\n    errors.push(\"{k} must be an email\")",
+                    k = key
+                )),
+                FormatType::Url => Some(format!(
+                    "  if (source.{k} !== undefined && source.{k}.length > 0 && !source.{k}.startsWith(\"http://\") && !source.{k}.startsWith(\"https://\"))\n    errors.push(\"{k} must be a url\")",
+                    k = key
+                )),
+                FormatType::Uuid => Some(format!(
+                    "  if (source.{k} !== undefined && source.{k}.length > 0 && !/^[0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}}$/i.test(source.{k}))\n    errors.push(\"{k} must be a uuid\")",
+                    k = key
+                )),
+                FormatType::Ipv4 => Some(format!(
+                    "  if (source.{k} !== undefined && source.{k}.length > 0 && !/^((25[0-5]|2[0-4]\\d|[01]?\\d\\d?)\\.?){{4}}$/.test(source.{k}))\n    errors.push(\"{k} must be an ipv4 address\")",
+                    k = key
+                )),
+                FormatType::Ipv6 => Some(format!(
+                    "  if (source.{k} !== undefined && source.{k}.length > 0 && !source.{k}.includes(\":\"))\n    errors.push(\"{k} must be an ipv6 address\")",
+                    k = key
+                )),
+                FormatType::Date => Some(format!(
+                    "  if (source.{k} !== undefined && source.{k}.length > 0 && !/^\\d{{4}}-\\d{{2}}-\\d{{2}}$/.test(source.{k}))\n    errors.push(\"{k} must be a date (YYYY-MM-DD)\")",
+                    k = key
+                )),
+                FormatType::Semver => Some(format!(
+                    "  if (source.{k} !== undefined && source.{k}.length > 0 && !/^\\d+\\.\\d+\\.\\d+/.test(source.{k}))\n    errors.push(\"{k} must be a semver (MAJOR.MINOR.PATCH)\")",
+                    k = key
+                )),
+            };
+            if let Some(c) = check {
+                checks.push(c);
+            }
+        }
+
+        // pattern validation
+        if let Some(pattern) = entry.pattern() {
+            let escaped = pattern.replace('\\', "\\\\").replace('`', "\\`");
+            checks.push(format!(
+                "  if (source.{k} !== undefined && source.{k}.length > 0 && !new RegExp(`{pat}`).test(source.{k}))\n    errors.push(\"{k} must match pattern {pat_display}\")",
+                k = key,
+                pat = escaped,
+                pat_display = pattern.replace('"', "\\\"")
+            ));
+        }
+
+        // min-length / max-length (for strings)
+        if let Some(min_len) = entry.min_length() {
+            if !entry.has_directive("not-empty") || min_len > 1 {
+                checks.push(format!(
+                    "  if (source.{k} !== undefined && source.{k}.length < {n})\n    errors.push(\"{k} must be at least {n} characters\")",
+                    k = key, n = min_len
+                ));
+            }
+        }
+        if let Some(max_len) = entry.max_length() {
+            checks.push(format!(
+                "  if (source.{k} !== undefined && source.{k}.length > {n})\n    errors.push(\"{k} must be at most {n} characters\")",
+                k = key, n = max_len
+            ));
+        }
+
+        if !checks.is_empty() {
+            for check in checks {
+                out.push_str(&check);
+                out.push('\n');
+            }
+            out.push('\n');
+        }
+    }
+
+    // Error throw
+    out.push_str("  if (errors.length > 0)\n");
+    out.push_str("    throw new Error(`Environment validation failed:\\n${errors.map(e => `  - ${e}`).join(\"\\n\")}`)\n\n");
+
+    // Return object
+    out.push_str("  return {\n");
+    for entry in &schema.entries {
+        let key = &entry.key;
+        let is_optional = entry.is_optional();
+
+        let value_expr = match entry.var_type() {
+            Some(VarType::Number) => {
+                if is_optional {
+                    format!("source.{k} !== undefined ? Number(source.{k}) : undefined", k = key)
+                } else {
+                    format!("Number(source.{}!)", key)
+                }
+            }
+            Some(VarType::Boolean) => {
+                if is_optional {
+                    format!("source.{k} !== undefined ? source.{k} === \"true\" || source.{k} === \"1\" : undefined", k = key)
+                } else {
+                    format!("source.{k}! === \"true\" || source.{k}! === \"1\"", k = key)
+                }
+            }
+            Some(VarType::Enum(_)) => {
+                if is_optional {
+                    format!("source.{k} !== undefined ? source.{k} as Env[\"{k}\"] : undefined", k = key)
+                } else {
+                    format!("source.{k}! as Env[\"{k}\"]", k = key)
+                }
+            }
+            Some(VarType::String) | None => {
+                if is_optional {
+                    format!("source.{}", key)
+                } else {
+                    format!("source.{}!", key)
+                }
+            }
+        };
+
+        out.push_str(&format!("    {}: {},\n", key, value_expr));
+    }
+    out.push_str("  }\n");
+    out.push_str("}\n");
+
+    out
+}
+
+/// Convert f64 to a JSON number, using integer representation when possible.
+fn f64_to_json_number(v: f64) -> serde_json::Value {
+    if v == v.trunc() && v >= i64::MIN as f64 && v <= i64::MAX as f64 {
+        serde_json::Value::Number((v as i64).into())
+    } else {
+        serde_json::Number::from_f64(v)
+            .map_or(serde_json::Value::Null, serde_json::Value::Number)
+    }
+}
+
+/// Format f64 without trailing zeros for codegen output.
+fn format_f64(v: f64) -> String {
+    if v == v.trunc() {
+        format!("{}", v as i64)
+    } else {
+        format!("{}", v)
+    }
 }
 
 /// Parse a key-value pair from a pest kv rule.
@@ -338,6 +1102,7 @@ pub fn lines_to_csv(lines: &[Line]) -> Result<String, Box<dyn std::error::Error>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use types::Severity;
 
     #[test]
     fn empty_file() {
@@ -385,39 +1150,38 @@ mod tests {
 
     #[test]
     fn directive_with_value() {
-        let lines = parse_dotenv("# @push=ssm\nFOO=bar\n").unwrap();
-        assert!(matches!(&lines[0], Line::Directive(name, Some(val)) if name == "push" && val == "ssm"));
+        let lines = parse_dotenv("# @push=aws-ssm\nFOO=bar\n").unwrap();
+        assert!(matches!(&lines[0], Line::Directive(name, Some(val)) if name == "push" && val == "aws-ssm"));
     }
 
     #[test]
     fn directive_with_complex_value() {
-        let lines = parse_dotenv("# @type=enum(development, preview, production)\nFOO=bar\n").unwrap();
-        assert!(matches!(&lines[0], Line::Directive(name, Some(val)) if name == "type" && val == "enum(development, preview, production)"));
+        let lines = parse_dotenv("# @type=enum(\"development\", \"preview\", \"production\")\nFOO=bar\n").unwrap();
+        assert!(matches!(&lines[0], Line::Directive(name, Some(val)) if name == "type" && val == "enum(\"development\", \"preview\", \"production\")"));
     }
 
     #[test]
     fn directive_with_comma_list() {
-        let lines = parse_dotenv("# @push=ssm,secretsmanager\nFOO=bar\n").unwrap();
-        assert!(matches!(&lines[0], Line::Directive(name, Some(val)) if name == "push" && val == "ssm,secretsmanager"));
+        let lines = parse_dotenv("# @push=aws-ssm, aws-secrets-manager\nFOO=bar\n").unwrap();
+        assert!(matches!(&lines[0], Line::Directive(name, Some(val)) if name == "push" && val == "aws-ssm, aws-secrets-manager"));
     }
 
     #[test]
-    fn directive_with_path() {
-        let lines = parse_dotenv("# @ssm-path=/myapp/production\nFOO=bar\n").unwrap();
-        assert!(matches!(&lines[0], Line::Directive(name, Some(val)) if name == "ssm-path" && val == "/myapp/production"));
+    fn directive_unknown_name_rejected() {
+        assert!(parse_dotenv("# @ssm-path=/myapp/production\nFOO=bar\n").is_err());
     }
 
     #[test]
     fn multiple_directives_before_kv() {
-        let lines = parse_dotenv("# @encrypt\n# @push=ssm\nFOO=bar\n").unwrap();
+        let lines = parse_dotenv("# @encrypt\n# @push=aws-ssm\nFOO=bar\n").unwrap();
         assert!(matches!(&lines[0], Line::Directive(name, None) if name == "encrypt"));
-        assert!(matches!(&lines[2], Line::Directive(name, Some(val)) if name == "push" && val == "ssm"));
+        assert!(matches!(&lines[2], Line::Directive(name, Some(val)) if name == "push" && val == "aws-ssm"));
         assert!(matches!(&lines[4], Line::Kv(k, _, _) if k == "FOO"));
     }
 
     #[test]
     fn mixed_comments_and_directives() {
-        let source = "# Regular comment\n# @encrypt\n# @push=ssm\nDB_URL=\"postgres://localhost\"\n\n# no directives\nDEBUG=true\n";
+        let source = "# Regular comment\n# @encrypt\n# @push=aws-ssm\nDB_URL=\"postgres://localhost\"\n\n# no directives\nDEBUG=true\n";
         let lines = parse_dotenv(source).unwrap();
 
         let directives: Vec<_> = lines.iter().filter(|l| matches!(l, Line::Directive(_, _))).collect();
@@ -431,7 +1195,7 @@ mod tests {
 
     #[test]
     fn roundtrip_with_directives() {
-        let source = "# @encrypt\n# @push=ssm\nFOO=\"bar\"\n";
+        let source = "# @encrypt\n# @push=aws-ssm\nFOO=\"bar\"\n";
         let lines = parse_dotenv(source).unwrap();
         let output = lines_to_string(&lines);
         assert_eq!(output, source);
@@ -439,7 +1203,7 @@ mod tests {
 
     #[test]
     fn lines_to_entries_groups_directives() {
-        let source = "# @encrypt\n# @push=ssm\nDB_URL=\"postgres://localhost\"\n\nDEBUG=true\n";
+        let source = "# @encrypt\n# @push=aws-ssm\nDB_URL=\"postgres://localhost\"\n\nDEBUG=true\n";
         let lines = parse_dotenv(source).unwrap();
         let entries = lines_to_entries(&lines);
 
@@ -450,7 +1214,7 @@ mod tests {
         assert_eq!(entries[0].directives.len(), 2);
         assert!(entries[0].has_directive("encrypt"));
         assert!(entries[0].has_directive("push"));
-        assert_eq!(entries[0].get_directive("push"), Some(&Some("ssm".to_string())));
+        assert_eq!(entries[0].get_directive("push"), Some(&Some("aws-ssm".to_string())));
 
         // Second entry has no directives
         assert_eq!(entries[1].key, "DEBUG");
@@ -468,12 +1232,8 @@ mod tests {
     }
 
     #[test]
-    fn push_target_ssm_legacy_alias() {
-        let source = "# @push=ssm\nFOO=\"bar\"\n";
-        let lines = parse_dotenv(source).unwrap();
-        let entries = lines_to_entries(&lines);
-        let targets = entries[0].push_targets();
-        assert_eq!(targets, vec![PushTarget::AwsSsm(SsmOptions::default())]);
+    fn push_target_ssm_shorthand_rejected() {
+        assert!(parse_dotenv("# @push=ssm\nFOO=\"bar\"\n").is_err());
     }
 
     #[test]
@@ -489,8 +1249,8 @@ mod tests {
     }
 
     #[test]
-    fn push_target_ssm_with_multiple_params() {
-        let source = "# @push=ssm(path=\"/myapp/prod\", prefix=\"MYAPP\")\nFOO=\"bar\"\n";
+    fn push_target_aws_ssm_with_multiple_params() {
+        let source = "# @push=aws-ssm(path=\"/myapp/prod\", prefix=\"MYAPP\")\nFOO=\"bar\"\n";
         let lines = parse_dotenv(source).unwrap();
         let entries = lines_to_entries(&lines);
         let targets = entries[0].push_targets();
@@ -502,7 +1262,7 @@ mod tests {
 
     #[test]
     fn push_target_multiple_targets() {
-        let source = "# @push=ssm(path=\"/myapp/prod\"), secretsmanager\nFOO=\"bar\"\n";
+        let source = "# @push=aws-ssm(path=\"/myapp/prod\"), aws-secrets-manager\nFOO=\"bar\"\n";
         let lines = parse_dotenv(source).unwrap();
         let entries = lines_to_entries(&lines);
         let targets = entries[0].push_targets();
@@ -525,26 +1285,18 @@ mod tests {
     }
 
     #[test]
-    fn push_target_secrets_manager_legacy_alias() {
-        let source = "# @push=secretsmanager\nFOO=\"bar\"\n";
-        let lines = parse_dotenv(source).unwrap();
-        let entries = lines_to_entries(&lines);
-        let targets = entries[0].push_targets();
-        assert_eq!(targets, vec![PushTarget::AwsSecretsManager(SecretsManagerOptions::default())]);
+    fn push_target_secretsmanager_shorthand_rejected() {
+        assert!(parse_dotenv("# @push=secretsmanager\nFOO=\"bar\"\n").is_err());
     }
 
     #[test]
-    fn push_target_secrets_manager_hyphenated() {
-        let source = "# @push=secrets-manager\nFOO=\"bar\"\n";
-        let lines = parse_dotenv(source).unwrap();
-        let entries = lines_to_entries(&lines);
-        let targets = entries[0].push_targets();
-        assert_eq!(targets, vec![PushTarget::AwsSecretsManager(SecretsManagerOptions::default())]);
+    fn push_target_secrets_manager_no_prefix_rejected() {
+        assert!(parse_dotenv("# @push=secrets-manager\nFOO=\"bar\"\n").is_err());
     }
 
     #[test]
-    fn push_target_secretsmanager_with_path() {
-        let source = "# @push=secretsmanager(path=\"/myapp/prod/secrets\")\nFOO=\"bar\"\n";
+    fn push_target_aws_secrets_manager_with_path() {
+        let source = "# @push=aws-secrets-manager(path=\"/myapp/prod/secrets\")\nFOO=\"bar\"\n";
         let lines = parse_dotenv(source).unwrap();
         let entries = lines_to_entries(&lines);
         let targets = entries[0].push_targets();
@@ -555,12 +1307,7 @@ mod tests {
 
     #[test]
     fn push_target_unquoted_params_rejected() {
-        let source = "# @push=ssm(path=/myapp/prod)\nFOO=\"bar\"\n";
-        let lines = parse_dotenv(source).unwrap();
-        let entries = lines_to_entries(&lines);
-        let targets = entries[0].push_targets();
-        // unquoted param value -> no params parsed
-        assert_eq!(targets, vec![PushTarget::AwsSsm(SsmOptions::default())]);
+        assert!(parse_dotenv("# @push=aws-ssm(path=/myapp/prod)\nFOO=\"bar\"\n").is_err());
     }
 
     #[test]
@@ -572,11 +1319,9 @@ mod tests {
     }
 
     #[test]
-    fn var_type_string_quoted() {
-        let source = "# @type=\"string\"\nFOO=\"bar\"\n";
-        let lines = parse_dotenv(source).unwrap();
-        let entries = lines_to_entries(&lines);
-        assert_eq!(entries[0].var_type(), Some(VarType::String));
+    fn var_type_string_quoted_rejected() {
+        // Quoting type values is not valid syntax
+        assert!(parse_dotenv("# @type=\"string\"\nFOO=\"bar\"\n").is_err());
     }
 
     #[test]
@@ -609,11 +1354,8 @@ mod tests {
 
     #[test]
     fn var_type_enum_unquoted_rejected() {
-        let source = "# @type=enum(development, preview, production)\nNODE_ENV=\"production\"\n";
-        let lines = parse_dotenv(source).unwrap();
-        let entries = lines_to_entries(&lines);
-        // unquoted enum values -> rejected
-        assert_eq!(entries[0].var_type(), None);
+        // Unquoted enum values are rejected at parse time
+        assert!(parse_dotenv("# @type=enum(development, preview, production)\nNODE_ENV=\"production\"\n").is_err());
     }
 
     #[test]
@@ -635,96 +1377,62 @@ mod tests {
         assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
     }
 
+    // --- Parse-time rejection tests ---
+    // These are now caught by the grammar, not by validation.
+
     #[test]
-    fn validate_unknown_directive() {
-        let source = "# @bogus\nFOO=\"bar\"\n";
-        let lines = parse_dotenv(source).unwrap();
-        let entries = lines_to_entries(&lines);
-        let errors = validate_entries(&entries);
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].message.contains("unknown directive"));
+    fn parse_rejects_unknown_directive() {
+        assert!(parse_dotenv("# @bogus\nFOO=\"bar\"\n").is_err());
     }
 
     #[test]
-    fn validate_encrypt_with_value() {
-        let source = "# @encrypt=yes\nFOO=\"bar\"\n";
-        let lines = parse_dotenv(source).unwrap();
-        let entries = lines_to_entries(&lines);
-        let errors = validate_entries(&entries);
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].message.contains("takes no value"));
+    fn parse_rejects_encrypt_with_value() {
+        assert!(parse_dotenv("# @encrypt=yes\nFOO=\"bar\"\n").is_err());
     }
 
     #[test]
-    fn validate_type_missing_value() {
-        let source = "# @type\nFOO=\"bar\"\n";
-        let lines = parse_dotenv(source).unwrap();
-        let entries = lines_to_entries(&lines);
-        let errors = validate_entries(&entries);
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].message.contains("requires a value"));
+    fn parse_rejects_type_missing_value() {
+        assert!(parse_dotenv("# @type\nFOO=\"bar\"\n").is_err());
     }
 
     #[test]
-    fn validate_type_invalid_value() {
-        let source = "# @type=potato\nFOO=\"bar\"\n";
-        let lines = parse_dotenv(source).unwrap();
-        let entries = lines_to_entries(&lines);
-        let errors = validate_entries(&entries);
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].message.contains("invalid type"));
+    fn parse_rejects_type_invalid_value() {
+        assert!(parse_dotenv("# @type=potato\nFOO=\"bar\"\n").is_err());
     }
 
     #[test]
-    fn validate_type_unquoted_enum() {
-        let source = "# @type=enum(dev, prod)\nFOO=\"bar\"\n";
-        let lines = parse_dotenv(source).unwrap();
-        let entries = lines_to_entries(&lines);
-        let errors = validate_entries(&entries);
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].message.contains("must be quoted"));
+    fn parse_rejects_type_unquoted_enum() {
+        assert!(parse_dotenv("# @type=enum(dev, prod)\nFOO=\"bar\"\n").is_err());
     }
 
     #[test]
-    fn validate_push_missing_value() {
-        let source = "# @push\nFOO=\"bar\"\n";
-        let lines = parse_dotenv(source).unwrap();
-        let entries = lines_to_entries(&lines);
-        let errors = validate_entries(&entries);
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].message.contains("requires a value"));
+    fn parse_rejects_push_missing_value() {
+        assert!(parse_dotenv("# @push\nFOO=\"bar\"\n").is_err());
     }
 
     #[test]
-    fn validate_push_invalid_target() {
-        let source = "# @push=gcp-storage\nFOO=\"bar\"\n";
-        let lines = parse_dotenv(source).unwrap();
-        let entries = lines_to_entries(&lines);
-        let errors = validate_entries(&entries);
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].message.contains("no valid push targets"));
+    fn parse_rejects_push_invalid_target() {
+        assert!(parse_dotenv("# @push=gcp-storage\nFOO=\"bar\"\n").is_err());
     }
 
     #[test]
-    fn validate_collects_all_errors() {
-        let source = "# @bogus\n# @type=potato\nFOO=\"bar\"\n\n# @encrypt=yes\n# @push\nBAR=\"baz\"\n";
-        let lines = parse_dotenv(source).unwrap();
-        let entries = lines_to_entries(&lines);
-        let errors = validate_entries(&entries);
-        assert_eq!(errors.len(), 4);
-        // FOO has 2 errors: unknown @bogus + invalid @type
-        assert_eq!(errors.iter().filter(|e| e.key == "FOO").count(), 2);
-        // BAR has 2 errors: @encrypt with value + @push missing value
-        assert_eq!(errors.iter().filter(|e| e.key == "BAR").count(), 2);
+    fn parse_rejects_mixed_invalid_directives() {
+        // Each of these should individually fail to parse
+        assert!(parse_dotenv("# @bogus\nFOO=\"bar\"\n").is_err());
+        assert!(parse_dotenv("# @encrypt=yes\nFOO=\"bar\"\n").is_err());
+        assert!(parse_dotenv("# @push\nBAR=\"baz\"\n").is_err());
     }
 
     #[test]
     fn validate_error_display() {
-        let err = ValidationError {
-            key: "API_KEY".to_string(),
-            message: "invalid type".to_string(),
-        };
+        let err = ValidationError::error("API_KEY", "invalid type");
         assert_eq!(format!("{}", err), "API_KEY: invalid type");
+    }
+
+    #[test]
+    fn validate_warning_display() {
+        let err = ValidationError::warning("OLD_KEY", "deprecated");
+        assert_eq!(format!("{}", err), "OLD_KEY: [warning] deprecated");
     }
 
     // --- Value validation tests ---
@@ -793,6 +1501,385 @@ mod tests {
         let entries = lines_to_entries(&lines);
         let errors = validate_entries(&entries);
         assert!(errors.is_empty());
+    }
+
+    // --- New directive parse tests ---
+
+    #[test]
+    fn parse_format_directive() {
+        let source = "# @format=email\nFOO=\"test@example.com\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        assert!(matches!(&lines[0], Line::Directive(name, Some(val)) if name == "format" && val == "email"));
+    }
+
+    #[test]
+    fn parse_format_invalid_rejected() {
+        assert!(parse_dotenv("# @format=potato\nFOO=\"bar\"\n").is_err());
+    }
+
+    #[test]
+    fn parse_numeric_directives() {
+        let source = "# @type=number @min=0 @max=65535\nPORT=3000\n";
+        let lines = parse_dotenv(source).unwrap();
+        let entries = lines_to_entries(&lines);
+        assert!(entries[0].has_directive("min"));
+        assert!(entries[0].has_directive("max"));
+        assert_eq!(entries[0].get_directive("min"), Some(&Some("0".to_string())));
+        assert_eq!(entries[0].get_directive("max"), Some(&Some("65535".to_string())));
+    }
+
+    #[test]
+    fn parse_min_length_max_length() {
+        let source = "# @min-length=1 @max-length=255\nNAME=\"foo\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        let entries = lines_to_entries(&lines);
+        assert!(entries[0].has_directive("min-length"));
+        assert!(entries[0].has_directive("max-length"));
+    }
+
+    #[test]
+    fn parse_pattern_directive() {
+        let source = "# @pattern=\"^https?://\"\nURL=\"https://example.com\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        assert!(matches!(&lines[0], Line::Directive(name, Some(val)) if name == "pattern" && val == "^https?://"));
+    }
+
+    #[test]
+    fn parse_deprecated_no_message() {
+        let source = "# @deprecated\nOLD_KEY=\"value\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        assert!(matches!(&lines[0], Line::Directive(name, None) if name == "deprecated"));
+    }
+
+    #[test]
+    fn parse_deprecated_with_message() {
+        let source = "# @deprecated=\"Use NEW_KEY instead\"\nOLD_KEY=\"value\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        assert!(matches!(&lines[0], Line::Directive(name, Some(val)) if name == "deprecated" && val == "Use NEW_KEY instead"));
+    }
+
+    #[test]
+    fn parse_optional_directive() {
+        let source = "# @optional\nSENTRY_DSN=\"https://sentry.io\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        assert!(matches!(&lines[0], Line::Directive(name, None) if name == "optional"));
+    }
+
+    #[test]
+    fn parse_not_empty_directive() {
+        let source = "# @not-empty\nNAME=\"foo\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        assert!(matches!(&lines[0], Line::Directive(name, None) if name == "not-empty"));
+    }
+
+    // --- New directive validation tests ---
+
+    #[test]
+    fn validate_format_email_valid() {
+        let source = "# @format=email\nADMIN=\"admin@example.com\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        let entries = lines_to_entries(&lines);
+        let errors: Vec<_> = validate_entries(&entries).into_iter().filter(|e| e.severity == Severity::Error).collect();
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn validate_format_email_invalid() {
+        let source = "# @format=email\nADMIN=\"not-an-email\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        let entries = lines_to_entries(&lines);
+        let errors: Vec<_> = validate_entries(&entries).into_iter().filter(|e| e.severity == Severity::Error).collect();
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("email"));
+    }
+
+    #[test]
+    fn validate_format_url_valid() {
+        let source = "# @format=url\nAPI=\"https://api.example.com\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        let entries = lines_to_entries(&lines);
+        let errors: Vec<_> = validate_entries(&entries).into_iter().filter(|e| e.severity == Severity::Error).collect();
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn validate_format_url_invalid() {
+        let source = "# @format=url\nAPI=\"ftp://nope\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        let entries = lines_to_entries(&lines);
+        let errors: Vec<_> = validate_entries(&entries).into_iter().filter(|e| e.severity == Severity::Error).collect();
+        assert_eq!(errors.len(), 1);
+    }
+
+    #[test]
+    fn validate_format_uuid_valid() {
+        let source = "# @format=uuid\nID=\"550e8400-e29b-41d4-a716-446655440000\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        let entries = lines_to_entries(&lines);
+        let errors: Vec<_> = validate_entries(&entries).into_iter().filter(|e| e.severity == Severity::Error).collect();
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn validate_format_uuid_invalid() {
+        let source = "# @format=uuid\nID=\"not-a-uuid\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        let entries = lines_to_entries(&lines);
+        let errors: Vec<_> = validate_entries(&entries).into_iter().filter(|e| e.severity == Severity::Error).collect();
+        assert_eq!(errors.len(), 1);
+    }
+
+    #[test]
+    fn validate_pattern_match() {
+        let source = "# @pattern=\"^https?://\"\nURL=\"https://example.com\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        let entries = lines_to_entries(&lines);
+        let errors: Vec<_> = validate_entries(&entries).into_iter().filter(|e| e.severity == Severity::Error).collect();
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn validate_pattern_no_match() {
+        let source = "# @pattern=\"^https?://\"\nURL=\"ftp://example.com\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        let entries = lines_to_entries(&lines);
+        let errors: Vec<_> = validate_entries(&entries).into_iter().filter(|e| e.severity == Severity::Error).collect();
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("does not match pattern"));
+    }
+
+    #[test]
+    fn validate_min_max_valid() {
+        let source = "# @type=number @min=0 @max=65535\nPORT=3000\n";
+        let lines = parse_dotenv(source).unwrap();
+        let entries = lines_to_entries(&lines);
+        let errors: Vec<_> = validate_entries(&entries).into_iter().filter(|e| e.severity == Severity::Error).collect();
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn validate_min_violation() {
+        let source = "# @type=number @min=1\nPORT=-5\n";
+        let lines = parse_dotenv(source).unwrap();
+        let entries = lines_to_entries(&lines);
+        let errors: Vec<_> = validate_entries(&entries).into_iter().filter(|e| e.severity == Severity::Error).collect();
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("less than minimum"));
+    }
+
+    #[test]
+    fn validate_max_violation() {
+        let source = "# @type=number @max=100\nPORT=99999\n";
+        let lines = parse_dotenv(source).unwrap();
+        let entries = lines_to_entries(&lines);
+        let errors: Vec<_> = validate_entries(&entries).into_iter().filter(|e| e.severity == Severity::Error).collect();
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("greater than maximum"));
+    }
+
+    #[test]
+    fn validate_min_length_violation() {
+        let source = "# @min-length=5\nNAME=\"ab\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        let entries = lines_to_entries(&lines);
+        let errors: Vec<_> = validate_entries(&entries).into_iter().filter(|e| e.severity == Severity::Error).collect();
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("less than minimum length"));
+    }
+
+    #[test]
+    fn validate_max_length_violation() {
+        let source = "# @max-length=3\nNAME=\"toolong\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        let entries = lines_to_entries(&lines);
+        let errors: Vec<_> = validate_entries(&entries).into_iter().filter(|e| e.severity == Severity::Error).collect();
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("exceeds maximum length"));
+    }
+
+    #[test]
+    fn validate_not_empty_valid() {
+        let source = "# @not-empty\nNAME=\"foo\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        let entries = lines_to_entries(&lines);
+        let errors: Vec<_> = validate_entries(&entries).into_iter().filter(|e| e.severity == Severity::Error).collect();
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn validate_not_empty_violation() {
+        let source = "# @not-empty\nNAME=\"\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        let entries = lines_to_entries(&lines);
+        let errors: Vec<_> = validate_entries(&entries).into_iter().filter(|e| e.severity == Severity::Error).collect();
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("must not be empty"));
+    }
+
+    #[test]
+    fn validate_deprecated_warning() {
+        let source = "# @deprecated=\"Use NEW_KEY instead\"\nOLD_KEY=\"value\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        let entries = lines_to_entries(&lines);
+        let errors = validate_entries(&entries);
+        let warnings: Vec<_> = errors.iter().filter(|e| e.severity == Severity::Warning).collect();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("deprecated"));
+        assert!(warnings[0].message.contains("Use NEW_KEY instead"));
+    }
+
+    #[test]
+    fn validate_deprecated_no_message_warning() {
+        let source = "# @deprecated\nOLD_KEY=\"value\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        let entries = lines_to_entries(&lines);
+        let errors = validate_entries(&entries);
+        let warnings: Vec<_> = errors.iter().filter(|e| e.severity == Severity::Warning).collect();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message == "deprecated");
+    }
+
+    // --- Roundtrip tests for new directives ---
+
+    #[test]
+    fn roundtrip_pattern() {
+        let source = "# @pattern=\"^https?://\"\nURL=\"https://example.com\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        let output = lines_to_string(&lines);
+        assert_eq!(output, source);
+    }
+
+    #[test]
+    fn roundtrip_deprecated_with_message() {
+        let source = "# @deprecated=\"Use NEW_KEY\"\nOLD=\"val\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        let output = lines_to_string(&lines);
+        assert_eq!(output, source);
+    }
+
+    #[test]
+    fn roundtrip_deprecated_no_message() {
+        let source = "# @deprecated\nOLD=\"val\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        let output = lines_to_string(&lines);
+        assert_eq!(output, source);
+    }
+
+    #[test]
+    fn roundtrip_format() {
+        let source = "# @format=email\nADMIN=\"test@example.com\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        let output = lines_to_string(&lines);
+        assert_eq!(output, source);
+    }
+
+    #[test]
+    fn roundtrip_numeric_directives() {
+        let source = "# @type=number @min=0 @max=65535\nPORT=3000\n";
+        let lines = parse_dotenv(source).unwrap();
+        let output = lines_to_string(&lines);
+        assert_eq!(output, source);
+    }
+
+    #[test]
+    fn roundtrip_optional_not_empty() {
+        let source = "# @optional @not-empty\nSENTRY=\"https://sentry.io\"\n";
+        let lines = parse_dotenv(source).unwrap();
+        let output = lines_to_string(&lines);
+        assert_eq!(output, source);
+    }
+
+    // --- Schema parse tests ---
+
+    #[test]
+    fn parse_schema_simple() {
+        let source = "# @type=string\nDATABASE_URL\n\n# @type=number\nPORT\n";
+        let schema = parse_schema(source).unwrap();
+        assert_eq!(schema.entries.len(), 2);
+        assert_eq!(schema.entries[0].key, "DATABASE_URL");
+        assert_eq!(schema.entries[1].key, "PORT");
+        assert!(schema.entries[0].has_directive("type"));
+    }
+
+    #[test]
+    fn parse_schema_with_all_directives() {
+        let source = "# @default-encrypt\n\n# @type=string @push=aws-ssm @not-empty\nDATABASE_URL\n\n# @type=number @min=0 @max=65535\nPORT\n\n# @type=enum(\"development\", \"production\")\nNODE_ENV\n\n# @optional @format=url\nSENTRY_DSN\n";
+        let schema = parse_schema(source).unwrap();
+        assert_eq!(schema.entries.len(), 4);
+        assert_eq!(schema.get("PORT").unwrap().key, "PORT");
+        assert!(schema.get("SENTRY_DSN").unwrap().has_directive("optional"));
+    }
+
+    #[test]
+    fn schema_roundtrip() {
+        let source = "# @type=string @push=aws-ssm\nDATABASE_URL\n\n# @type=number @min=0 @max=65535\nPORT\n\n# @type=enum(\"development\", \"production\")\nNODE_ENV\n";
+        let schema = parse_schema(source).unwrap();
+        let output = schema_to_string(&schema);
+        let reparsed = parse_schema(&output).unwrap();
+        assert_eq!(reparsed.entries.len(), schema.entries.len());
+        for (a, b) in schema.entries.iter().zip(reparsed.entries.iter()) {
+            assert_eq!(a.key, b.key);
+            assert_eq!(a.directives, b.directives);
+        }
+    }
+
+    #[test]
+    fn schema_get_nonexistent() {
+        let source = "# @type=string\nFOO\n";
+        let schema = parse_schema(source).unwrap();
+        assert!(schema.get("BAR").is_none());
+    }
+
+    // --- Schema validation tests ---
+
+    #[test]
+    fn schema_validation_missing_required_key() {
+        let schema_src = "# @type=string\nDATABASE_URL\n\n# @type=number\nPORT\n";
+        let sec_src = "PORT=3000\n";
+        let schema = parse_schema(schema_src).unwrap();
+        let entries = lines_to_entries(&parse_dotenv(sec_src).unwrap());
+        let errors = validate_entries_against_schema(&entries, &schema);
+        assert!(errors.iter().any(|e| e.key == "DATABASE_URL" && e.severity == Severity::Error));
+    }
+
+    #[test]
+    fn schema_validation_optional_key_not_error() {
+        let schema_src = "# @optional @type=string\nSENTRY_DSN\n\n# @type=number\nPORT\n";
+        let sec_src = "PORT=3000\n";
+        let schema = parse_schema(schema_src).unwrap();
+        let entries = lines_to_entries(&parse_dotenv(sec_src).unwrap());
+        let errors = validate_entries_against_schema(&entries, &schema);
+        assert!(!errors.iter().any(|e| e.key == "SENTRY_DSN" && e.severity == Severity::Error));
+    }
+
+    #[test]
+    fn schema_validation_extra_key_warning() {
+        let schema_src = "# @type=number\nPORT\n";
+        let sec_src = "PORT=3000\nEXTRA=foo\n";
+        let schema = parse_schema(schema_src).unwrap();
+        let entries = lines_to_entries(&parse_dotenv(sec_src).unwrap());
+        let errors = validate_entries_against_schema(&entries, &schema);
+        assert!(errors.iter().any(|e| e.key == "EXTRA" && e.severity == Severity::Warning));
+    }
+
+    #[test]
+    fn schema_validation_type_mismatch() {
+        let schema_src = "# @type=number\nPORT\n";
+        let sec_src = "PORT=hello\n";
+        let schema = parse_schema(schema_src).unwrap();
+        let entries = lines_to_entries(&parse_dotenv(sec_src).unwrap());
+        let errors = validate_entries_against_schema(&entries, &schema);
+        assert!(errors.iter().any(|e| e.key == "PORT" && e.message.contains("expected number")));
+    }
+
+    #[test]
+    fn schema_validation_inline_directive_warning() {
+        let schema_src = "# @type=string\nFOO\n";
+        let sec_src = "# @type=number\nFOO=\"bar\"\n";
+        let schema = parse_schema(schema_src).unwrap();
+        let entries = lines_to_entries(&parse_dotenv(sec_src).unwrap());
+        let errors = validate_entries_against_schema(&entries, &schema);
+        assert!(errors.iter().any(|e| e.key == "FOO" && e.message.contains("inline @type directive ignored")));
     }
 
     // --- File-level default-encrypt tests ---
@@ -993,5 +2080,223 @@ mod tests {
         let config = extract_file_config(&lines);
         assert_eq!(config.provider.as_deref(), Some("aws"));
         assert_eq!(config.default_encrypt, Some(true));
+    }
+
+    // --- JSON Schema export tests ---
+
+    #[test]
+    fn json_schema_basic_shape() {
+        let schema = parse_schema("# @type=string\nFOO\n\n# @type=number\nBAR\n").unwrap();
+        let js = schema_to_json_schema(&schema);
+        assert_eq!(js["$schema"], "http://json-schema.org/draft-07/schema#");
+        assert_eq!(js["type"], "object");
+        assert!(js["required"].as_array().unwrap().contains(&serde_json::Value::String("FOO".into())));
+        assert_eq!(js["properties"]["FOO"]["type"], "string");
+        assert_eq!(js["properties"]["BAR"]["type"], "number");
+    }
+
+    #[test]
+    fn json_schema_optional_not_required() {
+        let schema = parse_schema("# @optional @type=string\nFOO\n\n# @type=string\nBAR\n").unwrap();
+        let js = schema_to_json_schema(&schema);
+        let required = js["required"].as_array().unwrap();
+        assert!(!required.contains(&serde_json::Value::String("FOO".into())));
+        assert!(required.contains(&serde_json::Value::String("BAR".into())));
+    }
+
+    #[test]
+    fn json_schema_enum() {
+        let schema = parse_schema("# @type=enum(\"a\", \"b\", \"c\")\nFOO\n").unwrap();
+        let js = schema_to_json_schema(&schema);
+        assert_eq!(js["properties"]["FOO"]["type"], "string");
+        let variants = js["properties"]["FOO"]["enum"].as_array().unwrap();
+        assert_eq!(variants.len(), 3);
+    }
+
+    #[test]
+    fn json_schema_boolean() {
+        let schema = parse_schema("# @type=boolean\nDEBUG\n").unwrap();
+        let js = schema_to_json_schema(&schema);
+        assert_eq!(js["properties"]["DEBUG"]["type"], "boolean");
+    }
+
+    #[test]
+    fn json_schema_format_url() {
+        let schema = parse_schema("# @format=url\nAPI\n").unwrap();
+        let js = schema_to_json_schema(&schema);
+        assert_eq!(js["properties"]["API"]["format"], "uri");
+    }
+
+    #[test]
+    fn json_schema_format_email() {
+        let schema = parse_schema("# @format=email\nADMIN\n").unwrap();
+        let js = schema_to_json_schema(&schema);
+        assert_eq!(js["properties"]["ADMIN"]["format"], "email");
+    }
+
+    #[test]
+    fn json_schema_constraints() {
+        let schema = parse_schema("# @type=number @min=0 @max=65535\nPORT\n").unwrap();
+        let js = schema_to_json_schema(&schema);
+        assert_eq!(js["properties"]["PORT"]["minimum"], 0.0);
+        assert_eq!(js["properties"]["PORT"]["maximum"], 65535.0);
+    }
+
+    #[test]
+    fn json_schema_length_constraints() {
+        let schema = parse_schema("# @min-length=1 @max-length=255\nNAME\n").unwrap();
+        let js = schema_to_json_schema(&schema);
+        assert_eq!(js["properties"]["NAME"]["minLength"], 1);
+        assert_eq!(js["properties"]["NAME"]["maxLength"], 255);
+    }
+
+    #[test]
+    fn json_schema_not_empty() {
+        let schema = parse_schema("# @not-empty\nFOO\n").unwrap();
+        let js = schema_to_json_schema(&schema);
+        assert_eq!(js["properties"]["FOO"]["minLength"], 1);
+    }
+
+    #[test]
+    fn json_schema_pattern() {
+        let schema = parse_schema("# @pattern=\"^https?://\"\nURL\n").unwrap();
+        let js = schema_to_json_schema(&schema);
+        assert_eq!(js["properties"]["URL"]["pattern"], "^https?://");
+    }
+
+    #[test]
+    fn json_schema_deprecated() {
+        let schema = parse_schema("# @deprecated=\"Use NEW_KEY\"\nOLD\n").unwrap();
+        let js = schema_to_json_schema(&schema);
+        assert_eq!(js["properties"]["OLD"]["deprecated"], true);
+        assert!(js["properties"]["OLD"]["description"].as_str().unwrap().contains("Deprecated"));
+    }
+
+    #[test]
+    fn json_schema_description() {
+        let schema = parse_schema("# @description=Database connection string\nDB_URL\n").unwrap();
+        let js = schema_to_json_schema(&schema);
+        assert_eq!(js["properties"]["DB_URL"]["description"], "Database connection string");
+    }
+
+    // --- TypeScript codegen tests ---
+
+    #[test]
+    fn typescript_interface_types() {
+        let schema = parse_schema("# @type=string\nFOO\n\n# @type=number\nBAR\n\n# @type=boolean\nBAZ\n").unwrap();
+        let ts = schema_to_typescript(&schema);
+        assert!(ts.contains("FOO: string"));
+        assert!(ts.contains("BAR: number"));
+        assert!(ts.contains("BAZ: boolean"));
+    }
+
+    #[test]
+    fn typescript_enum_type() {
+        let schema = parse_schema("# @type=enum(\"dev\", \"prod\")\nENV\n").unwrap();
+        let ts = schema_to_typescript(&schema);
+        assert!(ts.contains("ENV: \"dev\" | \"prod\""));
+    }
+
+    #[test]
+    fn typescript_optional_field() {
+        let schema = parse_schema("# @optional @type=string\nFOO\n").unwrap();
+        let ts = schema_to_typescript(&schema);
+        assert!(ts.contains("FOO?: string"));
+    }
+
+    #[test]
+    fn typescript_required_check() {
+        let schema = parse_schema("# @type=string\nFOO\n").unwrap();
+        let ts = schema_to_typescript(&schema);
+        assert!(ts.contains("FOO is required"));
+    }
+
+    #[test]
+    fn typescript_optional_no_required_check() {
+        let schema = parse_schema("# @optional\nFOO\n").unwrap();
+        let ts = schema_to_typescript(&schema);
+        assert!(!ts.contains("FOO is required"));
+    }
+
+    #[test]
+    fn typescript_number_cast() {
+        let schema = parse_schema("# @type=number\nPORT\n").unwrap();
+        let ts = schema_to_typescript(&schema);
+        assert!(ts.contains("Number(source.PORT!)"));
+    }
+
+    #[test]
+    fn typescript_boolean_cast() {
+        let schema = parse_schema("# @type=boolean\nDEBUG\n").unwrap();
+        let ts = schema_to_typescript(&schema);
+        assert!(ts.contains("=== \"true\" || source.DEBUG! === \"1\""));
+    }
+
+    #[test]
+    fn typescript_enum_cast() {
+        let schema = parse_schema("# @type=enum(\"dev\", \"prod\")\nENV\n").unwrap();
+        let ts = schema_to_typescript(&schema);
+        assert!(ts.contains("as Env[\"ENV\"]"));
+    }
+
+    #[test]
+    fn typescript_min_max_validation() {
+        let schema = parse_schema("# @type=number @min=0 @max=65535\nPORT\n").unwrap();
+        let ts = schema_to_typescript(&schema);
+        assert!(ts.contains("must be a number"));
+        assert!(ts.contains("must be >= 0"));
+        assert!(ts.contains("must be <= 65535"));
+    }
+
+    #[test]
+    fn typescript_not_empty_validation() {
+        let schema = parse_schema("# @not-empty\nFOO\n").unwrap();
+        let ts = schema_to_typescript(&schema);
+        assert!(ts.contains("must not be empty"));
+    }
+
+    #[test]
+    fn typescript_enum_validation() {
+        let schema = parse_schema("# @type=enum(\"a\", \"b\")\nFOO\n").unwrap();
+        let ts = schema_to_typescript(&schema);
+        assert!(ts.contains("[\"a\", \"b\"].includes"));
+    }
+
+    #[test]
+    fn typescript_format_url_validation() {
+        let schema = parse_schema("# @format=url\nAPI\n").unwrap();
+        let ts = schema_to_typescript(&schema);
+        assert!(ts.contains("must be a url"));
+    }
+
+    #[test]
+    fn typescript_pattern_validation() {
+        let schema = parse_schema("# @pattern=\"^https?://\"\nURL\n").unwrap();
+        let ts = schema_to_typescript(&schema);
+        assert!(ts.contains("new RegExp"));
+        assert!(ts.contains("must match pattern"));
+    }
+
+    #[test]
+    fn typescript_has_header() {
+        let schema = parse_schema("# @type=string\nFOO\n").unwrap();
+        let ts = schema_to_typescript(&schema);
+        assert!(ts.starts_with("// Generated by dotsec"));
+    }
+
+    #[test]
+    fn typescript_has_parseenv_function() {
+        let schema = parse_schema("# @type=string\nFOO\n").unwrap();
+        let ts = schema_to_typescript(&schema);
+        assert!(ts.contains("export function parseEnv("));
+        assert!(ts.contains("process.env"));
+        assert!(ts.contains("): Env {"));
+    }
+
+    #[test]
+    fn typescript_error_throw() {
+        let schema = parse_schema("# @type=string\nFOO\n").unwrap();
+        let ts = schema_to_typescript(&schema);
+        assert!(ts.contains("throw new Error(`Environment validation failed"));
     }
 }

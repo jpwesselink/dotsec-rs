@@ -12,4 +12,10 @@ pub fn command() -> Command {
                 .env("SEC_FILE")
                 .default_value(".sec"),
         )
+        .arg(
+            arg!(--"schema" <FILE> "Path to dotsec.schema file")
+                .global(true)
+                .required(false)
+                .env("DOTSEC_SCHEMA"),
+        )
 }
