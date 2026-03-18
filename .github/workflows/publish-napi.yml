@@ -217,7 +217,7 @@ jobs:
             const entries = m.parse('FOO=\"bar\"\n');
             if (entries[0].key !== 'FOO') throw new Error('parse failed');
             if (entries[0].value !== 'bar') throw new Error('wrong value');
-            const errors = m.validate('# @bogus\nX=1\n');
+            const errors = m.validate('# @type=number\nPORT=hello\n');
             if (errors.length === 0) throw new Error('validate should have found errors');
             console.log('verification passed');
           "
