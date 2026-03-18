@@ -6,10 +6,6 @@
   },
   "prs": [
     {
-      "label": "#9 fix/format-preserves-comments",
-      "path": "/pr-9/"
-    },
-    {
       "label": "#10 fix/empty-values",
       "path": "/pr-10/"
     }
