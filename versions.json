@@ -6,12 +6,12 @@
   },
   "prs": [
     {
-      "label": "#8 feat/init-kms-validation",
-      "path": "/pr-8/"
-    },
-    {
       "label": "#9 fix/format-preserves-comments",
       "path": "/pr-9/"
+    },
+    {
+      "label": "#8 feat/init-kms-validation",
+      "path": "/pr-8/"
     }
   ]
 }
