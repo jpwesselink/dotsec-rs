@@ -181,11 +181,24 @@ pub async fn match_args(
         helpers::resolve_encrypt_default(&source_config)?
     };
 
+    // --- Schema awareness ---
+    let schema_path = dotenv::schema::discover_schema(
+        sec_file,
+        default_options.schema_path.as_deref(),
+    );
+    let mut schema = if let Some(ref path) = schema_path {
+        let content = std::fs::read_to_string(path)?;
+        Some(dotenv::parse_schema(&content)?)
+    } else {
+        None
+    };
+
     // --- Per-variable configuration ---
     let num_vars = import_entries.len();
     let import_keys: std::collections::HashSet<&str> =
         import_entries.iter().map(|e| e.key.as_str()).collect();
     let mut var_directives: Vec<Vec<dotenv::Line>> = Vec::new();
+    let mut new_schema_entries: Vec<dotenv::SchemaEntry> = Vec::new();
 
     if auto_yes {
         println!(
@@ -198,8 +211,23 @@ pub async fn match_args(
             if !import_keys.contains(entry.key.as_str()) {
                 continue;
             }
-            let directives = auto_directives(&entry.key, &entry.value, encrypt_all, &entry.directives);
-            var_directives.push(directives);
+            let key_in_schema = schema.as_ref().is_some_and(|s| s.get(&entry.key).is_some());
+            if key_in_schema {
+                // Key already in schema — no directives needed inline
+                var_directives.push(vec![]);
+            } else {
+                let directives = auto_directives(&entry.key, &entry.value, encrypt_all, &entry.directives);
+                if schema.is_some() {
+                    // Schema exists, new key — directives go to schema
+                    let schema_dirs: Vec<(String, Option<String>)> = directives.iter().filter_map(|d| {
+                        if let dotenv::Line::Directive(name, value) = d { Some((name.clone(), value.clone())) } else { None }
+                    }).collect();
+                    new_schema_entries.push(dotenv::SchemaEntry { directives: schema_dirs, key: entry.key.clone() });
+                    var_directives.push(vec![]); // No inline directives
+                } else {
+                    var_directives.push(directives);
+                }
+            }
         }
     } else {
         println!(
@@ -214,16 +242,47 @@ pub async fn match_args(
             let i = var_idx;
             var_idx += 1;
 
-            println!(
-                "\n{} {} = \"{}\"",
-                format!("[{}/{}]", i + 1, num_vars).dimmed(),
-                entry.key.bold(),
-                helpers::truncate_value(&entry.value, 40).dimmed(),
-            );
+            let key_in_schema = schema.as_ref().is_some_and(|s| s.get(&entry.key).is_some());
+            if key_in_schema {
+                // Key already in schema — skip directive prompts
+                println!(
+                    "\n{} {} = \"{}\" {}",
+                    format!("[{}/{}]", i + 1, num_vars).dimmed(),
+                    entry.key.bold(),
+                    helpers::truncate_value(&entry.value, 40).dimmed(),
+                    "(schema)".dimmed(),
+                );
+                var_directives.push(vec![]);
+            } else {
+                println!(
+                    "\n{} {} = \"{}\"",
+                    format!("[{}/{}]", i + 1, num_vars).dimmed(),
+                    entry.key.bold(),
+                    helpers::truncate_value(&entry.value, 40).dimmed(),
+                );
 
-            let source_dirs = if entry.directives.is_empty() { None } else { Some(entry.directives.as_slice()) };
-            let directives = helpers::prompt_variable_directives(&entry.key, &entry.value, encrypt_all, source_dirs)?;
-            var_directives.push(directives);
+                let source_dirs = if entry.directives.is_empty() { None } else { Some(entry.directives.as_slice()) };
+                let directives = helpers::prompt_variable_directives(&entry.key, &entry.value, encrypt_all, source_dirs)?;
+                if schema.is_some() {
+                    // Schema exists, new key — directives go to schema
+                    let schema_dirs: Vec<(String, Option<String>)> = directives.iter().filter_map(|d| {
+                        if let dotenv::Line::Directive(name, value) = d { Some((name.clone(), value.clone())) } else { None }
+                    }).collect();
+                    new_schema_entries.push(dotenv::SchemaEntry { directives: schema_dirs, key: entry.key.clone() });
+                    var_directives.push(vec![]); // No inline directives
+                } else {
+                    var_directives.push(directives);
+                }
+            }
+        }
+    }
+
+    // Write new entries to schema if needed
+    if !new_schema_entries.is_empty() {
+        if let Some(ref mut s) = schema {
+            s.entries.extend(new_schema_entries);
+            let schema_output = dotenv::schema_to_string(s);
+            std::fs::write(schema_path.as_ref().unwrap(), &schema_output)?;
         }
     }
 

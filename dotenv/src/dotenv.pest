@@ -4,14 +4,105 @@ NEW_LINE     =  { "\n" | "\r\n" }
 COMMENT      = @{ ("//" ~ comment_char*) | ("#" ~ !(" "* ~ "@" ~ (ASCII_ALPHA | "_" | "-")) ~ comment_char*) }
 comment_char =  { !NEW_LINE ~ ANY }
 
-// Directives: one or more @name or @name=value on a single # line
+// === Directives ===
+// One or more typed directives on a single # line
 // e.g. # @encrypt @type=string @push=aws-ssm
 directive          = ${ "#" ~ " "* ~ single_directive ~ (" "+ ~ single_directive)* }
-single_directive   = ${ "@" ~ directive_name ~ ("=" ~ directive_value)? }
-directive_name     = @{ (ASCII_ALPHA | "_" | "-")+ }
-// Value: everything until next " @" (start of another directive) or end of line
-directive_value    = @{ (!(NEW_LINE | " @") ~ ANY)+ }
+single_directive   = ${ flag_directive | push_directive | type_directive | format_directive
+                      | numeric_directive | pattern_directive
+                      | deprecated_directive | text_directive }
 
+// --- Flag directives (no value) ---
+// @encrypt, @plaintext, @default-encrypt, @default-plaintext, @optional, @not-empty
+flag_directive     = ${ "@" ~ flag_name }
+flag_name          = @{
+    ( "default-encrypt"
+    | "default-plaintext"
+    | "encrypt"
+    | "not-empty"
+    | "optional"
+    | "plaintext"
+    ) ~ !(ASCII_ALPHA | "_" | "-")
+}
+
+// --- @push directive ---
+// @push=aws-ssm, aws-secrets-manager(path="/foo")
+push_directive     = ${ "@push=" ~ push_target ~ ("," ~ " "* ~ push_target)* }
+push_target        = ${ push_target_name ~ push_target_params? }
+push_target_name   = @{
+    ( "aws-secrets-manager"
+    | "aws-ssm"
+    ) ~ !(ASCII_ALPHA | "_" | "-")
+}
+push_target_params = ${ "(" ~ push_param ~ ("," ~ " "* ~ push_param)* ~ ")" }
+push_param         = ${ push_param_key ~ "=" ~ "\"" ~ push_param_value ~ "\"" }
+push_param_key     = @{ (ASCII_ALPHA | "_" | "-")+ }
+push_param_value   = @{ (!"\"" ~ ANY)* }
+
+// --- @type directive ---
+// @type=string, @type=number, @type=boolean, @type=enum("a", "b")
+type_directive     = ${ "@type=" ~ type_value }
+type_value         = ${ type_enum | type_simple }
+type_simple        = @{
+    ( "string"
+    | "number"
+    | "boolean"
+    | "bool"
+    ) ~ !(ASCII_ALPHA | "_" | "-")
+}
+type_enum          = ${ "enum(" ~ type_enum_item ~ ("," ~ " "* ~ type_enum_item)* ~ ")" }
+type_enum_item     = ${ "\"" ~ type_enum_value ~ "\"" }
+type_enum_value    = @{ (!"\"" ~ ANY)* }
+
+// --- @format directive ---
+// @format=email, @format=url, @format=uuid, etc.
+format_directive   = ${ "@format=" ~ format_value }
+format_value       = @{
+    ( "email"
+    | "ipv4"
+    | "ipv6"
+    | "semver"
+    | "url"
+    | "uuid"
+    | "date"
+    ) ~ !(ASCII_ALPHA | "_" | "-")
+}
+
+// --- Numeric directives ---
+// @min=0, @max=65535, @min-length=1, @max-length=255
+numeric_directive      = ${ "@" ~ numeric_directive_name ~ "=" ~ numeric_directive_value }
+numeric_directive_name = @{
+    ( "max-length"
+    | "max"
+    | "min-length"
+    | "min"
+    ) ~ !(ASCII_ALPHA | "_" | "-")
+}
+numeric_directive_value = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
+
+// --- @pattern directive ---
+// @pattern="^https?://"
+pattern_directive = ${ "@pattern=" ~ "\"" ~ pattern_value ~ "\"" }
+pattern_value     = @{ (!"\"" ~ ANY)* }
+
+// --- @deprecated directive ---
+// @deprecated or @deprecated="Use NEW_KEY instead"
+deprecated_directive = ${ "@deprecated" ~ !(ASCII_ALPHA | "_" | "-") ~ ("=" ~ "\"" ~ deprecated_message ~ "\"")? }
+deprecated_message   = @{ (!"\"" ~ ANY)* }
+
+// --- Text-value directives ---
+// @provider=aws, @key-id=alias/dotsec, @region=us-east-1, @description=Some text
+text_directive      = ${ "@" ~ text_directive_name ~ "=" ~ text_directive_value }
+text_directive_name = @{
+    ( "description"
+    | "provider"
+    | "key-id"
+    | "region"
+    ) ~ !(ASCII_ALPHA | "_" | "-")
+}
+text_directive_value = @{ (!(NEW_LINE | " @") ~ ANY)+ }
+
+// === KV pairs ===
 export     = _{ "export" }
 key        = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_" | "-" | ".")* }
 value      = @{ string }
@@ -38,3 +129,9 @@ var_char   =  { !(NEW_LINE) ~ ANY }
 kv  =  { export? ~ key ~ "=" ~ value }
 line = _{ directive | kv | COMMENT }
 env  = _{ SOI ~ NEW_LINE* ~ (line ~ NEW_LINE+)* ~ line? ~ EOI }
+
+// === Schema entry point ===
+// Schema files have bare keys (no = value) with directives
+schema_key  = { key }
+schema_line = _{ directive | schema_key | COMMENT }
+schema      = _{ SOI ~ NEW_LINE* ~ (schema_line ~ NEW_LINE+)* ~ schema_line? ~ EOI }

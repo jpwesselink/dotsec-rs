@@ -29,5 +29,5 @@ features:
     details: Available as a CLI via npm and cargo. Native Node.js bindings (@dotsec/core) for parsing and validating .env files programmatically.
   - icon: ✅
     title: Validation built in
-    details: Directives like @encrypt, @required, and @format let you enforce rules on your env vars. Catch misconfigurations before they hit production.
+    details: Directives like @type, @format, @pattern, @min/@max let you enforce rules on your env vars. Shared schema files keep constraints consistent across environments.
 ---

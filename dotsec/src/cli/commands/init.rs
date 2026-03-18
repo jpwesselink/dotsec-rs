@@ -6,7 +6,7 @@ use crate::default_options::DefaultOptions;
 
 pub fn command() -> Command {
     Command::new("init")
-        .about("Initialize an empty .sec file with encryption config")
+        .about("Initialize a .sec file with encryption config")
 }
 
 pub async fn match_args(
@@ -27,6 +27,47 @@ pub async fn match_args(
     println!("\n{}", "Creating .sec file".bold());
 
     let config = helpers::prompt_config()?;
+
+    // Validate KMS key alias if provider is AWS
+    if config.provider.as_deref() == Some("aws") {
+        if let Some(ref key_id) = config.key_id {
+            if key_id.starts_with("alias/") {
+                let region = config.region.as_deref();
+                match aws::check_key_alias(key_id, region).await {
+                    Ok(Some(arn)) => {
+                        println!("{} Key found: {}", "✓".green(), arn.dimmed());
+                    }
+                    Ok(None) => {
+                        let region_label = region.unwrap_or("default");
+                        let create = inquire::Confirm::new(&format!(
+                            "{} not found in {}. Create it?",
+                            key_id, region_label
+                        ))
+                        .with_default(true)
+                        .prompt()?;
+
+                        if create {
+                            let arn = aws::create_key_with_alias(key_id, region).await?;
+                            println!("{} Created key: {}", "✓".green(), arn.dimmed());
+                        } else {
+                            println!(
+                                "{} Continuing without key — you'll need to create it before encrypting.",
+                                "!".yellow().bold()
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        println!(
+                            "{} Could not verify key: {}",
+                            "!".yellow().bold(),
+                            e.to_string().dimmed()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     let encrypt_all = helpers::resolve_encrypt_default(&config)?;
     let mut lines = helpers::build_config_directives(&config, encrypt_all);
     lines.push(dotenv::Line::Newline);

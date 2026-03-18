@@ -6,7 +6,7 @@ use crate::default_options::DefaultOptions;
 
 pub fn command() -> Command {
     Command::new("push")
-        .about("Push values to AWS SSM Parameter Store and/or Secrets Manager")
+        .about("Push variables with @push directives to AWS SSM and/or Secrets Manager")
         .arg(
             Arg::new("keys")
                 .help("Specific variable names to push (default: all with @push)")

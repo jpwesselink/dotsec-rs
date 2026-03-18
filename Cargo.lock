@@ -835,6 +835,7 @@ version = "5.0.0"
 dependencies = [
  "pest",
  "pest_derive",
+ "regex",
  "serde_json",
 ]
 
@@ -881,6 +882,7 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
+ "serde_json",
 ]
 
 [[package]]

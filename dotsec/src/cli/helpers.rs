@@ -63,6 +63,72 @@ pub fn build_config_directives(config: &dotenv::FileConfig, encrypt_all: bool) -
     directives
 }
 
+/// Strip per-key schema directives from parsed lines, keeping file-level and env directives.
+/// Returns the filtered lines (for rewriting .sec) and the extracted schema entries.
+pub fn extract_schema_from_lines(lines: &[dotenv::Line]) -> (Vec<dotenv::Line>, Vec<dotenv::SchemaEntry>) {
+    let mut output_lines: Vec<dotenv::Line> = Vec::new();
+    let mut schema_entries: Vec<dotenv::SchemaEntry> = Vec::new();
+    let mut pending_all: Vec<(dotenv::Line, String, Option<String>)> = Vec::new(); // (original line, name, value)
+
+    for line in lines {
+        match line {
+            dotenv::Line::Directive(name, value) => {
+                pending_all.push((line.clone(), name.clone(), value.clone()));
+            }
+            dotenv::Line::Kv(k, v, qt) => {
+                let mut schema_directives: Vec<(String, Option<String>)> = Vec::new();
+
+                for (orig_line, name, value) in &pending_all {
+                    if dotenv::SCHEMA_DIRECTIVES.contains(&name.as_str()) {
+                        schema_directives.push((name.clone(), value.clone()));
+                    } else {
+                        // env/file-level directive — keep in output
+                        output_lines.push(orig_line.clone());
+                    }
+                }
+
+                if !schema_directives.is_empty() {
+                    schema_entries.push(dotenv::SchemaEntry {
+                        directives: schema_directives,
+                        key: k.clone(),
+                    });
+                } else {
+                    schema_entries.push(dotenv::SchemaEntry {
+                        directives: vec![],
+                        key: k.clone(),
+                    });
+                }
+
+                output_lines.push(dotenv::Line::Kv(k.clone(), v.clone(), qt.clone()));
+                pending_all.clear();
+            }
+            dotenv::Line::Comment(_) => {
+                // Comments break the directive chain — flush pending as-is
+                for (orig_line, _, _) in &pending_all {
+                    output_lines.push(orig_line.clone());
+                }
+                pending_all.clear();
+                output_lines.push(line.clone());
+            }
+            _ => {
+                output_lines.push(line.clone());
+            }
+        }
+    }
+
+    // Any remaining pending directives (no KV followed)
+    for (orig_line, _, _) in &pending_all {
+        output_lines.push(orig_line.clone());
+    }
+
+    (output_lines, schema_entries)
+}
+
+/// Strip per-key schema directives from lines, keeping only file-level + env directives + KV pairs.
+pub fn strip_schema_directives(lines: &[dotenv::Line]) -> Vec<dotenv::Line> {
+    extract_schema_from_lines(lines).0
+}
+
 /// Compare two FileConfigs and return human-readable differences.
 pub fn config_diffs(source: &dotenv::FileConfig, existing: &dotenv::FileConfig) -> Vec<String> {
     let mut diffs = Vec::new();

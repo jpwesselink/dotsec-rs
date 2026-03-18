@@ -42,6 +42,67 @@ async fn create_kms_client(region: Option<&str>) -> aws_sdk_kms::Client {
     aws_sdk_kms::Client::new(&config)
 }
 
+/// Check if a KMS key alias exists. Returns the key ARN if found.
+pub async fn check_key_alias(
+    alias: &str,
+    region: Option<&str>,
+) -> Result<Option<String>, DataStoreError> {
+    let client = create_kms_client(region).await;
+    match client.describe_key().key_id(alias).send().await {
+        Ok(resp) => {
+            let arn = resp
+                .key_metadata()
+                .and_then(|m| m.arn())
+                .unwrap_or_default()
+                .to_string();
+            Ok(Some(arn))
+        }
+        Err(err) => {
+            let is_not_found = err
+                .as_service_error()
+                .is_some_and(|e| e.is_not_found_exception());
+            if is_not_found {
+                Ok(None)
+            } else {
+                Err(DataStoreError::KmsError(err.to_string()))
+            }
+        }
+    }
+}
+
+/// Create a new KMS key and associate an alias with it.
+/// Returns the key ARN.
+pub async fn create_key_with_alias(
+    alias: &str,
+    region: Option<&str>,
+) -> Result<String, DataStoreError> {
+    let client = create_kms_client(region).await;
+
+    let key_resp = client
+        .create_key()
+        .description("Created by dotsec")
+        .send()
+        .await
+        .map_err(|e| DataStoreError::KmsError(e.to_string()))?;
+
+    let metadata = key_resp
+        .key_metadata()
+        .ok_or_else(|| DataStoreError::KmsError("no key metadata in response".into()))?;
+
+    let key_id = metadata.key_id().to_string();
+    let key_arn = metadata.arn().unwrap_or(&key_id).to_string();
+
+    client
+        .create_alias()
+        .alias_name(alias)
+        .target_key_id(&key_id)
+        .send()
+        .await
+        .map_err(|e| DataStoreError::KmsError(e.to_string()))?;
+
+    Ok(key_arn)
+}
+
 /// Generate a new AES-256 data encryption key via KMS.
 /// Returns (plaintext_dek, wrapped_dek) where wrapped_dek is KMS-encrypted.
 pub async fn generate_data_key(
