@@ -8,6 +8,10 @@
     {
       "label": "#10 fix/empty-values",
       "path": "/pr-10/"
+    },
+    {
+      "label": "#11 fix/codebase-review-and-security-hardening",
+      "path": "/pr-11/"
     }
   ]
 }
