@@ -32,7 +32,20 @@ pub async fn match_args(
     let output = dotenv::lines_to_string(&lines);
 
     if let Some(out_file) = sub.get_one::<String>("output") {
-        std::fs::write(out_file, &output)?;
+        #[cfg(unix)]
+        {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true).create(true).truncate(true)
+                .mode(0o600)
+                .open(out_file)?
+                .write_all(output.as_bytes())?;
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::write(out_file, &output)?;
+        }
         eprintln!(
             "{} Exported {} to {}",
             "✓".green(),

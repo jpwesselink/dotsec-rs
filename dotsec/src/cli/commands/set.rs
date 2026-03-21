@@ -66,7 +66,7 @@ pub async fn match_args(
     let schema_path = dotenv::schema::discover_schema(
         sec_file,
         default_options.schema_path.as_deref(),
-    );
+    )?;
     let mut schema = if let Some(ref path) = schema_path {
         let content = std::fs::read_to_string(path)?;
         Some(dotenv::parse_schema(&content)?)
@@ -138,6 +138,25 @@ pub async fn match_args(
             }
         }
     };
+
+    // Validate value against schema constraints
+    if let Some(ref schema) = schema {
+        if let Some(schema_entry) = schema.get(&key) {
+            let errors = dotenv::validate_value_against_constraints(&key, &value, schema_entry);
+            let real_errors: Vec<_> = errors.iter()
+                .filter(|e| e.severity == dotenv::Severity::Error)
+                .collect();
+            if !real_errors.is_empty() {
+                for err in &real_errors {
+                    eprintln!("  {} {}", "!".red().bold(), err);
+                }
+                return Err("Value violates schema constraints".into());
+            }
+            for warn in errors.iter().filter(|e| e.severity == dotenv::Severity::Warning) {
+                eprintln!("  {} {}", "!".yellow().bold(), warn);
+            }
+        }
+    }
 
     // Build directives for this variable
     let mut new_directives: Vec<dotenv::Line> = Vec::new();

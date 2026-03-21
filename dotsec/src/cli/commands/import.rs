@@ -185,7 +185,7 @@ pub async fn match_args(
     let schema_path = dotenv::schema::discover_schema(
         sec_file,
         default_options.schema_path.as_deref(),
-    );
+    )?;
     let mut schema = if let Some(ref path) = schema_path {
         let content = std::fs::read_to_string(path)?;
         Some(dotenv::parse_schema(&content)?)
@@ -277,6 +277,31 @@ pub async fn match_args(
         }
     }
 
+    // Validate imported values against schema constraints
+    if let Some(ref schema) = schema {
+        let mut validation_errors = Vec::new();
+        for entry in &entries {
+            if !import_keys.contains(entry.key.as_str()) {
+                continue;
+            }
+            if let Some(schema_entry) = schema.get(&entry.key) {
+                validation_errors.extend(
+                    dotenv::validate_value_against_constraints(&entry.key, &entry.value, schema_entry)
+                );
+            }
+        }
+        let real_errors: Vec<_> = validation_errors.iter()
+            .filter(|e| e.severity == dotenv::Severity::Error)
+            .collect();
+        if !real_errors.is_empty() {
+            eprintln!("{} Schema validation errors:", "!".yellow().bold());
+            for err in &real_errors {
+                eprintln!("  {} {}", "!".red().bold(), err);
+            }
+            return Err(format!("{} values violate schema constraints", real_errors.len()).into());
+        }
+    }
+
     // Write new entries to schema if needed
     if !new_schema_entries.is_empty() {
         if let Some(ref mut s) = schema {
@@ -302,9 +327,8 @@ pub async fn match_args(
             match line {
                 // Strip source per-variable directives (we replace them with user-chosen ones)
                 // But keep config directives — they're handled via config_lines
-                dotenv::Line::Directive(name, _) => {
+                dotenv::Line::Directive(_, _) => {
                     // Skip all directives — config ones are rebuilt, per-var ones are replaced
-                    let _ = name;
                     continue;
                 }
 

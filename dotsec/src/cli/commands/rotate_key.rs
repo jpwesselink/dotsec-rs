@@ -1,7 +1,6 @@
 use base64::Engine as _;
 use clap::Command;
 use colored::Colorize;
-use zeroize::Zeroize;
 
 use crate::cli::helpers::with_progress;
 use crate::default_options::DefaultOptions;
@@ -37,8 +36,8 @@ pub async fn match_args(
     )
     .await?;
 
-    // Generate a new DEK
-    let (mut new_dek, new_wrapped_dek) = aws::generate_data_key(key_id, region).await?;
+    // Generate a new DEK (Zeroizing<Vec<u8>> — auto-zeroizes on drop)
+    let (new_dek, new_wrapped_dek) = aws::generate_data_key(key_id, region).await?;
     let new_wrapped_b64 =
         base64::engine::general_purpose::STANDARD.encode(&new_wrapped_dek);
 
@@ -63,8 +62,7 @@ pub async fn match_args(
         }
     }
 
-    // Zeroize DEK before writing to disk
-    new_dek.zeroize();
+    // new_dek auto-zeroizes when dropped
 
     // Append new __DOTSEC_KEY__
     let last_is_newline = matches!(sec_lines.last(), Some(dotenv::Line::Newline));

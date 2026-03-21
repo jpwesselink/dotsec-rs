@@ -15,3 +15,13 @@ publish = false
 name = "aws"
 version_group = "dotsec"
 publish = false
+
+[[package]]
+name = "dotsec-core"
+version_group = "dotsec"
+publish = false
+
+[[package]]
+name = "dotsec-napi"
+version_group = "dotsec"
+publish = false

@@ -24,12 +24,10 @@ pub async fn match_args(
 
         // Refuse if schema file already exists
         if std::path::Path::new(output).exists() {
-            eprintln!(
-                "{} {} already exists. Delete it first or use --output to specify a different path.",
-                "✗".red(),
+            return Err(format!(
+                "{} already exists. Delete it first or use --output to specify a different path.",
                 output
-            );
-            std::process::exit(1);
+            ).into());
         }
 
         // Parse the .sec file (decrypt if needed)

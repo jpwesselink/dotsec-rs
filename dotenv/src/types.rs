@@ -42,6 +42,15 @@ pub enum Severity {
     Warning,
 }
 
+impl fmt::Display for Severity {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Severity::Error => write!(f, "error"),
+            Severity::Warning => write!(f, "warning"),
+        }
+    }
+}
+
 /// Validation error for a specific key.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValidationError {
@@ -117,8 +126,11 @@ impl FormatType {
         match self {
             Self::Email => {
                 if let Some(at_pos) = value.find('@') {
-                    if value[at_pos + 1..].contains('.') && at_pos > 0 {
-                        return None;
+                    let domain = &value[at_pos + 1..];
+                    if let Some(dot_pos) = domain.rfind('.') {
+                        if at_pos > 0 && dot_pos > 0 && dot_pos < domain.len() - 1 {
+                            return None;
+                        }
                     }
                 }
                 Some(format!("expected email format, got \"{}\"", value))
@@ -155,11 +167,13 @@ impl FormatType {
                 }
             }
             Self::Ipv6 => {
-                // Basic validation: 1-8 groups of hex separated by colons
+                // Basic IPv6 format heuristic — validates colon-separated hex groups
+                // but does not enforce RFC 5952.
                 let parts: Vec<&str> = value.split(':').collect();
                 if parts.len() >= 2
                     && parts.len() <= 8
                     && parts.iter().all(|p| p.is_empty() || (p.len() <= 4 && p.chars().all(|c| c.is_ascii_hexdigit())))
+                    && parts.iter().any(|p| !p.is_empty()) // require at least one non-empty group
                 {
                     None
                 } else {
@@ -167,7 +181,9 @@ impl FormatType {
                 }
             }
             Self::Date => {
-                // ISO 8601: YYYY-MM-DD
+                // Basic ISO 8601 date format validation — checks YYYY-MM-DD structure
+                // but does not validate calendar correctness (e.g., Feb 31).
+                // Simple month-day limits are enforced: months 4,6,9,11 max 30; month 2 max 29.
                 let parts: Vec<&str> = value.split('-').collect();
                 if parts.len() == 3
                     && parts[0].len() == 4
@@ -178,8 +194,15 @@ impl FormatType {
                     let year: u32 = parts[0].parse().unwrap_or(0);
                     let month: u32 = parts[1].parse().unwrap_or(0);
                     let day: u32 = parts[2].parse().unwrap_or(0);
-                    if year > 0 && (1..=12).contains(&month) && (1..=31).contains(&day) {
-                        return None;
+                    if year > 0 && (1..=12).contains(&month) && day >= 1 {
+                        let max_day = match month {
+                            2 => 29,
+                            4 | 6 | 9 | 11 => 30,
+                            _ => 31,
+                        };
+                        if day <= max_day {
+                            return None;
+                        }
                     }
                 }
                 Some(format!("expected date format (YYYY-MM-DD), got \"{}\"", value))
@@ -198,13 +221,240 @@ impl FormatType {
     }
 }
 
-impl Entry {
-    pub fn has_directive(&self, name: &str) -> bool {
+/// Trait for types that provide directive access (e.g. `Entry`, `SchemaEntry`).
+/// This abstracts over the directive storage so that validation logic can be shared.
+pub trait DirectiveSource {
+    fn has_directive(&self, name: &str) -> bool;
+    fn get_directive(&self, name: &str) -> Option<&Option<String>>;
+
+    fn var_type(&self) -> Option<VarType> {
+        match self.get_directive("type") {
+            Some(Some(value)) => parse_var_type(value),
+            _ => None,
+        }
+    }
+
+    fn format_type(&self) -> Option<FormatType> {
+        match self.get_directive("format") {
+            Some(Some(value)) => FormatType::parse(value),
+            _ => None,
+        }
+    }
+}
+
+/// Validate a value against its declared type. Returns errors appended to the provided vector.
+pub fn validate_value_for_type(key: &str, var_type: &VarType, value: &str, errors: &mut Vec<ValidationError>) {
+    match var_type {
+        VarType::Number => {
+            if value.parse::<f64>().is_err() {
+                errors.push(ValidationError::error(
+                    key,
+                    format!("expected number, got \"{}\"", value),
+                ));
+            }
+        }
+        VarType::Boolean => {
+            match value {
+                "true" | "false" | "1" | "0" => {}
+                _ => {
+                    errors.push(ValidationError::error(
+                        key,
+                        format!("expected boolean (true/false/1/0), got \"{}\"", value),
+                    ));
+                }
+            }
+        }
+        VarType::Enum(variants) => {
+            if !variants.contains(&value.to_string()) {
+                errors.push(ValidationError::error(
+                    key,
+                    format!(
+                        "value \"{}\" not in enum. Expected one of: {}",
+                        value,
+                        variants.iter().map(|v| format!("\"{}\"", v)).collect::<Vec<_>>().join(", ")
+                    ),
+                ));
+            }
+        }
+        VarType::String => {} // any value is valid
+    }
+}
+
+/// Validate a value against all constraint directives from a `DirectiveSource`.
+/// Checks @type, @format, @pattern, @min/@max, @min-length/@max-length, @not-empty, @deprecated.
+pub fn validate_value_against_constraints(
+    key: &str,
+    value: &str,
+    source: &dyn DirectiveSource,
+) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+    let var_type = source.var_type();
+
+    // Validate @type
+    if let Some(ref vt) = var_type {
+        validate_value_for_type(key, vt, value, &mut errors);
+    }
+
+    // Validate @format
+    if let Some(format_type) = source.format_type() {
+        if let Some(msg) = format_type.validate(value) {
+            errors.push(ValidationError::error(key, msg));
+        }
+    }
+
+    // Validate @pattern
+    if let Some(Some(pattern)) = source.get_directive("pattern") {
+        if pattern.len() > 1024 {
+            errors.push(ValidationError::error(
+                key,
+                format!(
+                    "regex pattern exceeds maximum length of 1024 chars (got {})",
+                    pattern.len()
+                ),
+            ));
+        } else {
+            match regex::RegexBuilder::new(pattern)
+                .size_limit(1 << 20)
+                .build()
+            {
+                Ok(re) => {
+                    if !re.is_match(value) {
+                        errors.push(ValidationError::error(
+                            key,
+                            format!("value \"{}\" does not match pattern \"{}\"", value, pattern),
+                        ));
+                    }
+                }
+                Err(e) => {
+                    errors.push(ValidationError::error(
+                        key,
+                        format!("invalid regex pattern \"{}\": {}", pattern, e),
+                    ));
+                }
+            }
+        }
+    }
+
+    // Validate @min / @max (only meaningful with @type=number)
+    if let Some(ref var_type) = var_type {
+        if *var_type == VarType::Number {
+            if let Ok(val) = value.parse::<f64>() {
+                if let Some(Some(min_str)) = source.get_directive("min") {
+                    match min_str.parse::<f64>() {
+                        Ok(min) => {
+                            if val < min {
+                                errors.push(ValidationError::error(
+                                    key,
+                                    format!("value {} is less than minimum {}", val, min),
+                                ));
+                            }
+                        }
+                        Err(_) => {
+                            errors.push(ValidationError::error(
+                                key,
+                                format!("@min value \"{}\" is not a valid number", min_str),
+                            ));
+                        }
+                    }
+                }
+                if let Some(Some(max_str)) = source.get_directive("max") {
+                    match max_str.parse::<f64>() {
+                        Ok(max) => {
+                            if val > max {
+                                errors.push(ValidationError::error(
+                                    key,
+                                    format!("value {} is greater than maximum {}", val, max),
+                                ));
+                            }
+                        }
+                        Err(_) => {
+                            errors.push(ValidationError::error(
+                                key,
+                                format!("@max value \"{}\" is not a valid number", max_str),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Validate @min-length / @max-length (using char count, not byte count)
+    if let Some(Some(min_len_str)) = source.get_directive("min-length") {
+        match min_len_str.parse::<usize>() {
+            Ok(min_len) => {
+                let char_count = value.chars().count();
+                if char_count < min_len {
+                    errors.push(ValidationError::error(
+                        key,
+                        format!("value has {} characters, less than minimum length {}", char_count, min_len),
+                    ));
+                }
+            }
+            Err(_) => {
+                errors.push(ValidationError::error(
+                    key,
+                    format!("@min-length value \"{}\" is not a valid integer", min_len_str),
+                ));
+            }
+        }
+    }
+    if let Some(Some(max_len_str)) = source.get_directive("max-length") {
+        match max_len_str.parse::<usize>() {
+            Ok(max_len) => {
+                let char_count = value.chars().count();
+                if char_count > max_len {
+                    errors.push(ValidationError::error(
+                        key,
+                        format!("value has {} characters, exceeds maximum length {}", char_count, max_len),
+                    ));
+                }
+            }
+            Err(_) => {
+                errors.push(ValidationError::error(
+                    key,
+                    format!("@max-length value \"{}\" is not a valid integer", max_len_str),
+                ));
+            }
+        }
+    }
+
+    // Validate @not-empty
+    if source.has_directive("not-empty") && value.is_empty() {
+        errors.push(ValidationError::error(key, "value must not be empty"));
+    }
+
+    // Warn on @deprecated
+    if source.has_directive("deprecated") {
+        let msg = match source.get_directive("deprecated") {
+            Some(Some(message)) => format!("deprecated: {}", message),
+            _ => "deprecated".to_string(),
+        };
+        errors.push(ValidationError::warning(key, msg));
+    }
+
+    errors
+}
+
+impl DirectiveSource for Entry {
+    fn has_directive(&self, name: &str) -> bool {
         self.directives.iter().any(|(n, _)| n == name)
     }
 
-    pub fn get_directive(&self, name: &str) -> Option<&Option<String>> {
+    fn get_directive(&self, name: &str) -> Option<&Option<String>> {
         self.directives.iter().find(|(n, _)| n == name).map(|(_, v)| v)
+    }
+}
+
+impl Entry {
+    /// Check if this entry has a directive with the given name.
+    pub fn has_directive(&self, name: &str) -> bool {
+        <Self as DirectiveSource>::has_directive(self, name)
+    }
+
+    /// Get the value of a directive by name.
+    pub fn get_directive(&self, name: &str) -> Option<&Option<String>> {
+        <Self as DirectiveSource>::get_directive(self, name)
     }
 
     /// Parse `@push` directive into structured push targets.
@@ -217,18 +467,12 @@ impl Entry {
 
     /// Parse `@type` directive into a VarType.
     pub fn var_type(&self) -> Option<VarType> {
-        match self.get_directive("type") {
-            Some(Some(value)) => parse_var_type(value),
-            _ => None,
-        }
+        <Self as DirectiveSource>::var_type(self)
     }
 
     /// Parse `@format` directive into a FormatType.
     pub fn format_type(&self) -> Option<FormatType> {
-        match self.get_directive("format") {
-            Some(Some(value)) => FormatType::parse(value),
-            _ => None,
-        }
+        <Self as DirectiveSource>::format_type(self)
     }
 
     /// Validate directives and value on this entry. Returns a list of errors (empty = valid).
@@ -251,100 +495,17 @@ impl Entry {
             }
         }
 
-        // Validate the actual value against @type
-        if let Some(var_type) = self.var_type() {
-            self.validate_value(&var_type, &self.value, &mut errors);
-        }
+        errors.extend(validate_value_against_constraints(&self.key, &self.value, self));
 
-        // Validate @format
-        if let Some(format_type) = self.format_type() {
-            if let Some(msg) = format_type.validate(&self.value) {
-                errors.push(ValidationError::error(&self.key, msg));
+        // Validate @push targets — report unknown target names (Entry-specific, not in schema)
+        if let Some(Some(push_value)) = self.get_directive("push") {
+            let (_, unknown_targets) = parse_push_targets(push_value);
+            for target in &unknown_targets {
+                errors.push(ValidationError::error(
+                    &self.key,
+                    format!("unknown push target \"{}\"", target),
+                ));
             }
-        }
-
-        // Validate @pattern
-        if let Some(Some(pattern)) = self.get_directive("pattern") {
-            match regex::Regex::new(pattern) {
-                Ok(re) => {
-                    if !re.is_match(&self.value) {
-                        errors.push(ValidationError::error(
-                            &self.key,
-                            format!("value \"{}\" does not match pattern \"{}\"", self.value, pattern),
-                        ));
-                    }
-                }
-                Err(e) => {
-                    errors.push(ValidationError::error(
-                        &self.key,
-                        format!("invalid regex pattern \"{}\": {}", pattern, e),
-                    ));
-                }
-            }
-        }
-
-        // Validate @min / @max (only meaningful with @type=number)
-        if let Some(var_type) = self.var_type() {
-            if var_type == VarType::Number {
-                if let Ok(val) = self.value.parse::<f64>() {
-                    if let Some(Some(min_str)) = self.get_directive("min") {
-                        if let Ok(min) = min_str.parse::<f64>() {
-                            if val < min {
-                                errors.push(ValidationError::error(
-                                    &self.key,
-                                    format!("value {} is less than minimum {}", val, min),
-                                ));
-                            }
-                        }
-                    }
-                    if let Some(Some(max_str)) = self.get_directive("max") {
-                        if let Ok(max) = max_str.parse::<f64>() {
-                            if val > max {
-                                errors.push(ValidationError::error(
-                                    &self.key,
-                                    format!("value {} is greater than maximum {}", val, max),
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Validate @min-length / @max-length
-        if let Some(Some(min_len_str)) = self.get_directive("min-length") {
-            if let Ok(min_len) = min_len_str.parse::<usize>() {
-                if self.value.len() < min_len {
-                    errors.push(ValidationError::error(
-                        &self.key,
-                        format!("value length {} is less than minimum length {}", self.value.len(), min_len),
-                    ));
-                }
-            }
-        }
-        if let Some(Some(max_len_str)) = self.get_directive("max-length") {
-            if let Ok(max_len) = max_len_str.parse::<usize>() {
-                if self.value.len() > max_len {
-                    errors.push(ValidationError::error(
-                        &self.key,
-                        format!("value length {} exceeds maximum length {}", self.value.len(), max_len),
-                    ));
-                }
-            }
-        }
-
-        // Validate @not-empty
-        if self.has_directive("not-empty") && self.value.is_empty() {
-            errors.push(ValidationError::error(&self.key, "value must not be empty"));
-        }
-
-        // Warn on @deprecated
-        if self.has_directive("deprecated") {
-            let msg = match self.get_directive("deprecated") {
-                Some(Some(message)) => format!("deprecated: {}", message),
-                _ => "deprecated".to_string(),
-            };
-            errors.push(ValidationError::warning(&self.key, msg));
         }
 
         errors
@@ -352,47 +513,14 @@ impl Entry {
 
     /// Validate a value against its declared type.
     pub fn validate_value(&self, var_type: &VarType, value: &str, errors: &mut Vec<ValidationError>) {
-        match var_type {
-            VarType::Number => {
-                if value.parse::<f64>().is_err() {
-                    errors.push(ValidationError::error(
-                        &self.key,
-                        format!("expected number, got \"{}\"", value),
-                    ));
-                }
-            }
-            VarType::Boolean => {
-                match value {
-                    "true" | "false" | "1" | "0" => {}
-                    _ => {
-                        errors.push(ValidationError::error(
-                            &self.key,
-                            format!("expected boolean (true/false/1/0), got \"{}\"", value),
-                        ));
-                    }
-                }
-            }
-            VarType::Enum(variants) => {
-                if !variants.contains(&value.to_string()) {
-                    errors.push(ValidationError::error(
-                        &self.key,
-                        format!(
-                            "value \"{}\" not in enum. Expected one of: {}",
-                            value,
-                            variants.iter().map(|v| format!("\"{}\"", v)).collect::<Vec<_>>().join(", ")
-                        ),
-                    ));
-                }
-            }
-            VarType::String => {} // any value is valid
-        }
+        validate_value_for_type(&self.key, var_type, value, errors);
     }
 
     /// Validate a value from an environment variable override against this entry's @type.
     pub fn validate_env_override(&self, env_value: &str) -> Vec<ValidationError> {
         let mut errors = Vec::new();
         if let Some(var_type) = self.var_type() {
-            self.validate_value(&var_type, env_value, &mut errors);
+            validate_value_for_type(&self.key, &var_type, env_value, &mut errors);
             // Rewrite messages to indicate it's an env override
             for error in &mut errors {
                 error.message = format!("env override: {}", error.message);
@@ -583,29 +711,35 @@ pub struct SchemaEntry {
     pub key: String,
 }
 
-impl SchemaEntry {
-    pub fn has_directive(&self, name: &str) -> bool {
+impl DirectiveSource for SchemaEntry {
+    fn has_directive(&self, name: &str) -> bool {
         self.directives.iter().any(|(n, _)| n == name)
     }
 
-    pub fn get_directive(&self, name: &str) -> Option<&Option<String>> {
+    fn get_directive(&self, name: &str) -> Option<&Option<String>> {
         self.directives.iter().find(|(n, _)| n == name).map(|(_, v)| v)
+    }
+}
+
+impl SchemaEntry {
+    /// Check if this entry has a directive with the given name.
+    pub fn has_directive(&self, name: &str) -> bool {
+        <Self as DirectiveSource>::has_directive(self, name)
+    }
+
+    /// Get the value of a directive by name.
+    pub fn get_directive(&self, name: &str) -> Option<&Option<String>> {
+        <Self as DirectiveSource>::get_directive(self, name)
     }
 
     /// Parse `@type` directive into a VarType.
     pub fn var_type(&self) -> Option<VarType> {
-        match self.get_directive("type") {
-            Some(Some(value)) => parse_var_type(value),
-            _ => None,
-        }
+        <Self as DirectiveSource>::var_type(self)
     }
 
     /// Parse `@format` directive into a FormatType.
     pub fn format_type(&self) -> Option<FormatType> {
-        match self.get_directive("format") {
-            Some(Some(value)) => FormatType::parse(value),
-            _ => None,
-        }
+        <Self as DirectiveSource>::format_type(self)
     }
 
     /// Whether this key is optional (has `@optional` directive).
@@ -648,7 +782,13 @@ impl SchemaEntry {
     /// Get a numeric directive value as f64.
     fn numeric_directive(&self, name: &str) -> Option<f64> {
         match self.get_directive(name) {
-            Some(Some(value)) => value.parse().ok(),
+            Some(Some(value)) => match value.parse() {
+                Ok(v) => Some(v),
+                Err(_) => {
+                    eprintln!("warning: @{} value \"{}\" on key \"{}\" is not a valid number", name, value, self.key);
+                    None
+                }
+            },
             _ => None,
         }
     }

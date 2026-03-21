@@ -44,5 +44,5 @@ try {
   }
 }
 
-export const { parse, validate, toJson, format } = nativeModule;
+export const { parse, validate, toJson, format, validateAgainstSchema, formatBySchema, discoverSchema, loadSchema, parseSchema, schemaToJsonSchema, schemaToTypescript } = nativeModule;
 export default nativeModule;

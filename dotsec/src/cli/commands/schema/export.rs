@@ -26,7 +26,8 @@ pub async fn match_args(
 
         let content = std::fs::read_to_string(schema_path)?;
         let schema = dotenv::parse_schema(&content)?;
-        let json_schema = dotenv::schema_to_json_schema(&schema);
+        let json_schema = dotenv::schema_to_json_schema(&schema)
+            .map_err(|e| format!("{} Schema error: {}", "✗".red(), e))?;
         let output = serde_json::to_string_pretty(&json_schema)?;
 
         if let Some(file) = sub.get_one::<String>("output") {
