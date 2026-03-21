@@ -37,6 +37,32 @@ const formatted = format('FOO=bar\n');
 // 'FOO=bar\n'
 ```
 
+### Schema operations
+
+```js
+import {
+  validateAgainstSchema, formatBySchema, discoverSchema,
+  loadSchema, parseSchema, schemaToJsonSchema, schemaToTypescript
+} from '@dotsec/core';
+import { readFileSync } from 'node:fs';
+
+// Discover and load a schema file
+const schemaPath = discoverSchema('.sec');           // finds dotsec.schema or null
+const schemaEntries = loadSchema();                  // parses discovered schema or null
+
+// Validate .env against a schema
+const source = readFileSync('.env', 'utf8');
+const schemaSource = readFileSync('dotsec.schema', 'utf8');
+const errors = validateAgainstSchema(source, schemaSource);
+
+// Reorder .env to match schema key ordering
+const reordered = formatBySchema(source, schemaSource);
+
+// Code generation from schema
+const jsonSchema = schemaToJsonSchema(schemaSource);   // JSON Schema (draft-07) string
+const typescript = schemaToTypescript(schemaSource);    // TypeScript declarations
+```
+
 ## Supported directives
 
 - `@encrypt` / `@plaintext` — mark variables for encryption
@@ -45,7 +71,7 @@ const formatted = format('FOO=bar\n');
 - `@push=aws-ssm|aws-secrets-manager` — push targets with options
 - `@provider`, `@key-id`, `@region` — file-level encryption config
 
-See the [full documentation](https://jpwesselink.github.io/dotsec-rs/beta/guide/directives.html) for details.
+See the [full documentation](https://jpwesselink.github.io/dotsec-rs/guide/directives.html) for details.
 
 ## Platforms
 

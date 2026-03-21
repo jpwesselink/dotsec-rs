@@ -60,6 +60,25 @@ pub async fn match_args(
 
     let entries = dotenv::lines_to_entries(&lines);
 
+    // Validate entries against schema and warn (non-blocking)
+    if let Some(ref schema_path) = default_options.schema_path {
+        let schema_content = std::fs::read_to_string(schema_path)?;
+        let schema = dotenv::parse_schema(&schema_content)?;
+        let validation_errors = dotenv::validate_entries_against_schema(&entries, &schema);
+        if !validation_errors.is_empty() {
+            let warning_count = validation_errors.len();
+            eprintln!(
+                "{} {} schema validation warning(s):",
+                "⚠".yellow(),
+                warning_count
+            );
+            for err in &validation_errors {
+                eprintln!("  {} {}", "•".yellow(), err);
+            }
+            eprintln!();
+        }
+    }
+
     // Filter to entries with @push directives
     let push_entries: Vec<_> = entries
         .iter()
@@ -87,9 +106,8 @@ pub async fn match_args(
     let mut plan: Vec<PushAction> = Vec::new();
 
     for entry in &push_entries {
-        let is_encrypted = entry.has_directive("encrypt")
-            || (!entry.has_directive("plaintext") && !entry.has_directive("encrypt"));
-        // If neither @encrypt nor @plaintext, default-encrypt applies → treat as encrypted
+        let is_encrypted = entry.has_directive("encrypt");
+        // lines_to_entries() already injects @encrypt when @default-encrypt is set
 
         for target in entry.push_targets() {
             match target {
@@ -99,6 +117,7 @@ pub async fn match_args(
                         .as_deref()
                         .unwrap_or(&entry.key)
                         .to_string();
+                    validate_push_path(&path, &entry.key)?;
                     plan.push(PushAction {
                         key: entry.key.clone(),
                         value: entry.value.clone(),
@@ -113,6 +132,7 @@ pub async fn match_args(
                         .as_deref()
                         .unwrap_or(&entry.key)
                         .to_string();
+                    validate_push_path(&path, &entry.key)?;
                     plan.push(PushAction {
                         key: entry.key.clone(),
                         value: entry.value.clone(),
@@ -227,6 +247,10 @@ pub async fn match_args(
         }
     }
 
+    if !errors.is_empty() {
+        return Err(format!("{} of {} push operations failed", errors.len(), plan.len()).into());
+    }
+
     Ok(())
 }
 
@@ -236,4 +260,66 @@ struct PushAction {
     target: String,
     path: String,
     secure: bool,
+}
+
+fn validate_push_path(path: &str, key: &str) -> Result<(), Box<dyn std::error::Error>> {
+    if path.is_empty() {
+        return Err(format!("push path for '{}' must not be empty", key).into());
+    }
+    if path.len() > 2048 {
+        return Err(format!(
+            "push path for '{}' exceeds maximum length of 2048 chars (got {})",
+            key,
+            path.len()
+        )
+        .into());
+    }
+    if path.split('/').any(|seg| seg == "..") {
+        return Err(format!(
+            "push path for '{}' must not contain '..' (path traversal)",
+            key
+        )
+        .into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn push_path_rejects_empty() {
+        assert!(validate_push_path("", "KEY").is_err());
+    }
+
+    #[test]
+    fn push_path_rejects_traversal() {
+        assert!(validate_push_path("/app/../etc/passwd", "KEY").is_err());
+        assert!(validate_push_path("../secret", "KEY").is_err());
+    }
+
+    #[test]
+    fn push_path_allows_double_dots_in_names() {
+        assert!(validate_push_path("/app/v2..beta/config", "KEY").is_ok());
+        assert!(validate_push_path("/app/my..param", "KEY").is_ok());
+    }
+
+    #[test]
+    fn push_path_rejects_too_long() {
+        let long = "/".repeat(2049);
+        assert!(validate_push_path(&long, "KEY").is_err());
+    }
+
+    #[test]
+    fn push_path_accepts_valid() {
+        assert!(validate_push_path("/myapp/prod/DB_URL", "KEY").is_ok());
+        assert!(validate_push_path("DB_URL", "KEY").is_ok());
+    }
+
+    #[test]
+    fn push_path_at_length_limit_ok() {
+        let path = "a".repeat(2048);
+        assert!(validate_push_path(&path, "KEY").is_ok());
+    }
 }

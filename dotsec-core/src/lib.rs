@@ -1,7 +1,6 @@
 pub use dotenv;
 use base64::Engine as _;
 use dotenv::{lines_to_entries, Line};
-use zeroize::Zeroize;
 
 mod configuration;
 pub use configuration::*;
@@ -50,7 +49,7 @@ enum SecFormat {
 /// Encrypt in-memory lines and write the result to a .sec file.
 ///
 /// For each entry with `@encrypt`:
-///   - Encrypt the value with the DEK → `ENC[base64(nonce||ciphertext||tag)]`
+///   - Encrypt the value with the DEK → `ENC[base64(commitment||nonce||ciphertext||tag)]`
 ///
 /// The DEK is wrapped by KMS and stored as `__DOTSEC_KEY__="base64(wrapped_dek)"`.
 pub async fn encrypt_lines_to_sec(
@@ -69,20 +68,23 @@ pub async fn encrypt_lines_to_sec(
     };
 
     // Check if there's an existing __DOTSEC_KEY__ we can reuse
-    let (mut dek, wrapped_dek) = match load_existing_dek(sec_file, region).await {
+    let (dek, wrapped_dek) = match load_existing_dek(sec_file, region).await {
         Ok((dek, wrapped)) => (dek, wrapped),
-        Err(_) => {
-            let (plaintext, wrapped) = aws::generate_data_key(key_id, region).await?;
-            (plaintext, wrapped)
+        Err(e) => {
+            let is_new_file = e.downcast_ref::<std::io::Error>()
+                .is_some_and(|io_err| io_err.kind() == std::io::ErrorKind::NotFound);
+            let is_no_key = e.to_string().contains("No __DOTSEC_KEY__ found");
+            if is_new_file || is_no_key {
+                let (plaintext, wrapped) = aws::generate_data_key(key_id, region).await?;
+                (plaintext, wrapped)
+            } else {
+                return Err(e);
+            }
         }
     };
 
-    let result = encrypt_with_dek(lines, &entries, &dek, &wrapped_dek, sec_file);
-
-    // Zeroize DEK from memory regardless of success/failure
-    dek.zeroize();
-
-    result
+    // DEK is Zeroizing<Vec<u8>> — auto-zeroizes on drop (including error paths)
+    encrypt_with_dek(lines, &entries, &dek, &wrapped_dek, sec_file)
 }
 
 /// Inner encryption logic, separated so the caller can zeroize the DEK.
@@ -173,7 +175,15 @@ pub async fn decrypt_sec_to_lines(
     match detect_format(&lines) {
         SecFormat::V2 => decrypt_v2(&lines, encryption_engine).await,
         SecFormat::V1 => decrypt_v1(&lines, encryption_engine).await,
-        SecFormat::None => Ok(lines),
+        SecFormat::None => {
+            let has_enc_values = lines.iter().any(|l| {
+                if let Line::Kv(_, v, _) = l { aws::is_encrypted_value(v) } else { false }
+            });
+            if has_enc_values {
+                return Err("File contains ENC[...] values but no __DOTSEC_KEY__. File may be corrupted.".into());
+            }
+            Ok(lines)
+        }
     }
 }
 
@@ -191,7 +201,8 @@ async fn decrypt_v2(
     let wrapped_dek_b64 = dotenv::get_value(lines, DOTSEC_KEY_NAME)
         .ok_or("No __DOTSEC_KEY__ found in .sec file")?;
     let wrapped_dek = base64::engine::general_purpose::STANDARD.decode(&wrapped_dek_b64)?;
-    let mut dek = aws::unwrap_data_key(&wrapped_dek, region).await?;
+    // DEK is Zeroizing<Vec<u8>> — auto-zeroizes on drop (including error paths)
+    let dek = aws::unwrap_data_key(&wrapped_dek, region).await?;
 
     let mut resolved: Vec<Line> = Vec::new();
 
@@ -217,7 +228,6 @@ async fn decrypt_v2(
         }
     }
 
-    dek.zeroize();
     Ok(resolved)
 }
 
@@ -269,11 +279,12 @@ async fn decrypt_v1(
     Ok(resolved)
 }
 
-/// Decrypt a v1 blob using the old envelopers-based path.
-/// This calls KMS Decrypt directly since we removed envelopers.
-/// V1 blobs are base64-encoded envelopers::EncryptedRecord — we can't decrypt them
-/// without the envelopers crate. For migration, users need to decrypt with the old
-/// version first, then re-encrypt with the new version.
+/// Attempt to decrypt a v1 blob (legacy envelopers format).
+///
+/// This always returns an error directing users to migrate, because v1 blobs
+/// are base64-encoded `envelopers::EncryptedRecord` and we no longer bundle the
+/// envelopers crate. Users must decrypt with dotsec v4.x first, then re-encrypt
+/// with v5.x to migrate to the new per-value encryption format.
 async fn decrypt_blob_v1(
     _ciphertext: &str,
     _engine: &EncryptionEngine,
@@ -290,7 +301,7 @@ async fn decrypt_blob_v1(
 async fn load_existing_dek(
     sec_file: &str,
     region: Option<&str>,
-) -> Result<(Vec<u8>, Vec<u8>), Box<dyn std::error::Error>> {
+) -> Result<(zeroize::Zeroizing<Vec<u8>>, Vec<u8>), Box<dyn std::error::Error>> {
     let content = load_file(sec_file)?;
     let lines = dotenv::parse_dotenv(&content)?;
     let wrapped_b64 = dotenv::get_value(&lines, DOTSEC_KEY_NAME)

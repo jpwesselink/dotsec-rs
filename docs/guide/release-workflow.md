@@ -30,10 +30,12 @@ Version is read from `Cargo.toml` (managed by release-plz via conventional commi
 
 ## CI Workflows
 
-| Workflow | Description |
-|---|---|
-| **Publish CLI to NPM** | Builds CLI binary for 6 platforms, publishes `dotsec` |
-| **Release-plz** | Analyzes conventional commits, creates release PRs, publishes to crates.io |
+| Workflow | File | Description |
+|---|---|---|
+| **Publish CLI to NPM** | `publish-npm.yml` | Builds CLI binary for 6 platforms, publishes `dotsec` |
+| **Publish Core npm package** | `publish-napi.yml` | Builds NAPI bindings for 6 platforms, publishes `@dotsec/core` |
+| **Deploy docs** | `deploy-docs.yml` | Builds and deploys documentation to GitHub Pages (versioned: stable, beta, PR previews) |
+| **Release-plz** | `release-plz.yml` | Analyzes conventional commits, creates release PRs, publishes to crates.io |
 
 ## Why no crates.io for PRs?
 

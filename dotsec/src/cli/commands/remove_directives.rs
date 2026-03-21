@@ -20,13 +20,9 @@ pub async fn match_args(
         let schema_path = dotenv::schema::discover_schema(
             sec_file,
             default_options.schema_path.as_deref(),
-        );
+        )?;
         if schema_path.is_none() {
-            eprintln!(
-                "{} No dotsec.schema found. Run `dotsec eject` first to create one.",
-                "✗".red()
-            );
-            std::process::exit(1);
+            return Err("No dotsec.schema found. Run `dotsec eject` first to create one.".into());
         }
 
         // Parse the .sec file (decrypt if needed)

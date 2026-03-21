@@ -23,7 +23,8 @@ pub fn looks_like_secret(key: &str) -> bool {
 }
 
 /// Heuristic: guess the type index for a value.
-/// Returns 0 = string, 1 = number, 2 = boolean.
+/// Returns an index into the type_options vec: 0=string, 1=number, 2=boolean.
+/// Used as `with_starting_cursor` for the type selection prompt.
 pub fn guess_type(value: &str) -> usize {
     if value == "true" || value == "false" || value == "1" || value == "0" {
         return 2; // boolean
@@ -34,10 +35,11 @@ pub fn guess_type(value: &str) -> usize {
     0 // string
 }
 
-/// Truncate a string, appending "..." if it exceeds max length.
+/// Truncate a string, appending "..." if it exceeds max characters.
+/// Uses character count (not byte count) to avoid panicking on multi-byte UTF-8.
 pub fn truncate_value(value: &str, max: usize) -> String {
-    if value.len() > max {
-        format!("{}...", &value[..max])
+    if value.chars().count() > max {
+        format!("{}...", value.chars().take(max).collect::<String>())
     } else {
         value.to_string()
     }
@@ -454,6 +456,13 @@ mod tests {
     #[test]
     fn truncate_long() {
         assert_eq!(truncate_value("hello world", 5), "hello...");
+    }
+
+    #[test]
+    fn truncate_multibyte_utf8() {
+        // Should not panic on multi-byte characters like emoji
+        let result = truncate_value("hello \u{1F511} world", 7);
+        assert_eq!(result, "hello \u{1F511}...");
     }
 
     // --- config_diffs ---

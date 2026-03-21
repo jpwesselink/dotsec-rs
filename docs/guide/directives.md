@@ -169,6 +169,16 @@ The schema file is found automatically:
 
 See [eject command](/guide/commands#dotsec-eject) for how to create a schema from an existing `.sec` file.
 
+## Choosing between inline and schema
+
+**Use inline directives** when you have a single environment, a small project, or you want to get started quickly. Everything lives in one `.sec` file, so there is nothing extra to manage.
+
+**Use a schema file** when you have multiple environments (dev, staging, production), collaborate with a team, run CI/CD validation across environments, or want to generate typed code from your configuration. A shared `dotsec.schema` keeps directive definitions in one place and prevents drift between environment files.
+
+**Migration path**: start with inline directives, then run `dotsec eject` when you need a schema. This extracts per-key directives into `dotsec.schema` and strips them from your `.sec` file, leaving only file-level config and key=value pairs.
+
+When both inline directives and a schema file exist, the schema takes precedence. Any per-key directives still present in the `.sec` file are ignored, and `dotsec validate` will emit a warning for each one so you can clean them up (or run `dotsec remove-directives` to strip them automatically).
+
 ## Variable interpolation
 
 `${VAR}` references are resolved at runtime by `dotsec run`. Single-quoted values are not interpolated (bash convention).

@@ -62,6 +62,10 @@ pub async fn match_args(
                             "!".yellow().bold(),
                             e.to_string().dimmed()
                         );
+                        println!(
+                            "{} Encryption/decryption operations may fail until this is resolved.",
+                            "!".yellow().bold()
+                        );
                     }
                 }
             }
