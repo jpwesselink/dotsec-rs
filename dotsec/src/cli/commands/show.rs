@@ -15,6 +15,10 @@ pub fn command() -> Command {
                 .value_parser(value_parser!(OutputFormat))
                 .default_value("raw"),
         )
+        .arg(
+            arg!(--reveal "Show actual secret values instead of masked output")
+                .action(clap::ArgAction::SetTrue),
+        )
 }
 
 pub async fn match_args(
@@ -26,10 +30,12 @@ pub async fn match_args(
             .get_one::<OutputFormat>("output-format")
             .unwrap_or(&OutputFormat::Raw);
 
+        let reveal = command_matches.get_flag("reveal");
+
         let sec_file = default_options.sec_file;
         debug!("Showing decrypted {}", sec_file);
 
-        let output = with_progress("Decrypting...", dotsec::show(sec_file, &default_options.encryption_engine, output_format)).await?;
+        let output = with_progress("Decrypting...", dotsec::show(sec_file, &default_options.encryption_engine, output_format, reveal)).await?;
         println!("{}", output);
     }
     Ok(())

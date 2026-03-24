@@ -29,7 +29,8 @@ cargo install dotsec
 ## Project structure
 
 ```
-dotsec/                  CLI binary crate
+dotsec-core/             Core library (encryption, decryption, interpolation, redaction)
+dotsec/                  CLI binary crate (uses dotsec-core)
   npm/                   npm distribution packages
     dotsec/              meta-package (optionalDependencies)
     dotsec-darwin-arm64/ platform binaries
@@ -38,6 +39,8 @@ dotsec/                  CLI binary crate
     dotsec-linux-x64-gnu/
     dotsec-win32-arm64-msvc/
     dotsec-win32-x64-msvc/
+dotsec-napi/             Node.js bindings (published as @dotsec/core)
+  npm/                   npm platform packages
 dotenv/                  .env/.sec parser (internal)
 aws/                     AWS KMS encryption (internal)
 ```
@@ -105,10 +108,10 @@ dotsec export -o .env      # decrypt .sec → .env file
 Display decrypted `.sec` contents in various formats:
 
 ```bash
-dotsec show              # raw key=value
-dotsec show --json       # JSON object
-dotsec show --csv        # CSV format
-dotsec show --table      # formatted table
+dotsec show                           # raw key=value (default)
+dotsec show --output-format json      # JSON object
+dotsec show --output-format csv       # CSV format
+dotsec show --output-format text      # formatted text
 ```
 
 ### `dotsec run`
@@ -127,19 +130,19 @@ The child process runs in a pseudo-terminal (PTY), so colors, interactive output
 Check directives and values against type constraints:
 
 ```bash
-dotsec validate                 # validate .env
-dotsec validate --using sec     # decrypt and validate .sec
+dotsec validate                          # decrypt .sec and validate
+dotsec validate --sec-file .sec.staging  # validate a specific .sec file
 ```
 
-Validates: unknown directives, type mismatches (number, boolean, enum membership), missing directive values, and shell environment overrides.
+Validates: unknown directives, type mismatches (number, boolean, enum membership), missing directive values, schema constraints, and shell environment overrides.
 
 ### `dotsec diff`
 
 Compare environment files for structural differences:
 
 ```bash
-dotsec diff --base .env .env.staging .env.production
-dotsec diff --base .env .env.staging --values  # include value diffs
+dotsec diff .sec.staging .sec.production
+dotsec diff .sec.staging --values              # include value diffs
 ```
 
 Reports: missing keys, extra keys, directive mismatches, ordering differences, and optionally value differences.
@@ -196,14 +199,15 @@ File-level directives (`@provider`, `@key-id`, `@region`, `@default-encrypt`/`@d
 
 ## How encryption works
 
-1. Parse `.sec`, find entries with `@encrypt` (or file-level `@default-encrypt`)
-2. Generate a random 64-char hex ID for each encrypted value
-3. Replace encrypted values with their IDs in the `.sec` output
-4. Build a `{id: real_value}` map, serialize to JSON
-5. Encrypt the JSON blob using AWS KMS envelope encryption (AES-256-GCM + KMS data key wrapping)
-6. Append as `__DOTSEC__="<base64>"` to the `.sec` file
+Each `@encrypt` value is individually encrypted with AES-256-GCM using a local data encryption key (DEK) with key commitment, stored as `ENC[base64(commitment||nonce||ciphertext||tag)]`. The DEK is KMS-wrapped and stored as `__DOTSEC_KEY__`.
 
-Re-encrypting reuses IDs for unchanged values — only modified secrets get new IDs, keeping git diffs minimal.
+1. Parse `.sec`, find entries with `@encrypt` (or file-level `@default-encrypt`)
+2. Generate (or reuse) a DEK via AWS KMS `GenerateDataKey` (AES-256)
+3. For each encrypted value, encrypt it locally with AES-256-GCM using a random nonce
+4. Include a 32-byte HMAC-SHA256 key commitment in each encrypted value
+5. Store the KMS-wrapped DEK as `__DOTSEC_KEY__` at the end of the `.sec` file
+
+Since each value is encrypted independently, changing one secret only affects that line — git diffs stay minimal and merges work naturally.
 
 ## Variable interpolation
 
@@ -239,7 +243,7 @@ dotsec --sec-file .sec.production show
 | Package | Description |
 |---------|-------------|
 | `dotsec` | CLI binary (platform-specific via `optionalDependencies`) |
-| `@dotsec/core` | NAPI-RS bindings for programmatic use (planned) |
+| `@dotsec/core` | NAPI-RS native Node.js module for parsing, validating, and formatting |
 | `@dotsec/config` | Drop-in `dotenv/config` replacement — `import '@dotsec/config'` (planned) |
 
 ## Release workflow
@@ -273,10 +277,7 @@ Versioning is fully automated using [conventional commits](https://www.conventio
 
 ## Roadmap
 
-- **`dotsec push`** — push values to AWS SSM Parameter Store and/or Secrets Manager based on `@push` directives
-- **`@dotsec/core`** — NAPI-RS native Node.js module exposing encrypt/decrypt/resolve programmatically
 - **`@dotsec/config`** — drop-in replacement for `dotenv/config` that reads `.sec` and decrypts transparently
-- **TypeScript type generation** — generate `env.d.ts` from `@type` directives
 - **Azure Key Vault provider** — envelope encryption using Azure Key Vault Keys API
 - **GCP Cloud KMS provider** — envelope encryption using Google Cloud KMS
 - **PKI provider** — asymmetric encryption using public/private key pairs (no cloud dependency)

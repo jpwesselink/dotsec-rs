@@ -35,6 +35,22 @@ pub async fn match_args(
         )
         .await?;
 
+        // Validate entries against schema and warn (non-blocking)
+        let entries = dotenv::lines_to_entries(&lines);
+        let validation_errors = dotenv::validate_entries_against_schema(&entries, &schema);
+        if !validation_errors.is_empty() {
+            let warning_count = validation_errors.len();
+            eprintln!(
+                "{} {} schema validation warning(s):",
+                "⚠".yellow(),
+                warning_count
+            );
+            for err in &validation_errors {
+                eprintln!("  {} {}", "•".yellow(), err);
+            }
+            eprintln!();
+        }
+
         let formatted = dotenv::format_lines_by_schema(&lines, &schema);
 
         // Check if anything changed

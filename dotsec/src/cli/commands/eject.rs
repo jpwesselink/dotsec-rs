@@ -24,12 +24,10 @@ pub async fn match_args(
 
         // Refuse if schema file already exists
         if std::path::Path::new(output).exists() {
-            eprintln!(
-                "{} {} already exists. Delete it first or use --output to specify a different path.",
-                "✗".red(),
+            return Err(format!(
+                "{} already exists. Delete it first or use --output to specify a different path.",
                 output
-            );
-            std::process::exit(1);
+            ).into());
         }
 
         // Parse the .sec file (decrypt if needed)
@@ -55,18 +53,19 @@ pub async fn match_args(
 
         // Also extract file-level schema directives (default-encrypt, default-plaintext)
         let file_config_lines: Vec<_> = lines.iter().filter(|l| {
-            matches!(l, dotenv::Line::Directive(name, _) if dotenv::SCHEMA_FILE_LEVEL_DIRECTIVES.contains(&name.as_str()))
+            matches!(l, dotenv::Line::Directive { name, .. } if dotenv::SCHEMA_FILE_LEVEL_DIRECTIVES.contains(&name.as_str()))
         }).collect();
 
         let mut schema_directives_for_file: Vec<(String, Option<String>)> = Vec::new();
         for line in &file_config_lines {
-            if let dotenv::Line::Directive(name, value) = line {
+            if let dotenv::Line::Directive { name, value } = line {
                 schema_directives_for_file.push((name.clone(), value.clone()));
             }
         }
 
         // Build the schema
-        let schema = dotenv::Schema { entries: schema_entries };
+        let mut schema = dotenv::Schema::default();
+        schema.extend(schema_entries);
 
         // Write schema file
         let mut schema_output = String::new();
@@ -97,7 +96,7 @@ pub async fn match_args(
             std::fs::write(sec_file, &new_content)?;
         }
 
-        let entry_count = schema.entries.iter().filter(|e| !e.directives.is_empty()).count();
+        let entry_count = schema.iter().filter(|(_, e)| !e.directives.is_empty()).count();
         println!(
             "{} Ejected {} entries into {}",
             "✓".green(),

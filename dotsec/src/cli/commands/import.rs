@@ -185,7 +185,7 @@ pub async fn match_args(
     let schema_path = dotenv::schema::discover_schema(
         sec_file,
         default_options.schema_path.as_deref(),
-    );
+    ).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     let mut schema = if let Some(ref path) = schema_path {
         let content = std::fs::read_to_string(path)?;
         Some(dotenv::parse_schema(&content)?)
@@ -220,7 +220,7 @@ pub async fn match_args(
                 if schema.is_some() {
                     // Schema exists, new key — directives go to schema
                     let schema_dirs: Vec<(String, Option<String>)> = directives.iter().filter_map(|d| {
-                        if let dotenv::Line::Directive(name, value) = d { Some((name.clone(), value.clone())) } else { None }
+                        if let dotenv::Line::Directive { name, value } = d { Some((name.clone(), value.clone())) } else { None }
                     }).collect();
                     new_schema_entries.push(dotenv::SchemaEntry { directives: schema_dirs, key: entry.key.clone() });
                     var_directives.push(vec![]); // No inline directives
@@ -266,7 +266,7 @@ pub async fn match_args(
                 if schema.is_some() {
                     // Schema exists, new key — directives go to schema
                     let schema_dirs: Vec<(String, Option<String>)> = directives.iter().filter_map(|d| {
-                        if let dotenv::Line::Directive(name, value) = d { Some((name.clone(), value.clone())) } else { None }
+                        if let dotenv::Line::Directive { name, value } = d { Some((name.clone(), value.clone())) } else { None }
                     }).collect();
                     new_schema_entries.push(dotenv::SchemaEntry { directives: schema_dirs, key: entry.key.clone() });
                     var_directives.push(vec![]); // No inline directives
@@ -280,9 +280,9 @@ pub async fn match_args(
     // Write new entries to schema if needed
     if !new_schema_entries.is_empty() {
         if let Some(ref mut s) = schema {
-            s.entries.extend(new_schema_entries);
+            s.extend(new_schema_entries);
             let schema_output = dotenv::schema_to_string(s);
-            std::fs::write(schema_path.as_ref().unwrap(), &schema_output)?;
+            std::fs::write(schema_path.as_deref().unwrap(), &schema_output)?;
         }
     }
 
@@ -302,15 +302,15 @@ pub async fn match_args(
             match line {
                 // Strip source per-variable directives (we replace them with user-chosen ones)
                 // But keep config directives — they're handled via config_lines
-                dotenv::Line::Directive(name, _) => {
+                dotenv::Line::Directive { name, .. } => {
                     // Skip all directives — config ones are rebuilt, per-var ones are replaced
                     let _ = name;
                     continue;
                 }
 
-                dotenv::Line::Comment(_) | dotenv::Line::Whitespace(_) | dotenv::Line::Newline => {
+                dotenv::Line::Comment { .. } | dotenv::Line::Whitespace { .. } | dotenv::Line::Newline => {
                     if !inserted_config {
-                        if let dotenv::Line::Comment(_) = line {
+                        if let dotenv::Line::Comment { .. } = line {
                             new_lines.extend(config_lines.clone());
                             new_lines.push(dotenv::Line::Newline);
                             new_lines.push(dotenv::Line::Newline);
@@ -320,7 +320,7 @@ pub async fn match_args(
                     new_lines.push(line.clone());
                 }
 
-                dotenv::Line::Kv(_, _, _) => {
+                dotenv::Line::Kv { .. } => {
                     if !inserted_config {
                         new_lines.extend(config_lines.clone());
                         new_lines.push(dotenv::Line::Newline);
@@ -353,7 +353,7 @@ pub async fn match_args(
 
         let mut var_index = 0;
         for line in &lines {
-            if let dotenv::Line::Kv(key, value, quote_type) = line {
+            if let dotenv::Line::Kv { key, value, quote_type } = line {
                 if !import_keys.contains(key.as_str()) {
                     continue;
                 }
@@ -374,7 +374,7 @@ pub async fn match_args(
                     }
                     var_index += 1;
                 }
-                existing_lines.push(dotenv::Line::Kv(key.clone(), value.clone(), quote_type.clone()));
+                existing_lines.push(dotenv::Line::Kv { key: key.clone(), value: value.clone(), quote_type: quote_type.clone() });
                 existing_lines.push(dotenv::Line::Newline);
             }
         }
@@ -411,12 +411,12 @@ fn auto_directives(
     if encrypt_all {
         // Only add @plaintext for non-secrets (exceptions to encrypt-all)
         if source_has_plaintext || (!source_has_encrypt && !is_secret) {
-            directives.push(dotenv::Line::Directive("plaintext".to_string(), None));
+            directives.push(dotenv::Line::Directive { name: "plaintext".to_string(), value: None });
         }
     } else {
         // Only add @encrypt for secrets (exceptions to plaintext-all)
         if source_has_encrypt || (!source_has_plaintext && is_secret) {
-            directives.push(dotenv::Line::Directive("encrypt".to_string(), None));
+            directives.push(dotenv::Line::Directive { name: "encrypt".to_string(), value: None });
         }
     }
 
@@ -427,20 +427,61 @@ fn auto_directives(
         .and_then(|(_, v)| v.as_deref());
 
     if let Some(st) = source_type {
-        directives.push(dotenv::Line::Directive("type".to_string(), Some(st.to_string())));
+        directives.push(dotenv::Line::Directive { name: "type".to_string(), value: Some(st.to_string()) });
     } else {
         let type_name = match helpers::guess_type(value) {
             1 => "number",
             2 => "boolean",
             _ => "string",
         };
-        directives.push(dotenv::Line::Directive("type".to_string(), Some(type_name.to_string())));
+        directives.push(dotenv::Line::Directive { name: "type".to_string(), value: Some(type_name.to_string()) });
     }
 
     // Push: carry over from source if present
     if let Some((_, v)) = source_directives.iter().find(|(n, _)| n == "push") {
-        directives.push(dotenv::Line::Directive("push".to_string(), v.clone()));
+        directives.push(dotenv::Line::Directive { name: "push".to_string(), value: v.clone() });
     }
 
     directives
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_directives_secret_key_gets_encrypt() {
+        let directives = auto_directives("API_SECRET_KEY", "sk-123", false, &[]);
+        let has_encrypt = directives.iter().any(|d| {
+            matches!(d, dotenv::Line::Directive { name, value: None } if name == "encrypt")
+        });
+        assert!(has_encrypt, "secret key should get @encrypt when encrypt_all is false");
+    }
+
+    #[test]
+    fn auto_directives_number_detected() {
+        let directives = auto_directives("PORT", "3000", false, &[]);
+        let has_type_number = directives.iter().any(|d| {
+            matches!(d, dotenv::Line::Directive { name, value: Some(v) } if name == "type" && v == "number")
+        });
+        assert!(has_type_number, "numeric value should be detected as @type=number");
+    }
+
+    #[test]
+    fn auto_directives_boolean_detected() {
+        let directives = auto_directives("DEBUG", "true", false, &[]);
+        let has_type_boolean = directives.iter().any(|d| {
+            matches!(d, dotenv::Line::Directive { name, value: Some(v) } if name == "type" && v == "boolean")
+        });
+        assert!(has_type_boolean, "boolean value should be detected as @type=boolean");
+    }
+
+    #[test]
+    fn auto_directives_plaintext_for_non_secret() {
+        let directives = auto_directives("LOG_LEVEL", "info", false, &[]);
+        let has_encrypt = directives.iter().any(|d| {
+            matches!(d, dotenv::Line::Directive { name, .. } if name == "encrypt")
+        });
+        assert!(!has_encrypt, "non-secret key should NOT get @encrypt when encrypt_all is false");
+    }
 }

@@ -1,7 +1,6 @@
 use base64::Engine as _;
 use clap::Command;
 use colored::Colorize;
-use zeroize::Zeroize;
 
 use crate::cli::helpers::with_progress;
 use crate::default_options::DefaultOptions;
@@ -37,8 +36,8 @@ pub async fn match_args(
     )
     .await?;
 
-    // Generate a new DEK
-    let (mut new_dek, new_wrapped_dek) = aws::generate_data_key(key_id, region).await?;
+    // Generate a new DEK (Zeroizing<Vec<u8>> — auto-zeroizes on drop)
+    let (new_dek, new_wrapped_dek) = aws::generate_data_key(key_id, region).await?;
     let new_wrapped_b64 =
         base64::engine::general_purpose::STANDARD.encode(&new_wrapped_dek);
 
@@ -48,13 +47,13 @@ pub async fn match_args(
 
     for line in &lines {
         match line {
-            dotenv::Line::Kv(key, value, quote_type) => {
+            dotenv::Line::Kv { key, value, quote_type } => {
                 let entry = entries.iter().find(|e| e.key == *key);
                 let should_encrypt = entry.is_some_and(|e| e.has_directive("encrypt"));
 
                 if should_encrypt {
                     let encrypted = aws::encrypt_value(value, &new_dek, key)?;
-                    sec_lines.push(dotenv::Line::Kv(key.clone(), encrypted, quote_type.clone()));
+                    sec_lines.push(dotenv::Line::Kv { key: key.clone(), value: encrypted, quote_type: quote_type.clone() });
                 } else {
                     sec_lines.push(line.clone());
                 }
@@ -63,8 +62,7 @@ pub async fn match_args(
         }
     }
 
-    // Zeroize DEK before writing to disk
-    new_dek.zeroize();
+    // new_dek auto-zeroizes when dropped
 
     // Append new __DOTSEC_KEY__
     let last_is_newline = matches!(sec_lines.last(), Some(dotenv::Line::Newline));
@@ -72,15 +70,15 @@ pub async fn match_args(
         sec_lines.push(dotenv::Line::Newline);
     }
     sec_lines.push(dotenv::Line::Newline);
-    sec_lines.push(dotenv::Line::Comment(
-        "# do not edit the line below, it is managed by dotsec".to_string(),
-    ));
+    sec_lines.push(dotenv::Line::Comment {
+        text: "# do not edit the line below, it is managed by dotsec".to_string(),
+    });
     sec_lines.push(dotenv::Line::Newline);
-    sec_lines.push(dotenv::Line::Kv(
-        "__DOTSEC_KEY__".to_string(),
-        new_wrapped_b64,
-        dotenv::QuoteType::Double,
-    ));
+    sec_lines.push(dotenv::Line::Kv {
+        key: "__DOTSEC_KEY__".to_string(),
+        value: new_wrapped_b64,
+        quote_type: dotenv::QuoteType::Double,
+    });
     sec_lines.push(dotenv::Line::Newline);
 
     let output = dotenv::lines_to_string(&sec_lines);

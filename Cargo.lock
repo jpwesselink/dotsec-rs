@@ -135,6 +135,7 @@ dependencies = [
  "hmac",
  "rand 0.8.5",
  "sha2",
+ "subtle",
  "thiserror",
  "zeroize",
 ]
@@ -833,10 +834,12 @@ dependencies = [
 name = "dotenv"
 version = "5.0.0"
 dependencies = [
+ "indexmap",
  "pest",
  "pest_derive",
  "regex",
  "serde_json",
+ "zeroize",
 ]
 
 [[package]]

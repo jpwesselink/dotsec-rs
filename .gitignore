@@ -28,3 +28,4 @@ meh.*
 settings.json
 *.swp
 *~
+.claude/

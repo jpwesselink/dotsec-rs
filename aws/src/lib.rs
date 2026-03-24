@@ -6,8 +6,9 @@ use aws_config::{meta::region::RegionProviderChain, BehaviorVersion};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
+use subtle::ConstantTimeEq;
 use thiserror::Error;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -53,7 +54,7 @@ pub async fn check_key_alias(
             let arn = resp
                 .key_metadata()
                 .and_then(|m| m.arn())
-                .unwrap_or_default()
+                .ok_or_else(|| DataStoreError::KmsError("key metadata missing ARN".into()))?
                 .to_string();
             Ok(Some(arn))
         }
@@ -105,10 +106,11 @@ pub async fn create_key_with_alias(
 
 /// Generate a new AES-256 data encryption key via KMS.
 /// Returns (plaintext_dek, wrapped_dek) where wrapped_dek is KMS-encrypted.
+/// The plaintext DEK is wrapped in `Zeroizing` for automatic zeroization on drop.
 pub async fn generate_data_key(
     key_id: &str,
     region: Option<&str>,
-) -> Result<(Vec<u8>, Vec<u8>), Box<dyn std::error::Error>> {
+) -> Result<(Zeroizing<Vec<u8>>, Vec<u8>), Box<dyn std::error::Error>> {
     let client = create_kms_client(region).await;
     let resp = client
         .generate_data_key()
@@ -130,14 +132,15 @@ pub async fn generate_data_key(
         .as_ref()
         .to_vec();
 
-    Ok((plaintext, wrapped))
+    Ok((Zeroizing::new(plaintext), wrapped))
 }
 
 /// Unwrap a KMS-encrypted data key back to plaintext.
+/// The plaintext DEK is wrapped in `Zeroizing` for automatic zeroization on drop.
 pub async fn unwrap_data_key(
     wrapped_dek: &[u8],
     region: Option<&str>,
-) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+) -> Result<Zeroizing<Vec<u8>>, Box<dyn std::error::Error>> {
     let client = create_kms_client(region).await;
     let resp = client
         .decrypt()
@@ -152,7 +155,7 @@ pub async fn unwrap_data_key(
         .as_ref()
         .to_vec();
 
-    Ok(plaintext)
+    Ok(Zeroizing::new(plaintext))
 }
 
 /// Compute a 32-byte key commitment: HMAC-SHA256(key=DEK, msg="dotsec-key-commit").
@@ -163,23 +166,35 @@ fn compute_key_commitment(dek: &[u8]) -> Vec<u8> {
     mac.finalize().into_bytes().to_vec()
 }
 
-/// Verify key commitment matches the DEK.
+/// Verify key commitment matches the DEK (constant-time comparison).
 fn verify_key_commitment(dek: &[u8], commitment: &[u8]) -> Result<(), DataStoreError> {
     let expected = compute_key_commitment(dek);
-    if expected.as_slice() != commitment {
+    if expected.len() != commitment.len() || expected.ct_eq(commitment).unwrap_u8() != 1 {
         return Err(DataStoreError::KeyCommitmentFailed);
     }
     Ok(())
 }
 
 /// Pad plaintext with random bytes so ciphertext length doesn't leak
-/// the original value length. Adds 0–1 extra 64-byte blocks randomly,
+/// the original value length. Adds 0-1 extra 64-byte blocks randomly,
 /// so the same plaintext can land in different length buckets across
 /// re-encryptions.
-fn pad(data: &[u8]) -> Vec<u8> {
+///
+/// Wire format: `[2-byte big-endian original length] [original data] [random padding to 64-byte boundary + 0-1 extra 64-byte blocks]`
+///
+/// Returns an error if data exceeds 65535 bytes (u16::MAX), since the
+/// length header is only 2 bytes.
+fn pad(data: &[u8]) -> Result<Vec<u8>, DataStoreError> {
     use rand::RngCore;
 
-    // Format: [2-byte big-endian original length] [original data] [random padding]
+    if data.len() > u16::MAX as usize {
+        return Err(DataStoreError::AesError(format!(
+            "value too large to pad: {} bytes exceeds maximum of {} bytes",
+            data.len(),
+            u16::MAX
+        )));
+    }
+
     let header_len = 2;
     let total = header_len + data.len();
     let base_padded = total.div_ceil(64) * 64;
@@ -193,7 +208,7 @@ fn pad(data: &[u8]) -> Vec<u8> {
     let len = data.len() as u16;
     buf[0..2].copy_from_slice(&len.to_be_bytes());
     buf[2..2 + data.len()].copy_from_slice(data);
-    buf
+    Ok(buf)
 }
 
 /// Remove padding and return the original plaintext bytes.
@@ -222,7 +237,7 @@ pub fn encrypt_value(plaintext: &str, dek: &[u8], aad: &str) -> Result<String, D
     let cipher =
         Aes256Gcm::new_from_slice(dek).map_err(|e| DataStoreError::AesError(e.to_string()))?;
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-    let mut padded = pad(plaintext.as_bytes());
+    let mut padded = pad(plaintext.as_bytes())?;
     let commitment = compute_key_commitment(dek);
 
     let payload = Payload {
@@ -477,5 +492,19 @@ mod tests {
         let a = compute_key_commitment(&[0x42u8; 32]);
         let b = compute_key_commitment(&[0x43u8; 32]);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn pad_rejects_oversized_input() {
+        let data = vec![0u8; 65536]; // u16::MAX + 1
+        let result = pad(&data);
+        assert!(result.is_err(), "pad should reject data larger than u16::MAX bytes");
+    }
+
+    #[test]
+    fn pad_accepts_max_size() {
+        let data = vec![0u8; 65535]; // exactly u16::MAX
+        let result = pad(&data);
+        assert!(result.is_ok(), "pad should accept data of exactly u16::MAX bytes");
     }
 }

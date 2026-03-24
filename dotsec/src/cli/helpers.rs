@@ -23,7 +23,8 @@ pub fn looks_like_secret(key: &str) -> bool {
 }
 
 /// Heuristic: guess the type index for a value.
-/// Returns 0 = string, 1 = number, 2 = boolean.
+/// Returns an index into the type_options vec: 0=string, 1=number, 2=boolean.
+/// Used as `with_starting_cursor` for the type selection prompt.
 pub fn guess_type(value: &str) -> usize {
     if value == "true" || value == "false" || value == "1" || value == "0" {
         return 2; // boolean
@@ -34,10 +35,11 @@ pub fn guess_type(value: &str) -> usize {
     0 // string
 }
 
-/// Truncate a string, appending "..." if it exceeds max length.
+/// Truncate a string, appending "..." if it exceeds max characters.
+/// Uses character count (not byte count) to avoid panicking on multi-byte UTF-8.
 pub fn truncate_value(value: &str, max: usize) -> String {
-    if value.len() > max {
-        format!("{}...", &value[..max])
+    if value.chars().count() > max {
+        format!("{}...", value.chars().take(max).collect::<String>())
     } else {
         value.to_string()
     }
@@ -48,17 +50,17 @@ pub fn build_config_directives(config: &dotenv::FileConfig, encrypt_all: bool) -
     let mut directives = Vec::new();
 
     if let Some(ref provider) = config.provider {
-        directives.push(dotenv::Line::Directive("provider".to_string(), Some(provider.clone())));
+        directives.push(dotenv::Line::Directive { name: "provider".to_string(), value: Some(provider.clone()) });
     }
     if let Some(ref key_id) = config.key_id {
-        directives.push(dotenv::Line::Directive("key-id".to_string(), Some(key_id.clone())));
+        directives.push(dotenv::Line::Directive { name: "key-id".to_string(), value: Some(key_id.clone()) });
     }
     if let Some(ref region) = config.region {
-        directives.push(dotenv::Line::Directive("region".to_string(), Some(region.clone())));
+        directives.push(dotenv::Line::Directive { name: "region".to_string(), value: Some(region.clone()) });
     }
 
     let default_directive = if encrypt_all { "default-encrypt" } else { "default-plaintext" };
-    directives.push(dotenv::Line::Directive(default_directive.to_string(), None));
+    directives.push(dotenv::Line::Directive { name: default_directive.to_string(), value: None });
 
     directives
 }
@@ -72,10 +74,10 @@ pub fn extract_schema_from_lines(lines: &[dotenv::Line]) -> (Vec<dotenv::Line>, 
 
     for line in lines {
         match line {
-            dotenv::Line::Directive(name, value) => {
+            dotenv::Line::Directive { name, value } => {
                 pending_all.push((line.clone(), name.clone(), value.clone()));
             }
-            dotenv::Line::Kv(k, v, qt) => {
+            dotenv::Line::Kv { key: k, value: v, quote_type: qt } => {
                 let mut schema_directives: Vec<(String, Option<String>)> = Vec::new();
 
                 for (orig_line, name, value) in &pending_all {
@@ -99,10 +101,10 @@ pub fn extract_schema_from_lines(lines: &[dotenv::Line]) -> (Vec<dotenv::Line>, 
                     });
                 }
 
-                output_lines.push(dotenv::Line::Kv(k.clone(), v.clone(), qt.clone()));
+                output_lines.push(dotenv::Line::Kv { key: k.clone(), value: v.clone(), quote_type: qt.clone() });
                 pending_all.clear();
             }
-            dotenv::Line::Comment(_) => {
+            dotenv::Line::Comment { .. } => {
                 // Comments break the directive chain — flush pending as-is
                 for (orig_line, _, _) in &pending_all {
                     output_lines.push(orig_line.clone());
@@ -244,7 +246,7 @@ pub fn prompt_variable_directives(
 
     if is_exception {
         let directive = if encrypt_all { "plaintext" } else { "encrypt" };
-        directives.push(dotenv::Line::Directive(directive.to_string(), None));
+        directives.push(dotenv::Line::Directive { name: directive.to_string(), value: None });
     }
 
     // Type? Default: source @type directive > value heuristic
@@ -267,10 +269,10 @@ pub fn prompt_variable_directives(
 
     match var_type {
         "string" | "number" | "boolean" => {
-            directives.push(dotenv::Line::Directive(
-                "type".to_string(),
-                Some(var_type.to_string()),
-            ));
+            directives.push(dotenv::Line::Directive {
+                name: "type".to_string(),
+                value: Some(var_type.to_string()),
+            });
         }
         "enum" => {
             // Pre-fill with source enum values if available
@@ -297,10 +299,10 @@ pub fn prompt_variable_directives(
                 .map(|v| format!("\"{}\"", v.trim()))
                 .collect::<Vec<_>>()
                 .join(", ");
-            directives.push(dotenv::Line::Directive(
-                "type".to_string(),
-                Some(format!("enum({})", formatted)),
-            ));
+            directives.push(dotenv::Line::Directive {
+                name: "type".to_string(),
+                value: Some(format!("enum({})", formatted)),
+            });
         }
         _ => {} // skip
     }
@@ -359,19 +361,19 @@ pub fn prompt_variable_directives(
             } else {
                 format!("aws-ssm(path=\"{}\")", path)
             };
-            directives.push(dotenv::Line::Directive("push".to_string(), Some(val)));
+            directives.push(dotenv::Line::Directive { name: "push".to_string(), value: Some(val) });
         }
         "aws-secrets-manager" => {
-            directives.push(dotenv::Line::Directive(
-                "push".to_string(),
-                Some("aws-secrets-manager".to_string()),
-            ));
+            directives.push(dotenv::Line::Directive {
+                name: "push".to_string(),
+                value: Some("aws-secrets-manager".to_string()),
+            });
         }
         "both" => {
-            directives.push(dotenv::Line::Directive(
-                "push".to_string(),
-                Some("aws-ssm, aws-secrets-manager".to_string()),
-            ));
+            directives.push(dotenv::Line::Directive {
+                name: "push".to_string(),
+                value: Some("aws-ssm, aws-secrets-manager".to_string()),
+            });
         }
         _ => {} // none
     }
@@ -456,6 +458,13 @@ mod tests {
         assert_eq!(truncate_value("hello world", 5), "hello...");
     }
 
+    #[test]
+    fn truncate_multibyte_utf8() {
+        // Should not panic on multi-byte characters like emoji
+        let result = truncate_value("hello \u{1F511} world", 7);
+        assert_eq!(result, "hello \u{1F511}...");
+    }
+
     // --- config_diffs ---
 
     #[test]
@@ -499,7 +508,7 @@ mod tests {
         };
         let directives = build_config_directives(&config, true);
         assert_eq!(directives.len(), 4);
-        assert!(matches!(&directives[3], Line::Directive(n, None) if n == "default-encrypt"));
+        assert!(matches!(&directives[3], Line::Directive { name: n, value: None } if n == "default-encrypt"));
     }
 
     #[test]
@@ -507,7 +516,7 @@ mod tests {
         let config = FileConfig::default();
         let directives = build_config_directives(&config, false);
         assert_eq!(directives.len(), 1);
-        assert!(matches!(&directives[0], Line::Directive(n, None) if n == "default-plaintext"));
+        assert!(matches!(&directives[0], Line::Directive { name: n, value: None } if n == "default-plaintext"));
     }
 
     #[test]
@@ -527,5 +536,92 @@ mod tests {
         assert_eq!(parsed_config.key_id.as_deref(), Some("alias/dotsec"));
         assert_eq!(parsed_config.region.as_deref(), Some("us-east-1"));
         assert_eq!(parsed_config.default_encrypt, Some(true));
+    }
+
+    // --- extract_schema_from_lines tests ---
+
+    #[test]
+    fn extract_schema_separates_directives() {
+        // Input: a .sec file with inline schema directives
+        let source = "# @type=string @format=url\nDB_URL=\"postgres://localhost\"\n\n# @type=number\nPORT=3000\n";
+        let lines = dotenv::parse_dotenv(source).unwrap();
+        let (stripped_lines, schema_entries) = extract_schema_from_lines(&lines);
+
+        // Schema entries should have 2 entries with correct directives
+        assert_eq!(schema_entries.len(), 2);
+        assert_eq!(schema_entries[0].key, "DB_URL");
+        assert!(schema_entries[0].directives.iter().any(|(n, _)| n == "type"));
+        assert!(schema_entries[0].directives.iter().any(|(n, _)| n == "format"));
+        assert_eq!(schema_entries[1].key, "PORT");
+        assert!(schema_entries[1].directives.iter().any(|(n, _)| n == "type"));
+
+        // Stripped lines should have Kv but no @type/@format directives
+        let directive_count = stripped_lines.iter().filter(|l| {
+            matches!(l, Line::Directive { name, .. } if name == "type" || name == "format")
+        }).count();
+        assert_eq!(directive_count, 0, "schema directives should be stripped");
+
+        // But the KV lines should still be present
+        let kv_count = stripped_lines.iter().filter(|l| matches!(l, Line::Kv { .. })).count();
+        assert_eq!(kv_count, 2, "KV lines should be preserved");
+    }
+
+    #[test]
+    fn extract_schema_preserves_file_level_directives() {
+        // Input has file-level @provider=aws and @default-encrypt plus a schema directive @type=string
+        let source = "# @provider=aws @default-encrypt\n\n# @type=string\nDB_URL=\"postgres://localhost\"\n";
+        let lines = dotenv::parse_dotenv(source).unwrap();
+        let (stripped_lines, schema_entries) = extract_schema_from_lines(&lines);
+
+        // @provider is an env directive (not a schema directive), so it stays in stripped_lines
+        let has_provider = stripped_lines.iter().any(|l| {
+            matches!(l, Line::Directive { name, .. } if name == "provider")
+        });
+        assert!(has_provider, "provider directive should stay in stripped lines");
+
+        // @default-encrypt is a SCHEMA_FILE_LEVEL_DIRECTIVE but it's also a file-level directive
+        // that stays in the .sec for runtime use (extract_schema only strips per-key schema directives)
+        let has_default_encrypt = stripped_lines.iter().any(|l| {
+            matches!(l, Line::Directive { name, .. } if name == "default-encrypt")
+        });
+        assert!(has_default_encrypt, "default-encrypt should stay in stripped lines");
+
+        // @type=string should be extracted into schema
+        assert_eq!(schema_entries.len(), 1);
+        assert!(schema_entries[0].directives.iter().any(|(n, _)| n == "type"));
+    }
+
+    #[test]
+    fn extract_schema_handles_no_directives() {
+        // Input has only bare key=value pairs
+        let source = "FOO=bar\nBAZ=qux\n";
+        let lines = dotenv::parse_dotenv(source).unwrap();
+        let (stripped_lines, schema_entries) = extract_schema_from_lines(&lines);
+
+        // stripped_lines should be the same as input (no directives to strip)
+        let kv_count = stripped_lines.iter().filter(|l| matches!(l, Line::Kv { .. })).count();
+        assert_eq!(kv_count, 2);
+
+        // schema_entries should have entries but with empty directives
+        assert_eq!(schema_entries.len(), 2);
+        assert!(schema_entries[0].directives.is_empty());
+        assert!(schema_entries[1].directives.is_empty());
+    }
+
+    #[test]
+    fn strip_schema_directives_matches_extract() {
+        let source = "# @type=string @format=url\nDB_URL=\"postgres://localhost\"\n\n# @type=number @min=0 @max=65535\nPORT=3000\n";
+        let lines = dotenv::parse_dotenv(source).unwrap();
+
+        let (extracted_stripped, _) = extract_schema_from_lines(&lines);
+        let stripped = strip_schema_directives(&lines);
+
+        // Both should produce identical stripped lines
+        assert_eq!(extracted_stripped.len(), stripped.len(),
+            "extracted stripped and strip_schema_directives should produce same length");
+        let extracted_str = dotenv::lines_to_string(&extracted_stripped);
+        let stripped_str = dotenv::lines_to_string(&stripped);
+        assert_eq!(extracted_str, stripped_str,
+            "both methods should produce identical output");
     }
 }

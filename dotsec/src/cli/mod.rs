@@ -17,7 +17,7 @@ const BANNER: &str = r#"       __      __
 async fn show_banner() {
     use chromakopia::{animate, presets};
 
-    // Print figlet with static dark_n_stormy gradient
+    // Print ASCII art banner with static dark_n_stormy gradient
     println!("{}", presets::dark_n_stormy().multiline(BANNER));
     println!();
 
@@ -62,7 +62,7 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
 
     // Resolve schema path from CLI arg or discovery
     let explicit_schema = matches.get_one::<String>("schema").map(|s| s.as_str());
-    let schema_path = dotenv::schema::discover_schema(sec_file, explicit_schema);
+    let schema_path = dotenv::schema::discover_schema(sec_file, explicit_schema)?;
     debug!("schema_path: {:?}", schema_path);
 
     // Read config from .sec file directives (if it exists)
