@@ -57,13 +57,14 @@ dotsec export -o .env      # decrypt .sec → .env file
 
 ## `dotsec show`
 
-Display decrypted `.sec` contents in various formats:
+Display decrypted `.sec` contents in various formats. Values are masked by default; use `--reveal` to show plaintext.
 
 ```bash
-dotsec show              # raw key=value
-dotsec show --json       # JSON object
-dotsec show --csv        # CSV format
-dotsec show --table      # formatted table
+dotsec show                              # raw key=value (masked)
+dotsec show --reveal                     # raw key=value (plaintext)
+dotsec show --output-format json         # JSON object
+dotsec show --output-format csv          # CSV format
+dotsec show --output-format text         # formatted text
 ```
 
 ## `dotsec run`

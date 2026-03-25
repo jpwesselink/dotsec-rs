@@ -19,7 +19,11 @@ impl From<dotenv::FileConfig> for EncryptionEngine {
                 key_id: config.key_id,
                 region: config.region,
             }),
-            _ => EncryptionEngine::None,
+            Some(unknown) => {
+                eprintln!("warning: unknown encryption provider '{}', expected 'aws'", unknown);
+                EncryptionEngine::None
+            }
+            None => EncryptionEngine::None,
         }
     }
 }

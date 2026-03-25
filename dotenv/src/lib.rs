@@ -8,8 +8,9 @@ pub mod types;
 #[grammar = "dotenv.pest"]
 struct DotenvLineParser;
 pub use types::{
-    DiffItem, Entry, FileConfig, FormatType, Line, PushTarget, QuoteType, Schema, SchemaEntry,
-    SecretsManagerOptions, Severity, SsmOptions, ValidationError, VarType,
+    DiffItem, DirectiveSource, Entry, FileConfig, FormatType, Line, PushTarget, QuoteType, Schema,
+    SchemaEntry, SecretsManagerOptions, Severity, SsmOptions, ValidationError, VarType,
+    validate_value_against_constraints,
     SCHEMA_DIRECTIVES, SCHEMA_FILE_LEVEL_DIRECTIVES, ENV_DIRECTIVES,
 };
 
@@ -22,7 +23,7 @@ pub fn lines_to_string(lines: &[Line]) -> String {
 
     for x in lines {
         match x {
-            Line::Directive(name, value) => {
+            Line::Directive { name, value } => {
                 if in_directive {
                     // Continue on same line
                     output.push(' ');
@@ -44,13 +45,13 @@ pub fn lines_to_string(lines: &[Line]) -> String {
             other => {
                 in_directive = false;
                 match other {
-                    Line::Comment(comment) => output.push_str(comment),
-                    Line::Whitespace(ws) => output.push_str(ws),
-                    Line::Kv(k, v, quote_type) => match quote_type {
-                        QuoteType::Single => output.push_str(&format!("{}='{}'", k, v)),
-                        QuoteType::Double => output.push_str(&format!("{}=\"{}\"", k, v)),
-                        QuoteType::Backtick => output.push_str(&format!("{}=`{}`", k, v)),
-                        QuoteType::None => output.push_str(&format!("{}={}", k, v)),
+                    Line::Comment { text } => output.push_str(text),
+                    Line::Whitespace { text } => output.push_str(text),
+                    Line::Kv { key, value, quote_type } => match quote_type {
+                        QuoteType::Single => output.push_str(&format!("{}='{}'", key, value)),
+                        QuoteType::Double => output.push_str(&format!("{}=\"{}\"", key, value)),
+                        QuoteType::Backtick => output.push_str(&format!("{}=`{}`", key, value)),
+                        QuoteType::None => output.push_str(&format!("{}={}", key, value)),
                     },
                     Line::Newline => output.push('\n'),
                     _ => {}
@@ -68,8 +69,8 @@ pub fn extract_file_config(lines: &[Line]) -> FileConfig {
 
     for line in lines {
         match line {
-            Line::Kv(_, _, _) => break, // stop at first variable
-            Line::Directive(name, value) => match name.as_str() {
+            Line::Kv { .. } => break, // stop at first variable
+            Line::Directive { name, value } => match name.as_str() {
                 "provider" => config.provider = value.clone(),
                 "key-id" => config.key_id = value.clone(),
                 "region" => config.region = value.clone(),
@@ -92,11 +93,11 @@ pub fn lines_to_entries(lines: &[Line]) -> Vec<Entry> {
     let mut default_encrypt: Option<bool> = None;
     for line in lines {
         match line {
-            Line::Directive(name, _) if name == "default-encrypt" => {
+            Line::Directive { name, .. } if name == "default-encrypt" => {
                 default_encrypt = Some(true);
                 break;
             }
-            Line::Directive(name, _) if name == "default-plaintext" => {
+            Line::Directive { name, .. } if name == "default-plaintext" => {
                 default_encrypt = Some(false);
                 break;
             }
@@ -109,14 +110,14 @@ pub fn lines_to_entries(lines: &[Line]) -> Vec<Entry> {
 
     for line in lines {
         match line {
-            Line::Directive(name, value) => {
+            Line::Directive { name, value } => {
                 // Skip file-level config directives from being attached to entries
                 if matches!(name.as_str(), "default-encrypt" | "default-plaintext" | "provider" | "key-id" | "region") {
                     continue;
                 }
                 pending_directives.push((name.clone(), value.clone()));
             }
-            Line::Kv(k, v, qt) => {
+            Line::Kv { key, value, quote_type } => {
                 let mut directives = std::mem::take(&mut pending_directives);
 
                 // Apply file-level default if entry has no explicit encrypt/plaintext
@@ -129,14 +130,14 @@ pub fn lines_to_entries(lines: &[Line]) -> Vec<Entry> {
 
                 entries.push(Entry {
                     directives,
-                    key: k.clone(),
-                    value: v.clone(),
-                    quote_type: qt.clone(),
+                    key: key.clone(),
+                    value: value.clone(),
+                    quote_type: quote_type.clone(),
                 });
             }
             // Newlines and whitespace between directives and their kv are fine, skip them.
             // Comments break the directive chain though.
-            Line::Comment(_) => {
+            Line::Comment { .. } => {
                 pending_directives.clear();
             }
             _ => {}
@@ -172,7 +173,7 @@ pub fn validate_entries_against_schema(
     let entry_keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
 
     // Check for missing keys (in schema but not in .sec)
-    for schema_entry in &schema.entries {
+    for (_key, schema_entry) in schema.iter() {
         if !entry_keys.contains(&schema_entry.key.as_str()) {
             if schema_entry.has_directive("optional") {
                 continue;
@@ -185,7 +186,7 @@ pub fn validate_entries_against_schema(
     }
 
     // Check for extra keys (in .sec but not in schema)
-    let schema_keys = schema.keys();
+    let schema_keys: Vec<&str> = schema.keys().collect();
     for entry in entries {
         if !schema_keys.contains(&entry.key.as_str()) {
             errors.push(ValidationError::warning(
@@ -208,101 +209,8 @@ pub fn validate_entries_against_schema(
                 }
             }
 
-            // Validate type from schema
-            if let Some(var_type) = schema_entry.var_type() {
-                entry.validate_value(&var_type, &entry.value, &mut errors);
-            }
-
-            // Validate format from schema
-            if let Some(format_type) = schema_entry.format_type() {
-                if let Some(msg) = format_type.validate(&entry.value) {
-                    errors.push(ValidationError::error(&entry.key, msg));
-                }
-            }
-
-            // Validate pattern from schema
-            if let Some(Some(pattern)) = schema_entry.get_directive("pattern") {
-                match regex::Regex::new(pattern) {
-                    Ok(re) => {
-                        if !re.is_match(&entry.value) {
-                            errors.push(ValidationError::error(
-                                &entry.key,
-                                format!("value \"{}\" does not match pattern \"{}\"", entry.value, pattern),
-                            ));
-                        }
-                    }
-                    Err(e) => {
-                        errors.push(ValidationError::error(
-                            &entry.key,
-                            format!("invalid regex pattern \"{}\": {}", pattern, e),
-                        ));
-                    }
-                }
-            }
-
-            // Validate min/max from schema (only with @type=number)
-            if let Some(var_type) = schema_entry.var_type() {
-                if var_type == VarType::Number {
-                    if let Ok(val) = entry.value.parse::<f64>() {
-                        if let Some(Some(min_str)) = schema_entry.get_directive("min") {
-                            if let Ok(min) = min_str.parse::<f64>() {
-                                if val < min {
-                                    errors.push(ValidationError::error(
-                                        &entry.key,
-                                        format!("value {} is less than minimum {}", val, min),
-                                    ));
-                                }
-                            }
-                        }
-                        if let Some(Some(max_str)) = schema_entry.get_directive("max") {
-                            if let Ok(max) = max_str.parse::<f64>() {
-                                if val > max {
-                                    errors.push(ValidationError::error(
-                                        &entry.key,
-                                        format!("value {} is greater than maximum {}", val, max),
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Validate min-length/max-length from schema
-            if let Some(Some(min_len_str)) = schema_entry.get_directive("min-length") {
-                if let Ok(min_len) = min_len_str.parse::<usize>() {
-                    if entry.value.len() < min_len {
-                        errors.push(ValidationError::error(
-                            &entry.key,
-                            format!("value length {} is less than minimum length {}", entry.value.len(), min_len),
-                        ));
-                    }
-                }
-            }
-            if let Some(Some(max_len_str)) = schema_entry.get_directive("max-length") {
-                if let Ok(max_len) = max_len_str.parse::<usize>() {
-                    if entry.value.len() > max_len {
-                        errors.push(ValidationError::error(
-                            &entry.key,
-                            format!("value length {} exceeds maximum length {}", entry.value.len(), max_len),
-                        ));
-                    }
-                }
-            }
-
-            // Validate not-empty from schema
-            if schema_entry.has_directive("not-empty") && entry.value.is_empty() {
-                errors.push(ValidationError::error(&entry.key, "value must not be empty"));
-            }
-
-            // Warn on deprecated from schema
-            if schema_entry.has_directive("deprecated") {
-                let msg = match schema_entry.get_directive("deprecated") {
-                    Some(Some(message)) => format!("deprecated: {}", message),
-                    _ => "deprecated".to_string(),
-                };
-                errors.push(ValidationError::warning(&entry.key, msg));
-            }
+            // Validate value against schema constraints
+            errors.extend(validate_value_against_constraints(&entry.key, &entry.value, schema_entry));
         }
     }
 
@@ -373,12 +281,11 @@ pub fn diff_entries(base: &[Entry], target: &[Entry]) -> Vec<DiffItem> {
 pub fn format_lines_by_schema(lines: &[Line], schema: &Schema) -> Vec<Line> {
     // 1. Separate file-level header (directives + whitespace before first KV or comment) from entries
     let mut header: Vec<Line> = Vec::new();
-    let mut found_first_kv = false;
 
     for line in lines {
         match line {
-            Line::Kv(_, _, _) => { found_first_kv = true; break; }
-            Line::Comment(_) => { break; } // comments belong to entries, not header
+            Line::Kv { .. } => { break; }
+            Line::Comment { .. } => { break; } // comments belong to entries, not header
             _ => { header.push(line.clone()); }
         }
     }
@@ -401,11 +308,11 @@ pub fn format_lines_by_schema(lines: &[Line], schema: &Schema) -> Vec<Line> {
         }
 
         match line {
-            Line::Kv(k, _, _) => {
+            Line::Kv { key, .. } => {
                 blocks.push(EntryBlock {
                     preceding: std::mem::take(&mut pending),
                     kv: line.clone(),
-                    key: k.clone(),
+                    key: key.clone(),
                 });
             }
             _ => {
@@ -434,7 +341,7 @@ pub fn format_lines_by_schema(lines: &[Line], schema: &Schema) -> Vec<Line> {
         }
     }
 
-    let schema_keys = schema.keys();
+    let schema_keys: Vec<&str> = schema.keys().collect();
     let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut first_entry = true;
 
@@ -498,8 +405,8 @@ pub fn is_encrypted_value(value: &str) -> bool {
 
 pub fn get_value(source: &[Line], key: &str) -> Option<String> {
     source.iter().find_map(|line| {
-        if let Line::Kv(k, v, _) = line {
-            if k == key { return Some(v.clone()); }
+        if let Line::Kv { key: k, value, .. } = line {
+            if k == key { return Some(value.clone()); }
         }
         None
     })
@@ -515,43 +422,43 @@ fn parse_directive(pair: Pair<Rule>) -> Vec<Line> {
             match typed.as_rule() {
                 Rule::flag_directive => {
                     let name = typed.into_inner().next().unwrap().as_str().to_string();
-                    output.push(Line::Directive(name, None));
+                    output.push(Line::Directive { name, value: None });
                 }
                 Rule::push_directive => {
                     let value = typed.as_str().strip_prefix("@push=").unwrap().to_string();
-                    output.push(Line::Directive("push".to_string(), Some(value)));
+                    output.push(Line::Directive { name: "push".to_string(), value: Some(value) });
                 }
                 Rule::type_directive => {
                     let value = typed.as_str().strip_prefix("@type=").unwrap().to_string();
-                    output.push(Line::Directive("type".to_string(), Some(value)));
+                    output.push(Line::Directive { name: "type".to_string(), value: Some(value) });
                 }
                 Rule::format_directive => {
                     let value = typed.as_str().strip_prefix("@format=").unwrap().to_string();
-                    output.push(Line::Directive("format".to_string(), Some(value)));
+                    output.push(Line::Directive { name: "format".to_string(), value: Some(value) });
                 }
                 Rule::numeric_directive => {
                     let mut inner = typed.into_inner();
                     let name = inner.next().unwrap().as_str().to_string();
                     let value = inner.next().unwrap().as_str().to_string();
-                    output.push(Line::Directive(name, Some(value)));
+                    output.push(Line::Directive { name, value: Some(value) });
                 }
                 Rule::pattern_directive => {
                     let value = typed.into_inner()
                         .find(|p| p.as_rule() == Rule::pattern_value)
                         .unwrap().as_str().to_string();
-                    output.push(Line::Directive("pattern".to_string(), Some(value)));
+                    output.push(Line::Directive { name: "pattern".to_string(), value: Some(value) });
                 }
                 Rule::deprecated_directive => {
                     let message = typed.into_inner()
                         .find(|p| p.as_rule() == Rule::deprecated_message)
                         .map(|p| p.as_str().to_string());
-                    output.push(Line::Directive("deprecated".to_string(), message));
+                    output.push(Line::Directive { name: "deprecated".to_string(), value: message });
                 }
                 Rule::text_directive => {
                     let mut inner = typed.into_inner();
                     let name = inner.next().unwrap().as_str().to_string();
                     let value = inner.next().unwrap().as_str().trim().to_string();
-                    output.push(Line::Directive(name, Some(value)));
+                    output.push(Line::Directive { name, value: Some(value) });
                 }
                 _ => {}
             }
@@ -571,17 +478,17 @@ pub fn parse_dotenv(source: &str) -> Result<Vec<Line>, Box<pest::error::Error<Ru
                 output.push(Line::Newline);
             }
             Rule::COMMENT => {
-                output.push(Line::Comment(pair.as_str().to_string()));
+                output.push(Line::Comment { text: pair.as_str().to_string() });
             }
             Rule::directive => {
                 output.extend(parse_directive(pair));
             }
             Rule::WHITESPACE => {
-                output.push(Line::Whitespace(pair.as_str().to_string()));
+                output.push(Line::Whitespace { text: pair.as_str().to_string() });
             }
             Rule::kv => {
                 if let Some((key, value, quote_type)) = parse_kv(pair) {
-                    output.push(Line::Kv(key, value, quote_type));
+                    output.push(Line::Kv { key, value, quote_type });
                 }
             }
             _ => {}
@@ -593,7 +500,7 @@ pub fn parse_dotenv(source: &str) -> Result<Vec<Line>, Box<pest::error::Error<Ru
 
 /// Parse a schema file source. Schema files have bare keys (no = value) with directives.
 pub fn parse_schema(source: &str) -> Result<Schema, Box<pest::error::Error<Rule>>> {
-    let mut entries = Vec::new();
+    let mut entries = indexmap::IndexMap::new();
     let mut pending_directives: Vec<(String, Option<String>)> = Vec::new();
 
     let pairs = DotenvLineParser::parse(Rule::schema, source)?;
@@ -601,7 +508,7 @@ pub fn parse_schema(source: &str) -> Result<Schema, Box<pest::error::Error<Rule>
         match pair.as_rule() {
             Rule::directive => {
                 for line in parse_directive(pair) {
-                    if let Line::Directive(name, value) = line {
+                    if let Line::Directive { name, value } = line {
                         pending_directives.push((name, value));
                     }
                 }
@@ -609,7 +516,8 @@ pub fn parse_schema(source: &str) -> Result<Schema, Box<pest::error::Error<Rule>
             Rule::schema_key => {
                 let key = pair.into_inner().next().unwrap().as_str().to_string();
                 let directives = std::mem::take(&mut pending_directives);
-                entries.push(SchemaEntry { directives, key });
+                let entry = SchemaEntry { directives, key: key.clone() };
+                entries.insert(key, entry);
             }
             Rule::COMMENT => {
                 pending_directives.clear();
@@ -618,7 +526,7 @@ pub fn parse_schema(source: &str) -> Result<Schema, Box<pest::error::Error<Rule>
         }
     }
 
-    Ok(Schema { entries })
+    Ok(Schema::new(entries))
 }
 
 /// Serialize a schema back to file format.
@@ -626,7 +534,7 @@ pub fn schema_to_string(schema: &Schema) -> String {
     let mut output = String::new();
     let mut first = true;
 
-    for entry in &schema.entries {
+    for (_key, entry) in schema.iter() {
         if !first && !entry.directives.is_empty() {
             output.push('\n');
         }
@@ -664,7 +572,7 @@ pub fn schema_to_json_schema(schema: &Schema) -> serde_json::Value {
     let mut properties = serde_json::Map::new();
     let mut required = Vec::new();
 
-    for entry in &schema.entries {
+    for (_key, entry) in schema.iter() {
         let mut prop = serde_json::Map::new();
 
         // Type
@@ -770,7 +678,7 @@ pub fn schema_to_typescript(schema: &Schema) -> String {
 
     // --- Interface ---
     out.push_str("export interface Env {\n");
-    for entry in &schema.entries {
+    for (_key, entry) in schema.iter() {
         let ts_type = match entry.var_type() {
             Some(VarType::String) | None => "string".to_string(),
             Some(VarType::Number) => "number".to_string(),
@@ -807,7 +715,7 @@ pub fn schema_to_typescript(schema: &Schema) -> String {
     out.push_str("  const errors: string[] = []\n\n");
 
     // Required checks
-    let required_entries: Vec<&SchemaEntry> = schema.entries.iter().filter(|e| e.is_required()).collect();
+    let required_entries: Vec<&SchemaEntry> = schema.iter().map(|(_, e)| e).filter(|e| e.is_required()).collect();
     if !required_entries.is_empty() {
         for entry in &required_entries {
             out.push_str(&format!(
@@ -819,7 +727,7 @@ pub fn schema_to_typescript(schema: &Schema) -> String {
     }
 
     // Validation checks
-    for entry in &schema.entries {
+    for (_key, entry) in schema.iter() {
         let key = &entry.key;
         let mut checks = Vec::new();
 
@@ -951,7 +859,7 @@ pub fn schema_to_typescript(schema: &Schema) -> String {
 
     // Return object
     out.push_str("  return {\n");
-    for entry in &schema.entries {
+    for (_key, entry) in schema.iter() {
         let key = &entry.key;
         let is_optional = entry.is_optional();
 
@@ -1071,8 +979,8 @@ pub fn lines_to_json(lines: &[Line]) -> Result<String, serde_json::Error> {
     let output: Vec<HashMap<String, String>> = lines
         .iter()
         .filter_map(|line| {
-            if let Line::Kv(k, v, _) = line {
-                Some(HashMap::from([(k.clone(), v.clone())]))
+            if let Line::Kv { key, value, .. } = line {
+                Some(HashMap::from([(key.clone(), value.clone())]))
             } else {
                 None
             }
@@ -1084,8 +992,8 @@ pub fn lines_to_json(lines: &[Line]) -> Result<String, serde_json::Error> {
 pub fn lines_to_csv(lines: &[Line]) -> Result<String, Box<dyn std::error::Error>> {
     let mut output = String::from("name,value\n");
     for line in lines {
-        if let Line::Kv(k, v, _) = line {
-            output.push_str(&format!("{}\t{}\n", k, v));
+        if let Line::Kv { key, value, .. } = line {
+            output.push_str(&format!("{}\t{}\n", key, value));
         }
     }
     Ok(output)
@@ -1104,57 +1012,57 @@ mod tests {
     #[test]
     fn simple_kv() {
         let lines = parse_dotenv("FOO=bar\n").unwrap();
-        assert!(matches!(&lines[0], Line::Kv(k, v, QuoteType::None) if k == "FOO" && v == "bar"));
+        assert!(matches!(&lines[0], Line::Kv { key, value, quote_type: QuoteType::None } if key == "FOO" && value == "bar"));
     }
 
     #[test]
     fn hyphenated_key() {
         let lines = parse_dotenv("cliff-is=\"something\"\n").unwrap();
-        assert!(matches!(&lines[0], Line::Kv(k, v, QuoteType::Double) if k == "cliff-is" && v == "something"));
+        assert!(matches!(&lines[0], Line::Kv { key, value, quote_type: QuoteType::Double } if key == "cliff-is" && value == "something"));
     }
 
     #[test]
     fn dotted_key() {
         let lines = parse_dotenv("spring.datasource.url=jdbc:foo\n").unwrap();
-        assert!(matches!(&lines[0], Line::Kv(k, _, QuoteType::None) if k == "spring.datasource.url"));
+        assert!(matches!(&lines[0], Line::Kv { key, quote_type: QuoteType::None, .. } if key == "spring.datasource.url"));
     }
 
     #[test]
     fn quoted_values() {
         let lines = parse_dotenv("A=\"hello\"\nB='world'\n").unwrap();
-        assert!(matches!(&lines[0], Line::Kv(_, v, QuoteType::Double) if v == "hello"));
-        assert!(matches!(&lines[2], Line::Kv(_, v, QuoteType::Single) if v == "world"));
+        assert!(matches!(&lines[0], Line::Kv { value, quote_type: QuoteType::Double, .. } if value == "hello"));
+        assert!(matches!(&lines[2], Line::Kv { value, quote_type: QuoteType::Single, .. } if value == "world"));
     }
 
     #[test]
     fn regular_comment_preserved() {
         let lines = parse_dotenv("# just a comment\nFOO=bar\n").unwrap();
-        assert!(matches!(&lines[0], Line::Comment(c) if c.contains("just a comment")));
+        assert!(matches!(&lines[0], Line::Comment { text } if text.contains("just a comment")));
     }
 
     #[test]
     fn directive_no_value() {
         let lines = parse_dotenv("# @encrypt\nFOO=bar\n").unwrap();
-        assert!(matches!(&lines[0], Line::Directive(name, None) if name == "encrypt"));
-        assert!(matches!(&lines[2], Line::Kv(k, _, _) if k == "FOO"));
+        assert!(matches!(&lines[0], Line::Directive { name, value: None } if name == "encrypt"));
+        assert!(matches!(&lines[2], Line::Kv { key, .. } if key == "FOO"));
     }
 
     #[test]
     fn directive_with_value() {
         let lines = parse_dotenv("# @push=aws-ssm\nFOO=bar\n").unwrap();
-        assert!(matches!(&lines[0], Line::Directive(name, Some(val)) if name == "push" && val == "aws-ssm"));
+        assert!(matches!(&lines[0], Line::Directive { name, value: Some(val) } if name == "push" && val == "aws-ssm"));
     }
 
     #[test]
     fn directive_with_complex_value() {
         let lines = parse_dotenv("# @type=enum(\"development\", \"preview\", \"production\")\nFOO=bar\n").unwrap();
-        assert!(matches!(&lines[0], Line::Directive(name, Some(val)) if name == "type" && val == "enum(\"development\", \"preview\", \"production\")"));
+        assert!(matches!(&lines[0], Line::Directive { name, value: Some(val) } if name == "type" && val == "enum(\"development\", \"preview\", \"production\")"));
     }
 
     #[test]
     fn directive_with_comma_list() {
         let lines = parse_dotenv("# @push=aws-ssm, aws-secrets-manager\nFOO=bar\n").unwrap();
-        assert!(matches!(&lines[0], Line::Directive(name, Some(val)) if name == "push" && val == "aws-ssm, aws-secrets-manager"));
+        assert!(matches!(&lines[0], Line::Directive { name, value: Some(val) } if name == "push" && val == "aws-ssm, aws-secrets-manager"));
     }
 
     #[test]
@@ -1165,9 +1073,9 @@ mod tests {
     #[test]
     fn multiple_directives_before_kv() {
         let lines = parse_dotenv("# @encrypt\n# @push=aws-ssm\nFOO=bar\n").unwrap();
-        assert!(matches!(&lines[0], Line::Directive(name, None) if name == "encrypt"));
-        assert!(matches!(&lines[2], Line::Directive(name, Some(val)) if name == "push" && val == "aws-ssm"));
-        assert!(matches!(&lines[4], Line::Kv(k, _, _) if k == "FOO"));
+        assert!(matches!(&lines[0], Line::Directive { name, value: None } if name == "encrypt"));
+        assert!(matches!(&lines[2], Line::Directive { name, value: Some(val) } if name == "push" && val == "aws-ssm"));
+        assert!(matches!(&lines[4], Line::Kv { key, .. } if key == "FOO"));
     }
 
     #[test]
@@ -1175,9 +1083,9 @@ mod tests {
         let source = "# Regular comment\n# @encrypt\n# @push=aws-ssm\nDB_URL=\"postgres://localhost\"\n\n# no directives\nDEBUG=true\n";
         let lines = parse_dotenv(source).unwrap();
 
-        let directives: Vec<_> = lines.iter().filter(|l| matches!(l, Line::Directive(_, _))).collect();
-        let comments: Vec<_> = lines.iter().filter(|l| matches!(l, Line::Comment(_))).collect();
-        let kvs: Vec<_> = lines.iter().filter(|l| matches!(l, Line::Kv(_, _, _))).collect();
+        let directives: Vec<_> = lines.iter().filter(|l| matches!(l, Line::Directive { .. })).collect();
+        let comments: Vec<_> = lines.iter().filter(|l| matches!(l, Line::Comment { .. })).collect();
+        let kvs: Vec<_> = lines.iter().filter(|l| matches!(l, Line::Kv { .. })).collect();
 
         assert_eq!(directives.len(), 2);
         assert_eq!(comments.len(), 2);
@@ -1500,7 +1408,7 @@ mod tests {
     fn parse_format_directive() {
         let source = "# @format=email\nFOO=\"test@example.com\"\n";
         let lines = parse_dotenv(source).unwrap();
-        assert!(matches!(&lines[0], Line::Directive(name, Some(val)) if name == "format" && val == "email"));
+        assert!(matches!(&lines[0], Line::Directive { name, value: Some(val) } if name == "format" && val == "email"));
     }
 
     #[test]
@@ -1532,35 +1440,35 @@ mod tests {
     fn parse_pattern_directive() {
         let source = "# @pattern=\"^https?://\"\nURL=\"https://example.com\"\n";
         let lines = parse_dotenv(source).unwrap();
-        assert!(matches!(&lines[0], Line::Directive(name, Some(val)) if name == "pattern" && val == "^https?://"));
+        assert!(matches!(&lines[0], Line::Directive { name, value: Some(val) } if name == "pattern" && val == "^https?://"));
     }
 
     #[test]
     fn parse_deprecated_no_message() {
         let source = "# @deprecated\nOLD_KEY=\"value\"\n";
         let lines = parse_dotenv(source).unwrap();
-        assert!(matches!(&lines[0], Line::Directive(name, None) if name == "deprecated"));
+        assert!(matches!(&lines[0], Line::Directive { name, value: None } if name == "deprecated"));
     }
 
     #[test]
     fn parse_deprecated_with_message() {
         let source = "# @deprecated=\"Use NEW_KEY instead\"\nOLD_KEY=\"value\"\n";
         let lines = parse_dotenv(source).unwrap();
-        assert!(matches!(&lines[0], Line::Directive(name, Some(val)) if name == "deprecated" && val == "Use NEW_KEY instead"));
+        assert!(matches!(&lines[0], Line::Directive { name, value: Some(val) } if name == "deprecated" && val == "Use NEW_KEY instead"));
     }
 
     #[test]
     fn parse_optional_directive() {
         let source = "# @optional\nSENTRY_DSN=\"https://sentry.io\"\n";
         let lines = parse_dotenv(source).unwrap();
-        assert!(matches!(&lines[0], Line::Directive(name, None) if name == "optional"));
+        assert!(matches!(&lines[0], Line::Directive { name, value: None } if name == "optional"));
     }
 
     #[test]
     fn parse_not_empty_directive() {
         let source = "# @not-empty\nNAME=\"foo\"\n";
         let lines = parse_dotenv(source).unwrap();
-        assert!(matches!(&lines[0], Line::Directive(name, None) if name == "not-empty"));
+        assert!(matches!(&lines[0], Line::Directive { name, value: None } if name == "not-empty"));
     }
 
     // --- New directive validation tests ---
@@ -1786,17 +1694,18 @@ mod tests {
     fn parse_schema_simple() {
         let source = "# @type=string\nDATABASE_URL\n\n# @type=number\nPORT\n";
         let schema = parse_schema(source).unwrap();
-        assert_eq!(schema.entries.len(), 2);
-        assert_eq!(schema.entries[0].key, "DATABASE_URL");
-        assert_eq!(schema.entries[1].key, "PORT");
-        assert!(schema.entries[0].has_directive("type"));
+        assert_eq!(schema.len(), 2);
+        let keys: Vec<&str> = schema.keys().collect();
+        assert_eq!(keys[0], "DATABASE_URL");
+        assert_eq!(keys[1], "PORT");
+        assert!(schema.get("DATABASE_URL").unwrap().has_directive("type"));
     }
 
     #[test]
     fn parse_schema_with_all_directives() {
         let source = "# @default-encrypt\n\n# @type=string @push=aws-ssm @not-empty\nDATABASE_URL\n\n# @type=number @min=0 @max=65535\nPORT\n\n# @type=enum(\"development\", \"production\")\nNODE_ENV\n\n# @optional @format=url\nSENTRY_DSN\n";
         let schema = parse_schema(source).unwrap();
-        assert_eq!(schema.entries.len(), 4);
+        assert_eq!(schema.len(), 4);
         assert_eq!(schema.get("PORT").unwrap().key, "PORT");
         assert!(schema.get("SENTRY_DSN").unwrap().has_directive("optional"));
     }
@@ -1807,8 +1716,9 @@ mod tests {
         let schema = parse_schema(source).unwrap();
         let output = schema_to_string(&schema);
         let reparsed = parse_schema(&output).unwrap();
-        assert_eq!(reparsed.entries.len(), schema.entries.len());
-        for (a, b) in schema.entries.iter().zip(reparsed.entries.iter()) {
+        assert_eq!(reparsed.len(), schema.len());
+        for ((ak, a), (bk, b)) in schema.iter().zip(reparsed.iter()) {
+            assert_eq!(ak, bk);
             assert_eq!(a.key, b.key);
             assert_eq!(a.directives, b.directives);
         }
@@ -2349,5 +2259,350 @@ mod tests {
         let bar_pos = output.find("BAR=").unwrap();
         assert!(key_pos > bar_pos, "__DOTSEC_KEY__ should be after BAR");
         assert!(output.contains("do not edit"), "managed comment should be preserved");
+    }
+
+    #[test]
+    fn format_basic_reordering() {
+        // Schema defines KEY_B then KEY_A; input has KEY_A then KEY_B
+        let schema = parse_schema("KEY_B\nKEY_A\n").unwrap();
+        let lines = parse_dotenv("KEY_A=\"alpha\"\nKEY_B=\"beta\"\n").unwrap();
+        let formatted = format_lines_by_schema(&lines, &schema);
+        let output = lines_to_string(&formatted);
+        let b_pos = output.find("KEY_B=").unwrap();
+        let a_pos = output.find("KEY_A=").unwrap();
+        assert!(b_pos < a_pos, "KEY_B should come before KEY_A after reordering");
+    }
+
+    #[test]
+    fn format_dotsec_key_always_at_end() {
+        // Even if __DOTSEC_KEY__ appears first in input, it should end up last
+        let schema = parse_schema("ALPHA\nBETA\n").unwrap();
+        let lines = parse_dotenv("__DOTSEC_KEY__=\"wrapped_dek\"\nALPHA=\"a\"\nBETA=\"b\"\n").unwrap();
+        let formatted = format_lines_by_schema(&lines, &schema);
+        let output = lines_to_string(&formatted);
+        let key_pos = output.find("__DOTSEC_KEY__=").unwrap();
+        let alpha_pos = output.find("ALPHA=").unwrap();
+        let beta_pos = output.find("BETA=").unwrap();
+        assert!(key_pos > alpha_pos, "__DOTSEC_KEY__ should come after ALPHA");
+        assert!(key_pos > beta_pos, "__DOTSEC_KEY__ should come after BETA");
+    }
+
+    #[test]
+    fn format_extra_keys_appended_at_end() {
+        // Schema only knows about FOO; BAR and BAZ are extras
+        let schema = parse_schema("FOO\n").unwrap();
+        let lines = parse_dotenv("BAR=\"extra1\"\nFOO=\"known\"\nBAZ=\"extra2\"\n").unwrap();
+        let formatted = format_lines_by_schema(&lines, &schema);
+        let output = lines_to_string(&formatted);
+        let foo_pos = output.find("FOO=").unwrap();
+        let bar_pos = output.find("BAR=").unwrap();
+        let baz_pos = output.find("BAZ=").unwrap();
+        assert!(foo_pos < bar_pos, "FOO (in schema) should come before BAR (extra)");
+        assert!(foo_pos < baz_pos, "FOO (in schema) should come before BAZ (extra)");
+    }
+
+    #[test]
+    fn format_header_directives_preserved_at_top() {
+        // File-level directives (before any KV or comment) stay at top
+        let schema = parse_schema("FOO\n").unwrap();
+        // A whitespace-only line before the first comment/KV is a header element
+        let lines = vec![
+            Line::Whitespace { text: "  ".to_string() },
+            Line::Newline,
+            Line::Comment { text: "# a comment".to_string() },
+            Line::Newline,
+            Line::Kv { key: "FOO".to_string(), value: "bar".to_string(), quote_type: QuoteType::Double },
+            Line::Newline,
+        ];
+        let formatted = format_lines_by_schema(&lines, &schema);
+        // The whitespace header lines should appear before FOO
+        assert!(matches!(&formatted[0], Line::Whitespace { text: w } if w == "  "));
+    }
+
+    #[test]
+    fn format_orphaned_trailing_lines_preserved() {
+        let schema = parse_schema("FOO\n").unwrap();
+        let lines = parse_dotenv("FOO=\"1\"\n\n# orphaned trailing comment\n").unwrap();
+        let formatted = format_lines_by_schema(&lines, &schema);
+        let output = lines_to_string(&formatted);
+        assert!(output.contains("# orphaned trailing comment"), "orphaned trailing comment should be preserved");
+    }
+
+    #[test]
+    fn format_empty_schema() {
+        // Empty schema: all keys become extras, order preserved
+        let schema = Schema::default();
+        let lines = parse_dotenv("A=\"1\"\nB=\"2\"\n").unwrap();
+        let formatted = format_lines_by_schema(&lines, &schema);
+        let output = lines_to_string(&formatted);
+        assert!(output.contains("A="));
+        assert!(output.contains("B="));
+    }
+
+    #[test]
+    fn format_empty_lines_input() {
+        let schema = parse_schema("FOO\n").unwrap();
+        let lines: Vec<Line> = vec![];
+        let formatted = format_lines_by_schema(&lines, &schema);
+        assert!(formatted.is_empty());
+    }
+
+    // --- Schema IndexMap uniqueness ---
+
+    #[test]
+    fn schema_duplicate_key_replaced() {
+        let src = "# @type=string\nFOO\n\n# @type=number\nFOO\n";
+        let schema = parse_schema(src).unwrap();
+        assert_eq!(schema.len(), 1);
+        let entry = schema.get("FOO").unwrap();
+        assert_eq!(entry.var_type(), Some(VarType::Number));
+    }
+
+    #[test]
+    fn schema_insert_replaces_existing() {
+        let mut schema = parse_schema("# @type=string\nFOO\n").unwrap();
+        assert_eq!(schema.get("FOO").unwrap().var_type(), Some(VarType::String));
+        schema.insert(SchemaEntry {
+            directives: vec![("type".into(), Some("number".into()))],
+            key: "FOO".into(),
+        });
+        assert_eq!(schema.len(), 1);
+        assert_eq!(schema.get("FOO").unwrap().var_type(), Some(VarType::Number));
+    }
+
+    #[test]
+    fn schema_preserves_insertion_order() {
+        let src = "A\nB\nC\n";
+        let schema = parse_schema(src).unwrap();
+        let keys: Vec<&str> = schema.keys().collect();
+        assert_eq!(keys, vec!["A", "B", "C"]);
+    }
+
+    // --- Inline vs schema validation integration tests ---
+
+    #[test]
+    fn inline_and_schema_validation_produce_same_errors() {
+        // Inline: @type=number @min=0 @max=100 with value 999 (exceeds max)
+        let inline_src = "# @type=number @min=0 @max=100\nPORT=999\n";
+        let inline_lines = parse_dotenv(inline_src).unwrap();
+        let inline_entries = lines_to_entries(&inline_lines);
+        let inline_errors: Vec<_> = validate_entries(&inline_entries)
+            .into_iter()
+            .filter(|e| e.severity == Severity::Error)
+            .collect();
+
+        // Schema: same directives on bare key
+        let schema_src = "# @type=number @min=0 @max=100\nPORT\n";
+        let schema = parse_schema(schema_src).unwrap();
+        let sec_src = "PORT=999\n";
+        let sec_lines = parse_dotenv(sec_src).unwrap();
+        let sec_entries = lines_to_entries(&sec_lines);
+        let schema_errors: Vec<_> = validate_entries_against_schema(&sec_entries, &schema)
+            .into_iter()
+            .filter(|e| e.severity == Severity::Error)
+            .collect();
+
+        // Both should produce the same number of errors with the same key
+        assert!(!inline_errors.is_empty(), "inline should produce errors");
+        assert!(!schema_errors.is_empty(), "schema should produce errors");
+        assert_eq!(inline_errors.len(), schema_errors.len());
+        assert_eq!(inline_errors[0].key, schema_errors[0].key);
+        assert!(inline_errors[0].message.contains("greater than maximum"));
+        assert!(schema_errors[0].message.contains("greater than maximum"));
+    }
+
+    #[test]
+    fn inline_and_schema_validation_both_pass_valid() {
+        // Inline: @type=number @min=0 @max=100 with valid value 50
+        let inline_src = "# @type=number @min=0 @max=100\nPORT=50\n";
+        let inline_lines = parse_dotenv(inline_src).unwrap();
+        let inline_entries = lines_to_entries(&inline_lines);
+        let inline_errors: Vec<_> = validate_entries(&inline_entries)
+            .into_iter()
+            .filter(|e| e.severity == Severity::Error)
+            .collect();
+
+        // Schema: same directives
+        let schema_src = "# @type=number @min=0 @max=100\nPORT\n";
+        let schema = parse_schema(schema_src).unwrap();
+        let sec_src = "PORT=50\n";
+        let sec_lines = parse_dotenv(sec_src).unwrap();
+        let sec_entries = lines_to_entries(&sec_lines);
+        let schema_errors: Vec<_> = validate_entries_against_schema(&sec_entries, &schema)
+            .into_iter()
+            .filter(|e| e.severity == Severity::Error)
+            .collect();
+
+        assert!(inline_errors.is_empty(), "inline should pass: {:?}", inline_errors);
+        assert!(schema_errors.is_empty(), "schema should pass: {:?}", schema_errors);
+    }
+
+    #[test]
+    fn schema_catches_missing_required_keys() {
+        let schema_src = "# @type=string\nFOO\n\n# @type=string\nBAR\n\n# @type=string\nBAZ\n";
+        let schema = parse_schema(schema_src).unwrap();
+        // .sec only has FOO and BAR
+        let sec_src = "FOO=\"hello\"\nBAR=\"world\"\n";
+        let sec_lines = parse_dotenv(sec_src).unwrap();
+        let sec_entries = lines_to_entries(&sec_lines);
+        let errors = validate_entries_against_schema(&sec_entries, &schema);
+        let missing: Vec<_> = errors.iter()
+            .filter(|e| e.key == "BAZ" && e.severity == Severity::Error)
+            .collect();
+        assert_eq!(missing.len(), 1);
+        assert!(missing[0].message.contains("required by schema but missing"));
+    }
+
+    #[test]
+    fn schema_warns_on_extra_keys() {
+        let schema_src = "# @type=string\nFOO\n";
+        let schema = parse_schema(schema_src).unwrap();
+        // .sec has FOO and BAR (BAR not in schema)
+        let sec_src = "FOO=\"hello\"\nBAR=\"extra\"\n";
+        let sec_lines = parse_dotenv(sec_src).unwrap();
+        let sec_entries = lines_to_entries(&sec_lines);
+        let errors = validate_entries_against_schema(&sec_entries, &schema);
+        let extra: Vec<_> = errors.iter()
+            .filter(|e| e.key == "BAR" && e.severity == Severity::Warning)
+            .collect();
+        assert_eq!(extra.len(), 1);
+        assert!(extra[0].message.contains("not defined in schema"));
+    }
+
+    #[test]
+    fn schema_warns_on_inline_directives_when_schema_exists() {
+        // Schema defines @type=number for PORT
+        let schema_src = "# @type=number\nPORT\n";
+        let schema = parse_schema(schema_src).unwrap();
+        // .sec has inline @type=string AND PORT=3000
+        let sec_src = "# @type=string\nPORT=3000\n";
+        let sec_lines = parse_dotenv(sec_src).unwrap();
+        let sec_entries = lines_to_entries(&sec_lines);
+        let errors = validate_entries_against_schema(&sec_entries, &schema);
+
+        // Should warn about inline directive being ignored
+        let inline_warnings: Vec<_> = errors.iter()
+            .filter(|e| e.key == "PORT" && e.message.contains("inline @type directive ignored"))
+            .collect();
+        assert_eq!(inline_warnings.len(), 1);
+
+        // Should validate as number (from schema), not string
+        // PORT=3000 is valid as a number, so no type error
+        let type_errors: Vec<_> = errors.iter()
+            .filter(|e| e.key == "PORT" && e.severity == Severity::Error)
+            .collect();
+        assert!(type_errors.is_empty(), "3000 is valid as number; got: {:?}", type_errors);
+    }
+
+    #[test]
+    fn schema_optional_key_not_reported_missing() {
+        let schema_src = "# @optional\nSENTRY_DSN\n\n# @type=number\nPORT\n";
+        let schema = parse_schema(schema_src).unwrap();
+        // .sec only has PORT, missing SENTRY_DSN
+        let sec_src = "PORT=3000\n";
+        let sec_lines = parse_dotenv(sec_src).unwrap();
+        let sec_entries = lines_to_entries(&sec_lines);
+        let errors = validate_entries_against_schema(&sec_entries, &schema);
+        // SENTRY_DSN should NOT be reported as missing
+        let sentry_errors: Vec<_> = errors.iter()
+            .filter(|e| e.key == "SENTRY_DSN" && e.severity == Severity::Error)
+            .collect();
+        assert!(sentry_errors.is_empty(), "optional key should not be an error: {:?}", sentry_errors);
+    }
+
+    #[test]
+    fn format_then_validate_roundtrip() {
+        // Schema defines keys in order: C, B, A
+        let schema_src = "# @type=number\nC\n\n# @type=number\nB\n\n# @type=number\nA\n";
+        let schema = parse_schema(schema_src).unwrap();
+        // .sec has keys A=1, B=2, C=3 (different order)
+        let sec_src = "A=1\nB=2\nC=3\n";
+        let sec_lines = parse_dotenv(sec_src).unwrap();
+
+        // Format lines by schema order
+        let formatted = format_lines_by_schema(&sec_lines, &schema);
+        let formatted_str = lines_to_string(&formatted);
+
+        // Verify reordering: C should come before B, B before A
+        let c_pos = formatted_str.find("C=").unwrap();
+        let b_pos = formatted_str.find("B=").unwrap();
+        let a_pos = formatted_str.find("A=").unwrap();
+        assert!(c_pos < b_pos, "C should come before B");
+        assert!(b_pos < a_pos, "B should come before A");
+
+        // Re-parse and validate -- should still pass
+        let reparsed = parse_dotenv(&formatted_str).unwrap();
+        let entries = lines_to_entries(&reparsed);
+        let errors: Vec<_> = validate_entries_against_schema(&entries, &schema)
+            .into_iter()
+            .filter(|e| e.severity == Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "roundtrip should still validate: {:?}", errors);
+    }
+
+    #[test]
+    fn schema_to_json_schema_number_with_min_max() {
+        // Create schema with @type=number @min=0 @max=100
+        let schema_src = "# @type=number @min=0 @max=100\nPORT\n";
+        let schema = parse_schema(schema_src).unwrap();
+        let js = schema_to_json_schema(&schema);
+
+        assert_eq!(js["properties"]["PORT"]["type"], "number");
+        assert_eq!(js["properties"]["PORT"]["minimum"], 0);
+        assert_eq!(js["properties"]["PORT"]["maximum"], 100);
+    }
+
+    #[test]
+    fn schema_to_typescript_produces_valid_types() {
+        let schema_src = concat!(
+            "# @type=string\nSTR_VAR\n\n",
+            "# @type=number\nNUM_VAR\n\n",
+            "# @type=boolean\nBOOL_VAR\n\n",
+            "# @type=enum(\"a\", \"b\")\nENUM_VAR\n",
+        );
+        let schema = parse_schema(schema_src).unwrap();
+        let ts = schema_to_typescript(&schema);
+
+        assert!(ts.contains("STR_VAR: string"), "should have string type");
+        assert!(ts.contains("NUM_VAR: number"), "should have number type");
+        assert!(ts.contains("BOOL_VAR: boolean"), "should have boolean type");
+        assert!(ts.contains("ENUM_VAR: \"a\" | \"b\""), "should have enum union type");
+    }
+
+    // --- validate_value_against_constraints tests ---
+
+    #[test]
+    fn validate_value_against_constraints_rejects_value() {
+        let schema_entry = SchemaEntry {
+            directives: vec![
+                ("type".into(), Some("number".into())),
+                ("min".into(), Some("0".into())),
+                ("max".into(), Some("100".into())),
+            ],
+            key: "PORT".into(),
+        };
+        let errors = validate_value_against_constraints("PORT", "999", &schema_entry);
+        let real_errors: Vec<_> = errors.iter()
+            .filter(|e| e.severity == Severity::Error)
+            .collect();
+        assert_eq!(real_errors.len(), 1);
+        assert!(real_errors[0].message.contains("greater than maximum"));
+    }
+
+    #[test]
+    fn validate_value_against_constraints_accepts_value() {
+        let schema_entry = SchemaEntry {
+            directives: vec![
+                ("type".into(), Some("number".into())),
+                ("min".into(), Some("0".into())),
+                ("max".into(), Some("100".into())),
+            ],
+            key: "PORT".into(),
+        };
+        let errors = validate_value_against_constraints("PORT", "50", &schema_entry);
+        let real_errors: Vec<_> = errors.iter()
+            .filter(|e| e.severity == Severity::Error)
+            .collect();
+        assert!(real_errors.is_empty());
     }
 }

@@ -140,16 +140,16 @@ pub async fn match_args(
     // Process each line from the .env, preserving comments and structure
     for line in &lines {
         match line {
-            dotenv::Line::Directive(_, _) => {
+            dotenv::Line::Directive { .. } => {
                 // Skip old directives — we generate new ones
                 continue;
             }
 
-            dotenv::Line::Comment(_) | dotenv::Line::Whitespace(_) | dotenv::Line::Newline => {
+            dotenv::Line::Comment { .. } | dotenv::Line::Whitespace { .. } | dotenv::Line::Newline => {
                 new_lines.push(line.clone());
             }
 
-            dotenv::Line::Kv(key, value, quote_type) => {
+            dotenv::Line::Kv { key, value, quote_type } => {
                 let mut directives: Vec<dotenv::Line> = Vec::new();
 
                 // Encrypt or plaintext?
@@ -158,7 +158,7 @@ pub async fn match_args(
                 let is_plaintext = show_set.contains(key.as_str()) && !helpers::looks_like_secret(key);
 
                 if is_plaintext {
-                    directives.push(dotenv::Line::Directive("plaintext".to_string(), None));
+                    directives.push(dotenv::Line::Directive { name: "plaintext".to_string(), value: None });
                     count_plaintext += 1;
                 } else {
                     count_encrypt += 1;
@@ -170,16 +170,16 @@ pub async fn match_args(
                     2 => "boolean",
                     _ => "string",
                 };
-                directives.push(dotenv::Line::Directive(
-                    "type".to_string(),
-                    Some(type_name.to_string()),
-                ));
+                directives.push(dotenv::Line::Directive {
+                    name: "type".to_string(),
+                    value: Some(type_name.to_string()),
+                });
 
                 // Push targets from v4 config
                 if let Some(push) = push_map.and_then(|m| m.get(key.as_str())) {
                     let push_value = build_push_directive(key, push, ssm_defaults, sm_defaults);
                     if let Some(pv) = push_value {
-                        directives.push(dotenv::Line::Directive("push".to_string(), Some(pv)));
+                        directives.push(dotenv::Line::Directive { name: "push".to_string(), value: Some(pv) });
                         if push.aws.as_ref().is_some_and(|a| a.ssm.unwrap_or(false)) {
                             count_push_ssm += 1;
                         }
@@ -198,11 +198,11 @@ pub async fn match_args(
                     new_lines.extend(directives);
                     new_lines.push(dotenv::Line::Newline);
                 }
-                new_lines.push(dotenv::Line::Kv(
-                    key.clone(),
-                    value.clone(),
-                    quote_type.clone(),
-                ));
+                new_lines.push(dotenv::Line::Kv {
+                    key: key.clone(),
+                    value: value.clone(),
+                    quote_type: quote_type.clone(),
+                });
                 new_lines.push(dotenv::Line::Newline);
             }
         }
@@ -607,5 +607,157 @@ mod tests {
             result.unwrap(),
             "aws-ssm(path=\"/pathehome/myVar\"), aws-secrets-manager(path=\"/pathehome/myVar\")"
         );
+    }
+
+    #[test]
+    fn test_load_v4_config_from_json_file() {
+        let dir = std::env::temp_dir().join("dotsec-test-migrate");
+        let _ = std::fs::create_dir_all(&dir);
+        let config_path = dir.join("dotsec.config.json");
+
+        std::fs::write(&config_path, r#"{
+            "defaults": {
+                "encryptionEngine": "aws",
+                "plugins": {
+                    "aws": {
+                        "kms": { "keyAlias": "alias/test-key" },
+                        "ssm": { "changeCase": "camelCase", "pathPrefix": "/myapp/prod/" },
+                        "secretsManager": { "changeCase": "camelCase", "pathPrefix": "/myapp/prod/" }
+                    }
+                }
+            },
+            "redaction": { "show": ["NODE_ENV", "PORT"] },
+            "push": {
+                "DATABASE_URL": { "aws": { "ssm": true, "secretsManager": true } },
+                "API_KEY": { "aws": { "ssm": true } }
+            }
+        }"#).unwrap();
+
+        let config = load_v4_config(config_path.to_str().unwrap()).unwrap();
+
+        // Verify config parsed correctly
+        let aws = config.defaults.as_ref().unwrap()
+            .plugins.as_ref().unwrap()
+            .aws.as_ref().unwrap();
+        assert_eq!(aws.kms.as_ref().unwrap().key_alias.as_deref(), Some("alias/test-key"));
+        assert_eq!(aws.ssm.as_ref().unwrap().path_prefix.as_deref(), Some("/myapp/prod/"));
+
+        // Verify redaction
+        let show = config.redaction.as_ref().unwrap().show.as_ref().unwrap();
+        assert!(show.contains(&"NODE_ENV".to_string()));
+        assert!(show.contains(&"PORT".to_string()));
+
+        // Verify push
+        let push = config.push.as_ref().unwrap();
+        assert!(push["DATABASE_URL"].aws.as_ref().unwrap().ssm.unwrap());
+        assert!(push["DATABASE_URL"].aws.as_ref().unwrap().secrets_manager.unwrap());
+        assert!(push["API_KEY"].aws.as_ref().unwrap().ssm.unwrap());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_migrate_line_building_logic() {
+        // Simulate the core migrate logic: v4 config + .env → output lines
+        // This tests everything EXCEPT encryption (which needs AWS)
+
+        let show_set: std::collections::HashSet<&str> = ["NODE_ENV", "PORT", "LOG_LEVEL"].into_iter().collect();
+
+        let ssm_defaults = V4SsmConfig {
+            change_case: Some("camelCase".to_string()),
+            path_prefix: Some("/myapp/prod/".to_string()),
+            param_type: None,
+        };
+
+        let push_map: HashMap<String, V4PushEntry> = [
+            ("DATABASE_URL".to_string(), V4PushEntry {
+                aws: Some(V4AwsPush { ssm: Some(true), secrets_manager: Some(true) }),
+            }),
+            ("API_KEY".to_string(), V4PushEntry {
+                aws: Some(V4AwsPush { ssm: Some(true), secrets_manager: None }),
+            }),
+        ].into_iter().collect();
+
+        let sm_defaults = V4SecretsManagerConfig {
+            change_case: Some("camelCase".to_string()),
+            path_prefix: Some("/myapp/prod/".to_string()),
+        };
+
+        let env_src = "DATABASE_URL=postgres://localhost:5432/mydb\nAPI_KEY=sk-live-123\nNODE_ENV=production\nPORT=3000\nLOG_LEVEL=info\n";
+        let lines = dotenv::parse_dotenv(env_src).unwrap();
+
+        let mut new_lines: Vec<dotenv::Line> = Vec::new();
+        let mut count_encrypt = 0;
+        let mut count_plaintext = 0;
+
+        for line in &lines {
+            match line {
+                dotenv::Line::Kv { key, value, quote_type } => {
+                    let mut directives: Vec<dotenv::Line> = Vec::new();
+
+                    let is_plaintext = show_set.contains(key.as_str()) && !helpers::looks_like_secret(key);
+                    if is_plaintext {
+                        directives.push(dotenv::Line::Directive { name: "plaintext".to_string(), value: None });
+                        count_plaintext += 1;
+                    } else {
+                        count_encrypt += 1;
+                    }
+
+                    let type_name = match helpers::guess_type(value) {
+                        1 => "number",
+                        2 => "boolean",
+                        _ => "string",
+                    };
+                    directives.push(dotenv::Line::Directive {
+                        name: "type".to_string(),
+                        value: Some(type_name.to_string()),
+                    });
+
+                    if let Some(push) = push_map.get(key.as_str()) {
+                        if let Some(pv) = build_push_directive(key, push, Some(&ssm_defaults), Some(&sm_defaults)) {
+                            directives.push(dotenv::Line::Directive { name: "push".to_string(), value: Some(pv) });
+                        }
+                    }
+
+                    new_lines.extend(directives);
+                    new_lines.push(dotenv::Line::Newline);
+                    new_lines.push(dotenv::Line::Kv {
+                        key: key.clone(),
+                        value: value.clone(),
+                        quote_type: quote_type.clone(),
+                    });
+                    new_lines.push(dotenv::Line::Newline);
+                }
+                _ => new_lines.push(line.clone()),
+            }
+        }
+
+        // DATABASE_URL: encrypted (not in show), has push SSM + SM
+        // API_KEY: encrypted (looks_like_secret overrides show), has push SSM
+        // NODE_ENV: plaintext (in show, not secret)
+        // PORT: plaintext (in show, not secret), type=number
+        // LOG_LEVEL: plaintext (in show, not secret)
+        assert_eq!(count_encrypt, 2, "DATABASE_URL and API_KEY should be encrypted");
+        assert_eq!(count_plaintext, 3, "NODE_ENV, PORT, LOG_LEVEL should be plaintext");
+
+        let output = dotenv::lines_to_string(&new_lines);
+
+        // Verify encrypted vars don't have @plaintext
+        assert!(!output.contains("@plaintext\nDATABASE_URL"), "DATABASE_URL should not be plaintext");
+
+        // Verify plaintext vars have @plaintext
+        assert!(output.contains("@plaintext"));
+
+        // Verify type detection
+        assert!(output.contains("@type=number"), "PORT should be detected as number");
+        assert!(output.contains("@type=string"), "string types should be present");
+
+        // Verify push directives
+        assert!(output.contains("@push=aws-ssm(path=\"/myapp/prod/databaseUrl\"), aws-secrets-manager(path=\"/myapp/prod/databaseUrl\")"));
+        assert!(output.contains("@push=aws-ssm(path=\"/myapp/prod/apiKey\")"));
+
+        // Verify values are preserved (not encrypted — we skipped that step)
+        assert!(output.contains("DATABASE_URL=postgres://localhost:5432/mydb"));
+        assert!(output.contains("PORT=3000"));
     }
 }

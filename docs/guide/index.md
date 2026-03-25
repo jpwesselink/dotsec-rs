@@ -148,9 +148,11 @@ const typescript = schemaToTypescript(schemaSource)    // TypeScript code string
 
 ### Rust — `dotsec-core`
 
+> **Note:** `dotsec-core` is not published to crates.io. Use a git dependency instead:
+
 ```toml
 [dependencies]
-dotsec-core = "5"
+dotsec-core = { git = "https://github.com/jpwesselink/dotsec-rs" }
 ```
 
 ```rust
