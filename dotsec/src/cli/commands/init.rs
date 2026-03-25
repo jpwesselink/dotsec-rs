@@ -77,7 +77,7 @@ pub async fn match_args(
     lines.push(dotenv::Line::Newline);
 
     let output = dotenv::lines_to_string(&lines);
-    std::fs::write(sec_file, &output)?;
+    dotsec::write_sec_file(sec_file, &output)?;
     println!("{} Created {}", "✓".green(), sec_file);
     println!(
         "\n{} Run {} to add variables.",

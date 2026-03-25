@@ -2,6 +2,8 @@
 name = "dotsec"
 version = "5.0.0"
 edition = "2021"
+description = "CLI for managing encrypted .env files"
+license = "MIT"
 
 [dependencies]
 aws = { path = "../aws" }

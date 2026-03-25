@@ -11,6 +11,25 @@ pub fn load_file(file: &str) -> Result<String, std::io::Error> {
     std::fs::read_to_string(file)
 }
 
+/// Write content to a .sec or schema file with restricted permissions (0600 on Unix).
+pub fn write_sec_file(path: &str, content: &str) -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true).create(true).truncate(true)
+            .mode(0o600)
+            .open(path)?
+            .write_all(content.as_bytes())?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, content)?;
+    }
+    Ok(())
+}
+
 pub fn parse_content(content: &str) -> Result<Vec<Line>, Box<dyn std::error::Error>> {
     Ok(dotenv::parse_dotenv(content)?)
 }
@@ -157,7 +176,7 @@ fn encrypt_with_dek(
     }
 
     let output = dotenv::lines_to_string(&sec_lines);
-    std::fs::write(sec_file, output)?;
+    write_sec_file(sec_file, &output)?;
 
     Ok(())
 }
@@ -347,9 +366,15 @@ fn interpolate(value: &str, resolved: &[(String, String)]) -> String {
                 while chars.peek().is_some_and(|c| *c != '}') {
                     var_name.push(chars.next().unwrap());
                 }
-                chars.next(); // consume '}'
-                let val = lookup(&var_name, resolved);
-                result.push_str(&val);
+                if chars.peek() == Some(&'}') {
+                    chars.next(); // consume '}'
+                    let val = lookup(&var_name, resolved);
+                    result.push_str(&val);
+                } else {
+                    // Unclosed ${ — treat as literal text
+                    result.push_str("${");
+                    result.push_str(&var_name);
+                }
             } else if chars
                 .peek()
                 .is_some_and(|c| c.is_ascii_alphabetic() || *c == '_')

@@ -6,10 +6,19 @@ pub enum EncryptionEngine {
     None,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct AwsEncryptionOptions {
     pub key_id: Option<String>,
     pub region: Option<String>,
+}
+
+impl std::fmt::Debug for AwsEncryptionOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AwsEncryptionOptions")
+            .field("key_id", &self.key_id.as_ref().map(|_| "[REDACTED]"))
+            .field("region", &self.region)
+            .finish()
+    }
 }
 
 impl From<dotenv::FileConfig> for EncryptionEngine {
@@ -20,7 +29,7 @@ impl From<dotenv::FileConfig> for EncryptionEngine {
                 region: config.region,
             }),
             Some(unknown) => {
-                eprintln!("warning: unknown encryption provider '{}', expected 'aws'", unknown);
+                eprintln!("\x1b[1;31mERROR\x1b[0m: unknown encryption provider '{}', expected 'aws'. Encryption is DISABLED.", unknown);
                 EncryptionEngine::None
             }
             None => EncryptionEngine::None,

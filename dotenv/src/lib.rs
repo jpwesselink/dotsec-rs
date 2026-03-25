@@ -398,11 +398,7 @@ pub fn format_lines_by_schema(lines: &[Line], schema: &Schema) -> Vec<Line> {
     output
 }
 
-/// Check if a value is in the `ENC[...]` envelope encryption format.
-pub fn is_encrypted_value(value: &str) -> bool {
-    value.starts_with("ENC[") && value.ends_with(']')
-}
-
+/// Get the value of a key from parsed lines.
 pub fn get_value(source: &[Line], key: &str) -> Option<String> {
     source.iter().find_map(|line| {
         if let Line::Kv { key: k, value, .. } = line {
@@ -981,11 +977,11 @@ fn parse_value(pair: Pair<Rule>) -> Option<(String, QuoteType)> {
 }
 
 pub fn lines_to_json(lines: &[Line]) -> Result<String, serde_json::Error> {
-    let output: Vec<HashMap<String, String>> = lines
+    let output: HashMap<String, String> = lines
         .iter()
         .filter_map(|line| {
             if let Line::Kv { key, value, .. } = line {
-                Some(HashMap::from([(key.clone(), value.clone())]))
+                Some((key.clone(), value.clone()))
             } else {
                 None
             }
@@ -994,11 +990,19 @@ pub fn lines_to_json(lines: &[Line]) -> Result<String, serde_json::Error> {
     serde_json::to_string(&output)
 }
 
+fn csv_escape(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
 pub fn lines_to_csv(lines: &[Line]) -> Result<String, Box<dyn std::error::Error>> {
     let mut output = String::from("name,value\n");
     for line in lines {
         if let Line::Kv { key, value, .. } = line {
-            output.push_str(&format!("{}\t{}\n", key, value));
+            output.push_str(&format!("{},{}\n", csv_escape(key), csv_escape(value)));
         }
     }
     Ok(output)

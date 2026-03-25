@@ -6,7 +6,7 @@ dotsec uses **per-value envelope encryption**: each secret is encrypted individu
 
 1. Parse `.sec`, find entries with `@encrypt` (or file-level `@default-encrypt`)
 2. Generate a DEK via AWS KMS (`GenerateDataKey` → AES-256)
-3. Encrypt each secret value locally with AES-256-GCM → `ENC[base64(nonce || ciphertext || tag)]`
+3. Encrypt each secret value locally with AES-256-GCM → `ENC[base64(commitment || nonce || ciphertext || tag)]`
 4. Store the KMS-wrapped DEK as `__DOTSEC_KEY__="base64(wrapped-dek)"`
 
 Since each value is encrypted independently, changing one secret only changes that line in the `.sec` file — git merges work naturally.
@@ -17,7 +17,7 @@ dotsec uses AWS KMS **envelope encryption**:
 
 1. Request a data key from KMS (`GenerateDataKey` with AES-256)
 2. KMS returns both a plaintext DEK and a KMS-wrapped copy
-3. Encrypt each secret value locally with AES-256-GCM using the plaintext DEK (random 12-byte nonce per value)
+3. Encrypt each secret value locally with AES-256-GCM using the plaintext DEK (random 12-byte nonce per value, plaintext padded to 64-byte blocks with 0-1 random extra blocks to hide length)
 4. Store the wrapped DEK as `__DOTSEC_KEY__` in the `.sec` file
 5. Discard the plaintext DEK
 
@@ -40,7 +40,7 @@ NODE_ENV="production"         # ← real value, visible in git
 __DOTSEC_KEY__="base64-encoded-kms-wrapped-dek..."
 ```
 
-The `__DOTSEC_KEY__` line contains the KMS-wrapped data encryption key. Each `ENC[...]` value contains `base64(12-byte-nonce || ciphertext || 16-byte-auth-tag)`. Without KMS access, the encrypted values are opaque.
+The `__DOTSEC_KEY__` line contains the KMS-wrapped data encryption key. Each `ENC[...]` value contains `base64(32-byte-commitment || 12-byte-nonce || ciphertext || 16-byte-auth-tag)`. The commitment is an HMAC-SHA256 of the DEK, used to verify the correct key before attempting decryption. Without KMS access, the encrypted values are opaque.
 
 ## Key rotation
 

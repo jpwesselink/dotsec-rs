@@ -76,7 +76,7 @@ pub async fn match_args(
                 }
             }
             if error_count > 0 {
-                std::process::exit(1);
+                return Err("Validation failed".into());
             }
         }
     }

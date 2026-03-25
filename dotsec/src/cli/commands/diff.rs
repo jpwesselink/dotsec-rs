@@ -129,7 +129,7 @@ pub async fn match_args(
         }
 
         if has_diffs {
-            std::process::exit(1);
+            return Err("Files differ".into());
         }
     }
     Ok(())

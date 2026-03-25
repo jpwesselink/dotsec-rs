@@ -336,7 +336,7 @@ pub async fn match_args(
         }
 
         let output = dotenv::lines_to_string(&lines);
-        std::fs::write(sec_file, &output)?;
+        dotsec::write_sec_file(sec_file, &output)?;
         println!("{} {} {} in {}", "✓".green(), action, key.bold(), sec_file);
     }
 

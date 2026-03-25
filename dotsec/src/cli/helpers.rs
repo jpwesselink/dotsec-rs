@@ -26,7 +26,7 @@ pub fn looks_like_secret(key: &str) -> bool {
 /// Returns an index into the type_options vec: 0=string, 1=number, 2=boolean.
 /// Used as `with_starting_cursor` for the type selection prompt.
 pub fn guess_type(value: &str) -> usize {
-    if value == "true" || value == "false" || value == "1" || value == "0" {
+    if value == "true" || value == "false" {
         return 2; // boolean
     }
     if value.parse::<f64>().is_ok() {
@@ -423,8 +423,12 @@ mod tests {
     fn guess_type_boolean() {
         assert_eq!(guess_type("true"), 2);
         assert_eq!(guess_type("false"), 2);
-        assert_eq!(guess_type("1"), 2);
-        assert_eq!(guess_type("0"), 2);
+    }
+
+    #[test]
+    fn guess_type_zero_and_one_are_numbers() {
+        assert_eq!(guess_type("1"), 1);
+        assert_eq!(guess_type("0"), 1);
     }
 
     #[test]

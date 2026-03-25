@@ -52,7 +52,7 @@ pub async fn match_args(
             dotsec::encrypt_lines_to_sec(&new_lines, sec_file, &default_options.encryption_engine)
                 .await?;
         } else {
-            std::fs::write(sec_file, &new_content)?;
+            dotsec::write_sec_file(sec_file, &new_content)?;
         }
 
         println!(
