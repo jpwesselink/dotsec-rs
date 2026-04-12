@@ -139,7 +139,9 @@ pub async fn match_args(
     let config_lines = helpers::build_config_directives(&file_config, true);
     let mut new_lines: Vec<dotenv::Line> = Vec::new();
 
-    // File-level config directives
+    // Header + file-level config directives
+    new_lines.extend(dotsec::generate_header());
+    new_lines.push(dotenv::Line::Newline);
     new_lines.extend(config_lines);
     new_lines.push(dotenv::Line::Newline);
 

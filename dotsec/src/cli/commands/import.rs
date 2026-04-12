@@ -295,7 +295,8 @@ pub async fn match_args(
         let mut var_index = 0;
         let mut inserted_config = false;
 
-        // Build config directive lines from resolved config
+        // Header + config directive lines
+        let header = dotsec::generate_header();
         let config_lines = helpers::build_config_directives(effective_config, encrypt_all);
 
         for line in &lines {
@@ -311,6 +312,8 @@ pub async fn match_args(
                 dotenv::Line::Comment { .. } | dotenv::Line::Whitespace { .. } | dotenv::Line::Newline => {
                     if !inserted_config {
                         if let dotenv::Line::Comment { .. } = line {
+                            new_lines.extend(header.clone());
+                            new_lines.push(dotenv::Line::Newline);
                             new_lines.extend(config_lines.clone());
                             new_lines.push(dotenv::Line::Newline);
                             new_lines.push(dotenv::Line::Newline);
@@ -322,6 +325,8 @@ pub async fn match_args(
 
                 dotenv::Line::Kv { .. } => {
                     if !inserted_config {
+                        new_lines.extend(header.clone());
+                        new_lines.push(dotenv::Line::Newline);
                         new_lines.extend(config_lines.clone());
                         new_lines.push(dotenv::Line::Newline);
                         new_lines.push(dotenv::Line::Newline);
@@ -342,6 +347,8 @@ pub async fn match_args(
         }
 
         if !inserted_config {
+            new_lines.extend(header);
+            new_lines.push(dotenv::Line::Newline);
             new_lines.extend(config_lines);
             new_lines.push(dotenv::Line::Newline);
         }
