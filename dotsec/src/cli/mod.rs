@@ -1,4 +1,4 @@
-use self::commands::{create_command, diff, eject, export, format, import, init, migrate, push, remove_directives, rotate_key, run, schema, set, show, validate};
+use self::commands::{create_command, diff, eject, export, format, header, import, init, migrate, push, remove_directives, rotate_key, run, schema, set, show, validate};
 use crate::default_options::DefaultOptions;
 use dotsec::EncryptionEngine;
 use log::debug;
@@ -100,6 +100,7 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
     push::match_args(&matches, &default_options).await?;
     eject::match_args(&matches, &default_options).await?;
     format::match_args(&matches, &default_options).await?;
+    header::match_args(&matches, &default_options).await?;
     remove_directives::match_args(&matches, &default_options).await?;
     schema::match_args(&matches, &default_options).await?;
 
