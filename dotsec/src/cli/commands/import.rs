@@ -446,7 +446,7 @@ fn auto_directives(
 
     // Optional: empty values are treated as optional
     if value.is_empty() {
-        directives.push(dotenv::Line::Directive("optional".to_string(), None));
+        directives.push(dotenv::Line::Directive { name: "optional".to_string(), value: None });
     }
 
     // Push: carry over from source if present

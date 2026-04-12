@@ -1028,13 +1028,13 @@ mod tests {
     #[test]
     fn empty_value() {
         let lines = parse_dotenv("FOO=\n").unwrap();
-        assert!(matches!(&lines[0], Line::Kv(k, v, QuoteType::None) if k == "FOO" && v.is_empty()));
+        assert!(matches!(&lines[0], Line::Kv { key, value, quote_type: QuoteType::None } if key == "FOO" && value.is_empty()));
     }
 
     #[test]
     fn empty_value_quoted() {
         let lines = parse_dotenv("FOO=\"\"\n").unwrap();
-        assert!(matches!(&lines[0], Line::Kv(k, v, QuoteType::Double) if k == "FOO" && v.is_empty()));
+        assert!(matches!(&lines[0], Line::Kv { key, value, quote_type: QuoteType::Double } if key == "FOO" && value.is_empty()));
     }
 
     #[test]
