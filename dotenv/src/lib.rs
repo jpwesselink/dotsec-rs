@@ -199,12 +199,12 @@ pub fn validate_entries_against_schema(
     // Validate each entry against its schema definition
     for entry in entries {
         if let Some(schema_entry) = schema.get(&entry.key) {
-            // Warn about inline per-key directives when schema exists
+            // Error on inline per-key directives when schema exists — mixed state is not allowed
             for (name, _) in &entry.directives {
                 if SCHEMA_DIRECTIVES.contains(&name.as_str()) {
-                    errors.push(ValidationError::warning(
+                    errors.push(ValidationError::error(
                         &entry.key,
-                        format!("inline @{} directive ignored, using schema", name),
+                        format!("inline @{} directive not allowed when schema exists, run `dotsec remove-directives`", name),
                     ));
                 }
             }
@@ -1803,13 +1803,13 @@ mod tests {
     }
 
     #[test]
-    fn schema_validation_inline_directive_warning() {
+    fn schema_validation_inline_directive_error() {
         let schema_src = "# @type=string\nFOO\n";
         let sec_src = "# @type=number\nFOO=\"bar\"\n";
         let schema = parse_schema(schema_src).unwrap();
         let entries = lines_to_entries(&parse_dotenv(sec_src).unwrap());
         let errors = validate_entries_against_schema(&entries, &schema);
-        assert!(errors.iter().any(|e| e.key == "FOO" && e.message.contains("inline @type directive ignored")));
+        assert!(errors.iter().any(|e| e.key == "FOO" && e.severity == Severity::Error && e.message.contains("inline @type directive not allowed")));
     }
 
     // --- File-level default-encrypt tests ---
@@ -2499,7 +2499,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_warns_on_inline_directives_when_schema_exists() {
+    fn schema_errors_on_inline_directives_when_schema_exists() {
         // Schema defines @type=number for PORT
         let schema_src = "# @type=number\nPORT\n";
         let schema = parse_schema(schema_src).unwrap();
@@ -2509,18 +2509,11 @@ mod tests {
         let sec_entries = lines_to_entries(&sec_lines);
         let errors = validate_entries_against_schema(&sec_entries, &schema);
 
-        // Should warn about inline directive being ignored
-        let inline_warnings: Vec<_> = errors.iter()
-            .filter(|e| e.key == "PORT" && e.message.contains("inline @type directive ignored"))
+        // Should error about inline directive — mixed state not allowed
+        let inline_errors: Vec<_> = errors.iter()
+            .filter(|e| e.key == "PORT" && e.severity == Severity::Error && e.message.contains("inline @type directive not allowed"))
             .collect();
-        assert_eq!(inline_warnings.len(), 1);
-
-        // Should validate as number (from schema), not string
-        // PORT=3000 is valid as a number, so no type error
-        let type_errors: Vec<_> = errors.iter()
-            .filter(|e| e.key == "PORT" && e.severity == Severity::Error)
-            .collect();
-        assert!(type_errors.is_empty(), "3000 is valid as number; got: {:?}", type_errors);
+        assert_eq!(inline_errors.len(), 1);
     }
 
     #[test]

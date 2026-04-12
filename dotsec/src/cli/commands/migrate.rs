@@ -123,7 +123,19 @@ pub async fn match_args(
 
     let encryption_engine = dotsec::EncryptionEngine::try_from(file_config.clone())?;
 
-    // --- Step 5: Build output lines ---
+    // --- Step 5: Check for existing schema ---
+    let explicit_schema = default_options.schema_path.as_deref();
+    let schema_path = dotenv::schema::discover_schema(sec_file, explicit_schema)?;
+    let has_schema = schema_path.is_some();
+    let mut schema = if let Some(ref path) = schema_path {
+        let content = std::fs::read_to_string(path)?;
+        Some(dotenv::parse_schema(&content)?)
+    } else {
+        None
+    };
+    let mut new_schema_entries: Vec<dotenv::SchemaEntry> = Vec::new();
+
+    // --- Step 6: Build output lines ---
     let config_lines = helpers::build_config_directives(&file_config, true);
     let mut new_lines: Vec<dotenv::Line> = Vec::new();
 
@@ -193,11 +205,17 @@ pub async fn match_args(
                     }
                 }
 
-                // Emit directives then the KV line
-                if !directives.is_empty() {
+                // Route directives: schema exists → schema file, no schema → inline
+                if has_schema {
+                    let schema_dirs: Vec<(String, Option<String>)> = directives.iter().filter_map(|d| {
+                        if let dotenv::Line::Directive { name, value } = d { Some((name.clone(), value.clone())) } else { None }
+                    }).collect();
+                    new_schema_entries.push(dotenv::SchemaEntry { directives: schema_dirs, key: key.clone() });
+                } else if !directives.is_empty() {
                     new_lines.extend(directives);
                     new_lines.push(dotenv::Line::Newline);
                 }
+
                 new_lines.push(dotenv::Line::Kv {
                     key: key.clone(),
                     value: value.clone(),
@@ -205,6 +223,15 @@ pub async fn match_args(
                 });
                 new_lines.push(dotenv::Line::Newline);
             }
+        }
+    }
+
+    // Write new entries to schema if needed
+    if !new_schema_entries.is_empty() {
+        if let Some(ref mut s) = schema {
+            s.extend(new_schema_entries);
+            let schema_output = dotenv::schema_to_string(s);
+            dotsec::write_sec_file(schema_path.as_deref().unwrap(), &schema_output)?;
         }
     }
 
