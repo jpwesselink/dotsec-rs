@@ -30,6 +30,25 @@ pub fn write_sec_file(path: &str, content: &str) -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
+// --- Header ---
+
+/// Generate the standard dotsec file header (two comment lines + newlines).
+pub fn generate_header() -> Vec<Line> {
+    vec![
+        Line::Comment { text: "# dotsec v5 — encrypted environment file".into() },
+        Line::Newline,
+        Line::Comment { text: "# https://github.com/jpwesselink/dotsec-rs#getting-started".into() },
+        Line::Newline,
+    ]
+}
+
+/// Check whether parsed lines contain the dotsec header.
+pub fn has_header(lines: &[Line]) -> bool {
+    lines.iter().any(|line| {
+        matches!(line, Line::Comment { text } if text.starts_with("# dotsec v"))
+    })
+}
+
 pub fn parse_content(content: &str) -> Result<Vec<Line>, Box<dyn std::error::Error>> {
     Ok(dotenv::parse_dotenv(content)?)
 }
@@ -457,6 +476,51 @@ mod tests {
         let perms = std::fs::metadata(&path).unwrap().permissions();
         assert_eq!(perms.mode() & 0o777, 0o600);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- header ---
+
+    #[test]
+    fn generate_header_has_two_comment_lines() {
+        let header = generate_header();
+        let comments: Vec<_> = header.iter().filter(|l| matches!(l, Line::Comment { .. })).collect();
+        assert_eq!(comments.len(), 2);
+    }
+
+    #[test]
+    fn generate_header_first_line_contains_version() {
+        let header = generate_header();
+        assert!(matches!(&header[0], Line::Comment { text } if text.contains("dotsec v5")));
+    }
+
+    #[test]
+    fn generate_header_second_line_contains_url() {
+        let header = generate_header();
+        assert!(matches!(&header[2], Line::Comment { text } if text.contains("github.com/jpwesselink/dotsec-rs")));
+    }
+
+    #[test]
+    fn has_header_true_when_present() {
+        let lines = generate_header();
+        assert!(has_header(&lines));
+    }
+
+    #[test]
+    fn has_header_false_when_absent() {
+        let lines = vec![
+            Line::Comment { text: "# just a comment".into() },
+            Line::Newline,
+            Line::Kv { key: "FOO".into(), value: "bar".into(), quote_type: QuoteType::None },
+        ];
+        assert!(!has_header(&lines));
+    }
+
+    #[test]
+    fn has_header_matches_any_version() {
+        let lines = vec![
+            Line::Comment { text: "# dotsec v99 — encrypted environment file".into() },
+        ];
+        assert!(has_header(&lines));
     }
 
     // --- interpolate ---
