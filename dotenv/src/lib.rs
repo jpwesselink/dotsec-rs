@@ -196,20 +196,21 @@ pub fn validate_entries_against_schema(
         }
     }
 
+    // Error on ANY inline schema directives — mixed state is not allowed
+    for entry in entries {
+        for (name, _) in &entry.directives {
+            if SCHEMA_DIRECTIVES.contains(&name.as_str()) {
+                errors.push(ValidationError::error(
+                    &entry.key,
+                    format!("inline @{} directive not allowed when schema exists, run `dotsec remove-directives`", name),
+                ));
+            }
+        }
+    }
+
     // Validate each entry against its schema definition
     for entry in entries {
         if let Some(schema_entry) = schema.get(&entry.key) {
-            // Error on inline per-key directives when schema exists — mixed state is not allowed
-            for (name, _) in &entry.directives {
-                if SCHEMA_DIRECTIVES.contains(&name.as_str()) {
-                    errors.push(ValidationError::error(
-                        &entry.key,
-                        format!("inline @{} directive not allowed when schema exists, run `dotsec remove-directives`", name),
-                    ));
-                }
-            }
-
-            // Validate value against schema constraints
             errors.extend(validate_value_against_constraints(&entry.key, &entry.value, schema_entry));
         }
     }
