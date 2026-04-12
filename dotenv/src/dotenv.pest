@@ -126,7 +126,7 @@ char_bt    =  { !(escaped_bt) ~ ANY }
 var        = @{ var_char+ }
 var_char   =  { !(NEW_LINE) ~ ANY }
 
-kv  =  { export? ~ key ~ "=" ~ value }
+kv  =  { export? ~ key ~ "=" ~ value? }
 line = _{ directive | kv | COMMENT }
 env  = _{ SOI ~ NEW_LINE* ~ (line ~ NEW_LINE+)* ~ line? ~ EOI }
 
