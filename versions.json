@@ -6,10 +6,6 @@
   },
   "prs": [
     {
-      "label": "#10 fix/empty-values",
-      "path": "/pr-10/"
-    },
-    {
       "label": "#12 fix/post-merge-review-findings",
       "path": "/pr-12/"
     }
