@@ -3,6 +3,7 @@ pub mod diff;
 pub mod eject;
 pub mod export;
 pub mod format;
+pub mod header;
 pub mod import;
 pub mod init;
 pub mod migrate;
@@ -30,6 +31,7 @@ pub fn create_command() -> clap::Command {
         .subcommand(push::command())
         .subcommand(eject::command())
         .subcommand(format::command())
+        .subcommand(header::command())
         .subcommand(remove_directives::command())
         .subcommand(schema::command())
         .arg_required_else_help(false)

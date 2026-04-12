@@ -2,6 +2,8 @@
 name = "dotenv"
 version = "5.0.0"
 edition = "2021"
+description = "Parser and validator for dotsec .env/.sec files"
+license = "MIT"
 
 [dependencies]
 indexmap = "2"

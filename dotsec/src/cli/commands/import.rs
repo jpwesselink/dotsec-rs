@@ -146,7 +146,7 @@ pub async fn match_args(
         &default_options.encryption_engine
     } else {
         let effective_config = existing_config.as_ref().unwrap_or(&source_config);
-        resolved_engine = dotsec::EncryptionEngine::from(effective_config.clone());
+        resolved_engine = dotsec::EncryptionEngine::try_from(effective_config.clone())?;
         &resolved_engine
     };
 
@@ -185,7 +185,7 @@ pub async fn match_args(
     let schema_path = dotenv::schema::discover_schema(
         sec_file,
         default_options.schema_path.as_deref(),
-    ).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    )?;
     let mut schema = if let Some(ref path) = schema_path {
         let content = std::fs::read_to_string(path)?;
         Some(dotenv::parse_schema(&content)?)
@@ -282,7 +282,7 @@ pub async fn match_args(
         if let Some(ref mut s) = schema {
             s.extend(new_schema_entries);
             let schema_output = dotenv::schema_to_string(s);
-            std::fs::write(schema_path.as_deref().unwrap(), &schema_output)?;
+            dotsec::write_sec_file(schema_path.as_deref().unwrap(), &schema_output)?;
         }
     }
 
@@ -295,7 +295,8 @@ pub async fn match_args(
         let mut var_index = 0;
         let mut inserted_config = false;
 
-        // Build config directive lines from resolved config
+        // Header + config directive lines
+        let header = dotsec::generate_header();
         let config_lines = helpers::build_config_directives(effective_config, encrypt_all);
 
         for line in &lines {
@@ -311,6 +312,8 @@ pub async fn match_args(
                 dotenv::Line::Comment { .. } | dotenv::Line::Whitespace { .. } | dotenv::Line::Newline => {
                     if !inserted_config {
                         if let dotenv::Line::Comment { .. } = line {
+                            new_lines.extend(header.clone());
+                            new_lines.push(dotenv::Line::Newline);
                             new_lines.extend(config_lines.clone());
                             new_lines.push(dotenv::Line::Newline);
                             new_lines.push(dotenv::Line::Newline);
@@ -322,6 +325,8 @@ pub async fn match_args(
 
                 dotenv::Line::Kv { .. } => {
                     if !inserted_config {
+                        new_lines.extend(header.clone());
+                        new_lines.push(dotenv::Line::Newline);
                         new_lines.extend(config_lines.clone());
                         new_lines.push(dotenv::Line::Newline);
                         new_lines.push(dotenv::Line::Newline);
@@ -342,6 +347,8 @@ pub async fn match_args(
         }
 
         if !inserted_config {
+            new_lines.extend(header);
+            new_lines.push(dotenv::Line::Newline);
             new_lines.extend(config_lines);
             new_lines.push(dotenv::Line::Newline);
         }
@@ -439,7 +446,7 @@ fn auto_directives(
 
     // Optional: empty values are treated as optional
     if value.is_empty() {
-        directives.push(dotenv::Line::Directive("optional".to_string(), None));
+        directives.push(dotenv::Line::Directive { name: "optional".to_string(), value: None });
     }
 
     // Push: carry over from source if present

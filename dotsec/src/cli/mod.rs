@@ -1,4 +1,4 @@
-use self::commands::{create_command, diff, eject, export, format, import, init, migrate, push, remove_directives, rotate_key, run, schema, set, show, validate};
+use self::commands::{create_command, diff, eject, export, format, header, import, init, migrate, push, remove_directives, rotate_key, run, schema, set, show, validate};
 use crate::default_options::DefaultOptions;
 use dotsec::EncryptionEngine;
 use log::debug;
@@ -47,7 +47,7 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
     let is_import = matches.subcommand_matches("import").is_some();
     let is_migrate = matches.subcommand_matches("migrate").is_some();
     let is_diff = matches.subcommand_matches("diff").is_some();
-    let is_eject = matches.subcommand_matches("eject").is_some();
+    let is_eject = matches.subcommand_matches("extract-schema").is_some() || matches.subcommand_matches("eject").is_some();
     let is_schema = matches.subcommand_matches("schema").is_some();
     let is_run_env = matches
         .subcommand_matches("run")
@@ -71,7 +71,7 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
         let lines = dotenv::parse_dotenv(&content)?;
         let file_config = dotenv::extract_file_config(&lines);
         debug!("file_config from {}: {:?}", sec_file, file_config);
-        EncryptionEngine::from(file_config)
+        EncryptionEngine::try_from(file_config)?
     } else if is_init || is_import || is_migrate || is_diff || is_eject || is_schema || is_run_env {
         debug!("{} does not exist yet or not needed, using defaults", sec_file);
         EncryptionEngine::None
@@ -100,6 +100,7 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
     push::match_args(&matches, &default_options).await?;
     eject::match_args(&matches, &default_options).await?;
     format::match_args(&matches, &default_options).await?;
+    header::match_args(&matches, &default_options).await?;
     remove_directives::match_args(&matches, &default_options).await?;
     schema::match_args(&matches, &default_options).await?;
 

@@ -82,7 +82,7 @@ pub async fn match_args(
     sec_lines.push(dotenv::Line::Newline);
 
     let output = dotenv::lines_to_string(&sec_lines);
-    std::fs::write(sec_file, output)?;
+    dotsec::write_sec_file(sec_file, &output)?;
 
     println!(
         "\n{} Key rotated — all values in {} re-encrypted with new DEK",

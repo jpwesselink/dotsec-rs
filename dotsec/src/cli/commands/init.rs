@@ -73,11 +73,13 @@ pub async fn match_args(
     }
 
     let encrypt_all = helpers::resolve_encrypt_default(&config)?;
-    let mut lines = helpers::build_config_directives(&config, encrypt_all);
+    let mut lines = dotsec::generate_header();
+    lines.push(dotenv::Line::Newline);
+    lines.extend(helpers::build_config_directives(&config, encrypt_all));
     lines.push(dotenv::Line::Newline);
 
     let output = dotenv::lines_to_string(&lines);
-    std::fs::write(sec_file, &output)?;
+    dotsec::write_sec_file(sec_file, &output)?;
     println!("{} Created {}", "✓".green(), sec_file);
     println!(
         "\n{} Run {} to add variables.",

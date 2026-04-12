@@ -196,20 +196,21 @@ pub fn validate_entries_against_schema(
         }
     }
 
+    // Error on ANY inline schema directives — mixed state is not allowed
+    for entry in entries {
+        for (name, _) in &entry.directives {
+            if SCHEMA_DIRECTIVES.contains(&name.as_str()) {
+                errors.push(ValidationError::error(
+                    &entry.key,
+                    format!("inline @{} directive not allowed when schema exists, run `dotsec remove-directives`", name),
+                ));
+            }
+        }
+    }
+
     // Validate each entry against its schema definition
     for entry in entries {
         if let Some(schema_entry) = schema.get(&entry.key) {
-            // Warn about inline per-key directives when schema exists
-            for (name, _) in &entry.directives {
-                if SCHEMA_DIRECTIVES.contains(&name.as_str()) {
-                    errors.push(ValidationError::warning(
-                        &entry.key,
-                        format!("inline @{} directive ignored, using schema", name),
-                    ));
-                }
-            }
-
-            // Validate value against schema constraints
             errors.extend(validate_value_against_constraints(&entry.key, &entry.value, schema_entry));
         }
     }
@@ -398,11 +399,7 @@ pub fn format_lines_by_schema(lines: &[Line], schema: &Schema) -> Vec<Line> {
     output
 }
 
-/// Check if a value is in the `ENC[...]` envelope encryption format.
-pub fn is_encrypted_value(value: &str) -> bool {
-    value.starts_with("ENC[") && value.ends_with(']')
-}
-
+/// Get the value of a key from parsed lines.
 pub fn get_value(source: &[Line], key: &str) -> Option<String> {
     source.iter().find_map(|line| {
         if let Line::Kv { key: k, value, .. } = line {
@@ -471,7 +468,31 @@ fn parse_directive(pair: Pair<Rule>) -> Vec<Line> {
 pub fn parse_dotenv(source: &str) -> Result<Vec<Line>, Box<pest::error::Error<Rule>>> {
     let mut output: Vec<Line> = Vec::new();
 
-    let pairs = DotenvLineParser::parse(Rule::env, source)?;
+    let pairs = match DotenvLineParser::parse(Rule::env, source) {
+        Ok(p) => p,
+        Err(e) => {
+            // Check if the error might be caused by a bare @directive (missing # prefix)
+            let mut offset = 0;
+            for line in source.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with('@') && !trimmed.contains('=') {
+                    let pos = pest::Position::new(source, offset).unwrap();
+                    let err = pest::error::Error::<Rule>::new_from_pos(
+                        pest::error::ErrorVariant::CustomError {
+                            message: format!(
+                                "bare directive `{}` — directives must start with `#`, e.g. `# {}`",
+                                trimmed, trimmed
+                            ),
+                        },
+                        pos,
+                    );
+                    return Err(Box::new(err));
+                }
+                offset += line.len() + 1; // +1 for newline
+            }
+            return Err(Box::new(e));
+        }
+    };
     for pair in pairs {
         match pair.as_rule() {
             Rule::NEW_LINE => {
@@ -981,11 +1002,11 @@ fn parse_value(pair: Pair<Rule>) -> Option<(String, QuoteType)> {
 }
 
 pub fn lines_to_json(lines: &[Line]) -> Result<String, serde_json::Error> {
-    let output: Vec<HashMap<String, String>> = lines
+    let output: HashMap<String, String> = lines
         .iter()
         .filter_map(|line| {
             if let Line::Kv { key, value, .. } = line {
-                Some(HashMap::from([(key.clone(), value.clone())]))
+                Some((key.clone(), value.clone()))
             } else {
                 None
             }
@@ -994,11 +1015,19 @@ pub fn lines_to_json(lines: &[Line]) -> Result<String, serde_json::Error> {
     serde_json::to_string(&output)
 }
 
+fn csv_escape(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
 pub fn lines_to_csv(lines: &[Line]) -> Result<String, Box<dyn std::error::Error>> {
     let mut output = String::from("name,value\n");
     for line in lines {
         if let Line::Kv { key, value, .. } = line {
-            output.push_str(&format!("{}\t{}\n", key, value));
+            output.push_str(&format!("{},{}\n", csv_escape(key), csv_escape(value)));
         }
     }
     Ok(output)
@@ -1023,13 +1052,13 @@ mod tests {
     #[test]
     fn empty_value() {
         let lines = parse_dotenv("FOO=\n").unwrap();
-        assert!(matches!(&lines[0], Line::Kv(k, v, QuoteType::None) if k == "FOO" && v.is_empty()));
+        assert!(matches!(&lines[0], Line::Kv { key, value, quote_type: QuoteType::None } if key == "FOO" && value.is_empty()));
     }
 
     #[test]
     fn empty_value_quoted() {
         let lines = parse_dotenv("FOO=\"\"\n").unwrap();
-        assert!(matches!(&lines[0], Line::Kv(k, v, QuoteType::Double) if k == "FOO" && v.is_empty()));
+        assert!(matches!(&lines[0], Line::Kv { key, value, quote_type: QuoteType::Double } if key == "FOO" && value.is_empty()));
     }
 
     #[test]
@@ -1057,6 +1086,15 @@ mod tests {
         let lines = parse_dotenv("A=\"hello\"\nB='world'\n").unwrap();
         assert!(matches!(&lines[0], Line::Kv { value, quote_type: QuoteType::Double, .. } if value == "hello"));
         assert!(matches!(&lines[2], Line::Kv { value, quote_type: QuoteType::Single, .. } if value == "world"));
+    }
+
+    #[test]
+    fn bare_directive_gives_helpful_error() {
+        let result = parse_dotenv("@encrypt\nFOO=bar\n");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("bare directive"), "error should mention bare directive, got: {}", err);
+        assert!(err.contains("# @encrypt"), "error should suggest fix, got: {}", err);
     }
 
     #[test]
@@ -1799,13 +1837,13 @@ mod tests {
     }
 
     #[test]
-    fn schema_validation_inline_directive_warning() {
+    fn schema_validation_inline_directive_error() {
         let schema_src = "# @type=string\nFOO\n";
         let sec_src = "# @type=number\nFOO=\"bar\"\n";
         let schema = parse_schema(schema_src).unwrap();
         let entries = lines_to_entries(&parse_dotenv(sec_src).unwrap());
         let errors = validate_entries_against_schema(&entries, &schema);
-        assert!(errors.iter().any(|e| e.key == "FOO" && e.message.contains("inline @type directive ignored")));
+        assert!(errors.iter().any(|e| e.key == "FOO" && e.severity == Severity::Error && e.message.contains("inline @type directive not allowed")));
     }
 
     // --- File-level default-encrypt tests ---
@@ -2495,7 +2533,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_warns_on_inline_directives_when_schema_exists() {
+    fn schema_errors_on_inline_directives_when_schema_exists() {
         // Schema defines @type=number for PORT
         let schema_src = "# @type=number\nPORT\n";
         let schema = parse_schema(schema_src).unwrap();
@@ -2505,18 +2543,11 @@ mod tests {
         let sec_entries = lines_to_entries(&sec_lines);
         let errors = validate_entries_against_schema(&sec_entries, &schema);
 
-        // Should warn about inline directive being ignored
-        let inline_warnings: Vec<_> = errors.iter()
-            .filter(|e| e.key == "PORT" && e.message.contains("inline @type directive ignored"))
+        // Should error about inline directive — mixed state not allowed
+        let inline_errors: Vec<_> = errors.iter()
+            .filter(|e| e.key == "PORT" && e.severity == Severity::Error && e.message.contains("inline @type directive not allowed"))
             .collect();
-        assert_eq!(inline_warnings.len(), 1);
-
-        // Should validate as number (from schema), not string
-        // PORT=3000 is valid as a number, so no type error
-        let type_errors: Vec<_> = errors.iter()
-            .filter(|e| e.key == "PORT" && e.severity == Severity::Error)
-            .collect();
-        assert!(type_errors.is_empty(), "3000 is valid as number; got: {:?}", type_errors);
+        assert_eq!(inline_errors.len(), 1);
     }
 
     #[test]
@@ -2629,5 +2660,83 @@ mod tests {
             .filter(|e| e.severity == Severity::Error)
             .collect();
         assert!(real_errors.is_empty());
+    }
+
+    // --- csv_escape ---
+
+    #[test]
+    fn csv_escape_plain() {
+        assert_eq!(csv_escape("hello"), "hello");
+    }
+
+    #[test]
+    fn csv_escape_comma() {
+        assert_eq!(csv_escape("a,b"), "\"a,b\"");
+    }
+
+    #[test]
+    fn csv_escape_quotes() {
+        assert_eq!(csv_escape("say \"hi\""), "\"say \"\"hi\"\"\"");
+    }
+
+    #[test]
+    fn csv_escape_newline() {
+        assert_eq!(csv_escape("line1\nline2"), "\"line1\nline2\"");
+    }
+
+    #[test]
+    fn csv_escape_carriage_return() {
+        assert_eq!(csv_escape("line1\rline2"), "\"line1\rline2\"");
+    }
+
+    // --- lines_to_json ---
+
+    #[test]
+    fn lines_to_json_flat_object() {
+        let lines = vec![
+            Line::Kv { key: "FOO".into(), value: "bar".into(), quote_type: QuoteType::None },
+            Line::Newline,
+            Line::Kv { key: "BAZ".into(), value: "qux".into(), quote_type: QuoteType::None },
+        ];
+        let json = lines_to_json(&lines).unwrap();
+        let parsed: HashMap<String, String> = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.get("FOO").unwrap(), "bar");
+        assert_eq!(parsed.get("BAZ").unwrap(), "qux");
+        assert_eq!(parsed.len(), 2);
+    }
+
+    #[test]
+    fn lines_to_json_ignores_non_kv() {
+        let lines = vec![
+            Line::Comment { text: "# a comment".into() },
+            Line::Newline,
+            Line::Kv { key: "X".into(), value: "1".into(), quote_type: QuoteType::None },
+        ];
+        let json = lines_to_json(&lines).unwrap();
+        let parsed: HashMap<String, String> = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed.get("X").unwrap(), "1");
+    }
+
+    // --- lines_to_csv ---
+
+    #[test]
+    fn lines_to_csv_basic() {
+        let lines = vec![
+            Line::Kv { key: "FOO".into(), value: "bar".into(), quote_type: QuoteType::None },
+            Line::Newline,
+            Line::Kv { key: "BAZ".into(), value: "qux".into(), quote_type: QuoteType::None },
+        ];
+        let csv = lines_to_csv(&lines).unwrap();
+        assert_eq!(csv, "name,value\nFOO,bar\nBAZ,qux\n");
+    }
+
+    #[test]
+    fn lines_to_csv_escapes_special_chars() {
+        let lines = vec![
+            Line::Kv { key: "HOSTS".into(), value: "a,b,c".into(), quote_type: QuoteType::None },
+        ];
+        let csv = lines_to_csv(&lines).unwrap();
+        assert_eq!(csv, "name,value\nHOSTS,\"a,b,c\"\n");
     }
 }

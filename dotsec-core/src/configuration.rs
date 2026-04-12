@@ -6,24 +6,35 @@ pub enum EncryptionEngine {
     None,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct AwsEncryptionOptions {
     pub key_id: Option<String>,
     pub region: Option<String>,
 }
 
-impl From<dotenv::FileConfig> for EncryptionEngine {
-    fn from(config: dotenv::FileConfig) -> Self {
+impl std::fmt::Debug for AwsEncryptionOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AwsEncryptionOptions")
+            .field("key_id", &self.key_id.as_ref().map(|_| "[REDACTED]"))
+            .field("region", &self.region)
+            .finish()
+    }
+}
+
+impl TryFrom<dotenv::FileConfig> for EncryptionEngine {
+    type Error = String;
+
+    fn try_from(config: dotenv::FileConfig) -> Result<Self, Self::Error> {
         match config.provider.as_deref() {
-            Some("aws") => EncryptionEngine::Aws(AwsEncryptionOptions {
+            Some("aws") => Ok(EncryptionEngine::Aws(AwsEncryptionOptions {
                 key_id: config.key_id,
                 region: config.region,
-            }),
-            Some(unknown) => {
-                eprintln!("warning: unknown encryption provider '{}', expected 'aws'", unknown);
-                EncryptionEngine::None
-            }
-            None => EncryptionEngine::None,
+            })),
+            Some(unknown) => Err(format!(
+                "unknown encryption provider '{}', expected 'aws'",
+                unknown
+            )),
+            None => Ok(EncryptionEngine::None),
         }
     }
 }

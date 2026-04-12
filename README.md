@@ -56,7 +56,7 @@ dotsec export                        # .sec → .env (decrypts)
 dotsec show                          # show decrypted .sec contents
 dotsec run -- node server.js         # run with decrypted env vars
 dotsec validate                      # check directives and values
-dotsec diff --base .env .env.staging # compare env files
+dotsec diff .env.staging             # compare .sec files
 ```
 
 ## Commands

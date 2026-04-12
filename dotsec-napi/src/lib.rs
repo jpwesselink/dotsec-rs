@@ -190,3 +190,18 @@ pub fn schema_to_typescript(schema_source: String) -> napi::Result<String> {
         .map_err(|e| napi::Error::from_reason(format!("Schema parse error: {e}")))?;
     Ok(dotsec_core::dotenv::schema_to_typescript(&schema))
 }
+
+/// Generate the standard dotsec file header as a string.
+#[napi]
+pub fn generate_header() -> String {
+    let lines = dotsec_core::generate_header();
+    dotsec_core::dotenv::lines_to_string(&lines)
+}
+
+/// Check whether a .sec file source string contains the dotsec header.
+#[napi]
+pub fn has_header(source: String) -> napi::Result<bool> {
+    let lines = dotsec_core::dotenv::parse_dotenv(&source)
+        .map_err(|e| napi::Error::from_reason(format!("Parse error: {e}")))?;
+    Ok(dotsec_core::has_header(&lines))
+}

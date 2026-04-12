@@ -11,6 +11,44 @@ pub fn load_file(file: &str) -> Result<String, std::io::Error> {
     std::fs::read_to_string(file)
 }
 
+/// Write content to a .sec or schema file with restricted permissions (0600 on Unix).
+pub fn write_sec_file(path: &str, content: &str) -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true).create(true).truncate(true)
+            .mode(0o600)
+            .open(path)?
+            .write_all(content.as_bytes())?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, content)?;
+    }
+    Ok(())
+}
+
+// --- Header ---
+
+/// Generate the standard dotsec file header (two comment lines + newlines).
+pub fn generate_header() -> Vec<Line> {
+    vec![
+        Line::Comment { text: "# dotsec v5 — encrypted environment file".into() },
+        Line::Newline,
+        Line::Comment { text: "# https://github.com/jpwesselink/dotsec-rs#getting-started".into() },
+        Line::Newline,
+    ]
+}
+
+/// Check whether parsed lines contain the dotsec header.
+pub fn has_header(lines: &[Line]) -> bool {
+    lines.iter().any(|line| {
+        matches!(line, Line::Comment { text } if text.starts_with("# dotsec v"))
+    })
+}
+
 pub fn parse_content(content: &str) -> Result<Vec<Line>, Box<dyn std::error::Error>> {
     Ok(dotenv::parse_dotenv(content)?)
 }
@@ -157,7 +195,7 @@ fn encrypt_with_dek(
     }
 
     let output = dotenv::lines_to_string(&sec_lines);
-    std::fs::write(sec_file, output)?;
+    write_sec_file(sec_file, &output)?;
 
     Ok(())
 }
@@ -347,9 +385,16 @@ fn interpolate(value: &str, resolved: &[(String, String)]) -> String {
                 while chars.peek().is_some_and(|c| *c != '}') {
                     var_name.push(chars.next().unwrap());
                 }
-                chars.next(); // consume '}'
-                let val = lookup(&var_name, resolved);
-                result.push_str(&val);
+                if chars.peek() == Some(&'}') {
+                    chars.next(); // consume '}'
+                    let val = lookup(&var_name, resolved);
+                    result.push_str(&val);
+                } else {
+                    // Unclosed ${ — treat as literal text
+                    eprintln!("warning: unclosed ${{{}}} in value, treating as literal text", var_name);
+                    result.push_str("${");
+                    result.push_str(&var_name);
+                }
             } else if chars
                 .peek()
                 .is_some_and(|c| c.is_ascii_alphabetic() || *c == '_')
@@ -416,6 +461,68 @@ mod tests {
     use super::*;
     use dotenv::{Line, QuoteType};
 
+    // --- write_sec_file ---
+
+    #[test]
+    #[cfg(unix)]
+    fn write_sec_file_sets_0600_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join("dotsec-test-write-sec");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("test.sec");
+
+        write_sec_file(path.to_str().unwrap(), "SECRET=hunter2\n").unwrap();
+
+        let perms = std::fs::metadata(&path).unwrap().permissions();
+        assert_eq!(perms.mode() & 0o777, 0o600);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- header ---
+
+    #[test]
+    fn generate_header_has_two_comment_lines() {
+        let header = generate_header();
+        let comments: Vec<_> = header.iter().filter(|l| matches!(l, Line::Comment { .. })).collect();
+        assert_eq!(comments.len(), 2);
+    }
+
+    #[test]
+    fn generate_header_first_line_contains_version() {
+        let header = generate_header();
+        assert!(matches!(&header[0], Line::Comment { text } if text.contains("dotsec v5")));
+    }
+
+    #[test]
+    fn generate_header_second_line_contains_url() {
+        let header = generate_header();
+        assert!(matches!(&header[2], Line::Comment { text } if text.contains("github.com/jpwesselink/dotsec-rs")));
+    }
+
+    #[test]
+    fn has_header_true_when_present() {
+        let lines = generate_header();
+        assert!(has_header(&lines));
+    }
+
+    #[test]
+    fn has_header_false_when_absent() {
+        let lines = vec![
+            Line::Comment { text: "# just a comment".into() },
+            Line::Newline,
+            Line::Kv { key: "FOO".into(), value: "bar".into(), quote_type: QuoteType::None },
+        ];
+        assert!(!has_header(&lines));
+    }
+
+    #[test]
+    fn has_header_matches_any_version() {
+        let lines = vec![
+            Line::Comment { text: "# dotsec v99 — encrypted environment file".into() },
+        ];
+        assert!(has_header(&lines));
+    }
+
     // --- interpolate ---
 
     #[test]
@@ -455,6 +562,18 @@ mod tests {
     fn interpolate_no_vars() {
         let resolved: Vec<(String, String)> = vec![];
         assert_eq!(interpolate("plain text", &resolved), "plain text");
+    }
+
+    #[test]
+    fn interpolate_unclosed_brace_is_literal() {
+        let resolved = vec![("A".into(), "val".into())];
+        assert_eq!(interpolate("path is ${UNCLOSED", &resolved), "path is ${UNCLOSED");
+    }
+
+    #[test]
+    fn interpolate_unclosed_brace_mixed() {
+        let resolved = vec![("A".into(), "val".into())];
+        assert_eq!(interpolate("${A} then ${UNCLOSED", &resolved), "val then ${UNCLOSED");
     }
 
     // --- resolve_env_vars ---

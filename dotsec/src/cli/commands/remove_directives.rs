@@ -22,7 +22,7 @@ pub async fn match_args(
             default_options.schema_path.as_deref(),
         )?;
         if schema_path.is_none() {
-            return Err("No dotsec.schema found. Run `dotsec eject` first to create one.".into());
+            return Err("No dotsec.schema found. Run `dotsec extract-schema` first to create one.".into());
         }
 
         // Parse the .sec file (decrypt if needed)
@@ -52,7 +52,7 @@ pub async fn match_args(
             dotsec::encrypt_lines_to_sec(&new_lines, sec_file, &default_options.encryption_engine)
                 .await?;
         } else {
-            std::fs::write(sec_file, &new_content)?;
+            dotsec::write_sec_file(sec_file, &new_content)?;
         }
 
         println!(
