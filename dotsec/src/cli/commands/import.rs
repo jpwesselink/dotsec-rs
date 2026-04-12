@@ -282,7 +282,7 @@ pub async fn match_args(
         if let Some(ref mut s) = schema {
             s.extend(new_schema_entries);
             let schema_output = dotenv::schema_to_string(s);
-            std::fs::write(schema_path.as_deref().unwrap(), &schema_output)?;
+            dotsec::write_sec_file(schema_path.as_deref().unwrap(), &schema_output)?;
         }
     }
 

@@ -83,7 +83,7 @@ pub async fn match_args(
             schema_output.push_str("\n\n");
         }
         schema_output.push_str(&dotenv::schema_to_string(&schema));
-        std::fs::write(output, &schema_output)?;
+        dotsec::write_sec_file(output, &schema_output)?;
 
         // Rewrite the .sec file without schema directives
         let new_content = dotenv::lines_to_string(&stripped_lines);

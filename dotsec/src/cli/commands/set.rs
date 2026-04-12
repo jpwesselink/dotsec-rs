@@ -228,7 +228,7 @@ pub async fn match_args(
                 key: key.clone(),
             });
             let schema_output = dotenv::schema_to_string(s);
-            std::fs::write(schema_path.as_ref().unwrap(), &schema_output)?;
+            dotsec::write_sec_file(schema_path.as_ref().unwrap(), &schema_output)?;
         }
     } else {
         // No schema — current behavior: directives inline in .sec
