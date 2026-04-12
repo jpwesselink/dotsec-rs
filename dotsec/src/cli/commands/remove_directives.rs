@@ -22,7 +22,7 @@ pub async fn match_args(
             default_options.schema_path.as_deref(),
         )?;
         if schema_path.is_none() {
-            return Err("No dotsec.schema found. Run `dotsec eject` first to create one.".into());
+            return Err("No dotsec.schema found. Run `dotsec extract-schema` first to create one.".into());
         }
 
         // Parse the .sec file (decrypt if needed)

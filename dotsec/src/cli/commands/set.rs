@@ -34,6 +34,13 @@ pub fn command() -> Command {
                 .value_name("TARGET")
                 .help("Push target (aws-ssm, aws-secrets-manager)"),
         )
+        .arg(
+            Arg::new("yes")
+                .short('y')
+                .long("yes")
+                .action(clap::ArgAction::SetTrue)
+                .help("Accept auto-detected type and encryption (skip directive prompts)"),
+        )
 }
 
 pub async fn match_args(
@@ -49,8 +56,9 @@ pub async fn match_args(
     let encryption_engine = &default_options.encryption_engine;
     let key = sub.get_one::<String>("key");
     let value = sub.get_one::<String>("value");
+    let auto_yes = sub.get_flag("yes");
 
-    let interactive = value.is_none();
+    let interactive = value.is_none() && !auto_yes;
 
     // Resolve key
     let key = match key {
@@ -183,9 +191,25 @@ pub async fn match_args(
         }
         // No directives go inline in .sec
     } else if schema.is_some() {
-        // Schema exists but key is new — prompt for directives, write to schema
+        // Schema exists but key is new — prompt for directives (or auto-detect with -y), write to schema
         if interactive {
             new_directives = helpers::prompt_variable_directives(&key, &value, file_default_encrypt, None)?;
+        } else if auto_yes {
+            // Auto-detect directives like import -y
+            let is_secret = helpers::looks_like_secret(&key);
+            if file_default_encrypt {
+                if !is_secret {
+                    new_directives.push(dotenv::Line::Directive { name: "plaintext".to_string(), value: None });
+                }
+            } else if is_secret {
+                new_directives.push(dotenv::Line::Directive { name: "encrypt".to_string(), value: None });
+            }
+            let type_name = match helpers::guess_type(&value) {
+                1 => "number",
+                2 => "boolean",
+                _ => "string",
+            };
+            new_directives.push(dotenv::Line::Directive { name: "type".to_string(), value: Some(type_name.to_string()) });
         } else {
             if has_encrypt_flag {
                 new_directives.push(dotenv::Line::Directive { name: "encrypt".to_string(), value: None });
@@ -231,7 +255,7 @@ pub async fn match_args(
             dotsec::write_sec_file(schema_path.as_ref().unwrap(), &schema_output)?;
         }
     } else {
-        // No schema — current behavior: directives inline in .sec
+        // No schema — directives inline in .sec
         if interactive {
             new_directives = helpers::prompt_variable_directives(&key, &value, file_default_encrypt, None)?;
 
@@ -246,6 +270,26 @@ pub async fn match_args(
             } else {
                 new_is_encrypted = file_default_encrypt;
             }
+        } else if auto_yes && !has_encrypt_flag && !has_plaintext_flag && type_arg.is_none() {
+            // Auto-detect directives like import -y
+            let is_secret = helpers::looks_like_secret(&key);
+            if file_default_encrypt {
+                if !is_secret {
+                    new_directives.push(dotenv::Line::Directive { name: "plaintext".to_string(), value: None });
+                }
+                new_is_encrypted = is_secret || file_default_encrypt;
+            } else if is_secret {
+                new_is_encrypted = true;
+                new_directives.push(dotenv::Line::Directive { name: "encrypt".to_string(), value: None });
+            } else {
+                new_is_encrypted = false;
+            }
+            let type_name = match helpers::guess_type(&value) {
+                1 => "number",
+                2 => "boolean",
+                _ => "string",
+            };
+            new_directives.push(dotenv::Line::Directive { name: "type".to_string(), value: Some(type_name.to_string()) });
         } else {
             if has_encrypt_flag {
                 new_is_encrypted = true;

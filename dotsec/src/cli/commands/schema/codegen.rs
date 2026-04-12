@@ -26,7 +26,7 @@ pub async fn match_args(
 
         let schema_path = default_options.schema_path.as_ref().ok_or_else(|| {
             format!(
-                "{} No dotsec.schema found. Run `dotsec eject` first or specify --schema.",
+                "{} No dotsec.schema found. Run `dotsec extract-schema` first or specify --schema.",
                 "✗".red()
             )
         })?;

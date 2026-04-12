@@ -5,7 +5,8 @@ use crate::cli::helpers::{extract_schema_from_lines, with_progress};
 use crate::default_options::DefaultOptions;
 
 pub fn command() -> Command {
-    Command::new("eject")
+    Command::new("extract-schema")
+        .alias("eject")
         .about("Extract per-key directives from .sec into a dotsec.schema file")
         .arg(
             arg!(-o --output <FILE> "Output schema file path")
@@ -18,7 +19,7 @@ pub async fn match_args(
     matches: &clap::ArgMatches,
     default_options: &DefaultOptions<'_>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(sub) = matches.subcommand_matches("eject") {
+    if let Some(sub) = matches.subcommand_matches("extract-schema").or_else(|| matches.subcommand_matches("eject")) {
         let sec_file = default_options.sec_file;
         let output = sub.get_one::<String>("output").unwrap();
 
@@ -50,8 +51,6 @@ pub async fn match_args(
             );
             return Ok(());
         }
-
-        // Also extract file-level schema directives (default-encrypt, default-plaintext)
         let file_config_lines: Vec<_> = lines.iter().filter(|l| {
             matches!(l, dotenv::Line::Directive { name, .. } if dotenv::SCHEMA_FILE_LEVEL_DIRECTIVES.contains(&name.as_str()))
         }).collect();
@@ -98,7 +97,7 @@ pub async fn match_args(
 
         let entry_count = schema.iter().filter(|(_, e)| !e.directives.is_empty()).count();
         println!(
-            "{} Ejected {} entries into {}",
+            "{} Extracted {} entries into {}",
             "✓".green(),
             entry_count,
             output

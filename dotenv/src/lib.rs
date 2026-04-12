@@ -468,7 +468,31 @@ fn parse_directive(pair: Pair<Rule>) -> Vec<Line> {
 pub fn parse_dotenv(source: &str) -> Result<Vec<Line>, Box<pest::error::Error<Rule>>> {
     let mut output: Vec<Line> = Vec::new();
 
-    let pairs = DotenvLineParser::parse(Rule::env, source)?;
+    let pairs = match DotenvLineParser::parse(Rule::env, source) {
+        Ok(p) => p,
+        Err(e) => {
+            // Check if the error might be caused by a bare @directive (missing # prefix)
+            let mut offset = 0;
+            for line in source.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with('@') && !trimmed.contains('=') {
+                    let pos = pest::Position::new(source, offset).unwrap();
+                    let err = pest::error::Error::<Rule>::new_from_pos(
+                        pest::error::ErrorVariant::CustomError {
+                            message: format!(
+                                "bare directive `{}` — directives must start with `#`, e.g. `# {}`",
+                                trimmed, trimmed
+                            ),
+                        },
+                        pos,
+                    );
+                    return Err(Box::new(err));
+                }
+                offset += line.len() + 1; // +1 for newline
+            }
+            return Err(Box::new(e));
+        }
+    };
     for pair in pairs {
         match pair.as_rule() {
             Rule::NEW_LINE => {
@@ -1062,6 +1086,15 @@ mod tests {
         let lines = parse_dotenv("A=\"hello\"\nB='world'\n").unwrap();
         assert!(matches!(&lines[0], Line::Kv { value, quote_type: QuoteType::Double, .. } if value == "hello"));
         assert!(matches!(&lines[2], Line::Kv { value, quote_type: QuoteType::Single, .. } if value == "world"));
+    }
+
+    #[test]
+    fn bare_directive_gives_helpful_error() {
+        let result = parse_dotenv("@encrypt\nFOO=bar\n");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("bare directive"), "error should mention bare directive, got: {}", err);
+        assert!(err.contains("# @encrypt"), "error should suggest fix, got: {}", err);
     }
 
     #[test]

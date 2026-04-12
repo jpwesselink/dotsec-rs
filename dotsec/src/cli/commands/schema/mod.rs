@@ -9,7 +9,7 @@ pub fn command() -> Command {
         .about("Export or generate code from dotsec.schema")
         .subcommand_required(true)
         .subcommand(export::command())
-        .subcommand(codegen::command())
+        .subcommand(codegen::command().hide(true))
 }
 
 pub async fn match_args(
