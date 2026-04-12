@@ -32,20 +32,7 @@ pub async fn match_args(
     let output = dotenv::lines_to_string(&lines);
 
     if let Some(out_file) = sub.get_one::<String>("output") {
-        #[cfg(unix)]
-        {
-            use std::io::Write;
-            use std::os::unix::fs::OpenOptionsExt;
-            std::fs::OpenOptions::new()
-                .write(true).create(true).truncate(true)
-                .mode(0o600)
-                .open(out_file)?
-                .write_all(output.as_bytes())?;
-        }
-        #[cfg(not(unix))]
-        {
-            std::fs::write(out_file, &output)?;
-        }
+        dotsec::write_sec_file(out_file, &output)?;
         eprintln!(
             "{} Exported {} to {}",
             "✓".green(),
@@ -65,21 +52,12 @@ mod tests {
     #[cfg(unix)]
     fn export_file_has_restricted_permissions() {
         use std::os::unix::fs::PermissionsExt;
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
 
         let dir = std::env::temp_dir().join("dotsec-test-export");
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("test-export.env");
 
-        // Replicate the export logic
-        std::fs::OpenOptions::new()
-            .write(true).create(true).truncate(true)
-            .mode(0o600)
-            .open(&path)
-            .unwrap()
-            .write_all(b"FOO=bar\n")
-            .unwrap();
+        dotsec::write_sec_file(path.to_str().unwrap(), "FOO=bar\n").unwrap();
 
         let perms = std::fs::metadata(&path).unwrap().permissions();
         assert_eq!(perms.mode() & 0o777, 0o600, "exported file should be owner-only");

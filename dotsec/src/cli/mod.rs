@@ -71,7 +71,7 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
         let lines = dotenv::parse_dotenv(&content)?;
         let file_config = dotenv::extract_file_config(&lines);
         debug!("file_config from {}: {:?}", sec_file, file_config);
-        EncryptionEngine::from(file_config)
+        EncryptionEngine::try_from(file_config)?
     } else if is_init || is_import || is_migrate || is_diff || is_eject || is_schema || is_run_env {
         debug!("{} does not exist yet or not needed, using defaults", sec_file);
         EncryptionEngine::None

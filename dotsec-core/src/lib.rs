@@ -372,6 +372,7 @@ fn interpolate(value: &str, resolved: &[(String, String)]) -> String {
                     result.push_str(&val);
                 } else {
                     // Unclosed ${ — treat as literal text
+                    eprintln!("warning: unclosed ${{{}}} in value, treating as literal text", var_name);
                     result.push_str("${");
                     result.push_str(&var_name);
                 }
@@ -441,6 +442,23 @@ mod tests {
     use super::*;
     use dotenv::{Line, QuoteType};
 
+    // --- write_sec_file ---
+
+    #[test]
+    #[cfg(unix)]
+    fn write_sec_file_sets_0600_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join("dotsec-test-write-sec");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("test.sec");
+
+        write_sec_file(path.to_str().unwrap(), "SECRET=hunter2\n").unwrap();
+
+        let perms = std::fs::metadata(&path).unwrap().permissions();
+        assert_eq!(perms.mode() & 0o777, 0o600);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // --- interpolate ---
 
     #[test]
@@ -480,6 +498,18 @@ mod tests {
     fn interpolate_no_vars() {
         let resolved: Vec<(String, String)> = vec![];
         assert_eq!(interpolate("plain text", &resolved), "plain text");
+    }
+
+    #[test]
+    fn interpolate_unclosed_brace_is_literal() {
+        let resolved = vec![("A".into(), "val".into())];
+        assert_eq!(interpolate("path is ${UNCLOSED", &resolved), "path is ${UNCLOSED");
+    }
+
+    #[test]
+    fn interpolate_unclosed_brace_mixed() {
+        let resolved = vec![("A".into(), "val".into())];
+        assert_eq!(interpolate("${A} then ${UNCLOSED", &resolved), "val then ${UNCLOSED");
     }
 
     // --- resolve_env_vars ---

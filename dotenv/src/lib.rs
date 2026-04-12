@@ -991,7 +991,7 @@ pub fn lines_to_json(lines: &[Line]) -> Result<String, serde_json::Error> {
 }
 
 fn csv_escape(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') {
+    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
         s.to_string()
@@ -2633,5 +2633,83 @@ mod tests {
             .filter(|e| e.severity == Severity::Error)
             .collect();
         assert!(real_errors.is_empty());
+    }
+
+    // --- csv_escape ---
+
+    #[test]
+    fn csv_escape_plain() {
+        assert_eq!(csv_escape("hello"), "hello");
+    }
+
+    #[test]
+    fn csv_escape_comma() {
+        assert_eq!(csv_escape("a,b"), "\"a,b\"");
+    }
+
+    #[test]
+    fn csv_escape_quotes() {
+        assert_eq!(csv_escape("say \"hi\""), "\"say \"\"hi\"\"\"");
+    }
+
+    #[test]
+    fn csv_escape_newline() {
+        assert_eq!(csv_escape("line1\nline2"), "\"line1\nline2\"");
+    }
+
+    #[test]
+    fn csv_escape_carriage_return() {
+        assert_eq!(csv_escape("line1\rline2"), "\"line1\rline2\"");
+    }
+
+    // --- lines_to_json ---
+
+    #[test]
+    fn lines_to_json_flat_object() {
+        let lines = vec![
+            Line::Kv { key: "FOO".into(), value: "bar".into(), quote_type: QuoteType::None },
+            Line::Newline,
+            Line::Kv { key: "BAZ".into(), value: "qux".into(), quote_type: QuoteType::None },
+        ];
+        let json = lines_to_json(&lines).unwrap();
+        let parsed: HashMap<String, String> = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.get("FOO").unwrap(), "bar");
+        assert_eq!(parsed.get("BAZ").unwrap(), "qux");
+        assert_eq!(parsed.len(), 2);
+    }
+
+    #[test]
+    fn lines_to_json_ignores_non_kv() {
+        let lines = vec![
+            Line::Comment { text: "# a comment".into() },
+            Line::Newline,
+            Line::Kv { key: "X".into(), value: "1".into(), quote_type: QuoteType::None },
+        ];
+        let json = lines_to_json(&lines).unwrap();
+        let parsed: HashMap<String, String> = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed.get("X").unwrap(), "1");
+    }
+
+    // --- lines_to_csv ---
+
+    #[test]
+    fn lines_to_csv_basic() {
+        let lines = vec![
+            Line::Kv { key: "FOO".into(), value: "bar".into(), quote_type: QuoteType::None },
+            Line::Newline,
+            Line::Kv { key: "BAZ".into(), value: "qux".into(), quote_type: QuoteType::None },
+        ];
+        let csv = lines_to_csv(&lines).unwrap();
+        assert_eq!(csv, "name,value\nFOO,bar\nBAZ,qux\n");
+    }
+
+    #[test]
+    fn lines_to_csv_escapes_special_chars() {
+        let lines = vec![
+            Line::Kv { key: "HOSTS".into(), value: "a,b,c".into(), quote_type: QuoteType::None },
+        ];
+        let csv = lines_to_csv(&lines).unwrap();
+        assert_eq!(csv, "name,value\nHOSTS,\"a,b,c\"\n");
     }
 }

@@ -21,18 +21,20 @@ impl std::fmt::Debug for AwsEncryptionOptions {
     }
 }
 
-impl From<dotenv::FileConfig> for EncryptionEngine {
-    fn from(config: dotenv::FileConfig) -> Self {
+impl TryFrom<dotenv::FileConfig> for EncryptionEngine {
+    type Error = String;
+
+    fn try_from(config: dotenv::FileConfig) -> Result<Self, Self::Error> {
         match config.provider.as_deref() {
-            Some("aws") => EncryptionEngine::Aws(AwsEncryptionOptions {
+            Some("aws") => Ok(EncryptionEngine::Aws(AwsEncryptionOptions {
                 key_id: config.key_id,
                 region: config.region,
-            }),
-            Some(unknown) => {
-                eprintln!("\x1b[1;31mERROR\x1b[0m: unknown encryption provider '{}', expected 'aws'. Encryption is DISABLED.", unknown);
-                EncryptionEngine::None
-            }
-            None => EncryptionEngine::None,
+            })),
+            Some(unknown) => Err(format!(
+                "unknown encryption provider '{}', expected 'aws'",
+                unknown
+            )),
+            None => Ok(EncryptionEngine::None),
         }
     }
 }

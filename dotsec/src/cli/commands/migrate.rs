@@ -121,7 +121,7 @@ pub async fn match_args(
         default_encrypt: Some(true),
     };
 
-    let encryption_engine = dotsec::EncryptionEngine::from(file_config.clone());
+    let encryption_engine = dotsec::EncryptionEngine::try_from(file_config.clone())?;
 
     // --- Step 5: Build output lines ---
     let config_lines = helpers::build_config_directives(&file_config, true);

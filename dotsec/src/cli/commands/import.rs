@@ -146,7 +146,7 @@ pub async fn match_args(
         &default_options.encryption_engine
     } else {
         let effective_config = existing_config.as_ref().unwrap_or(&source_config);
-        resolved_engine = dotsec::EncryptionEngine::from(effective_config.clone());
+        resolved_engine = dotsec::EncryptionEngine::try_from(effective_config.clone())?;
         &resolved_engine
     };
 
@@ -185,7 +185,7 @@ pub async fn match_args(
     let schema_path = dotenv::schema::discover_schema(
         sec_file,
         default_options.schema_path.as_deref(),
-    ).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    )?;
     let mut schema = if let Some(ref path) = schema_path {
         let content = std::fs::read_to_string(path)?;
         Some(dotenv::parse_schema(&content)?)
