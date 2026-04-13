@@ -37,7 +37,7 @@ pub fn generate_header() -> Vec<Line> {
     vec![
         Line::Comment { text: "# dotsec v5 — encrypted environment file".into() },
         Line::Newline,
-        Line::Comment { text: "# https://github.com/jpwesselink/dotsec-rs#getting-started".into() },
+        Line::Comment { text: "# https://github.com/jpwesselink/dotsec-rs".into() },
         Line::Newline,
     ]
 }
@@ -533,7 +533,7 @@ mod tests {
     #[test]
     fn generate_header_second_line_contains_url() {
         let header = generate_header();
-        assert!(matches!(&header[2], Line::Comment { text } if text.contains("github.com/jpwesselink/dotsec-rs")));
+        assert!(matches!(&header[2], Line::Comment { text } if text.contains("https://github.com/jpwesselink/dotsec-rs")));
     }
 
     #[test]

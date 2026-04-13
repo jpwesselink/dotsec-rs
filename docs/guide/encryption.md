@@ -27,7 +27,7 @@ On decryption, load the private key (from `DOTSEC_PRIVATE_KEY` env var or `.sec.
 
 ```bash
 # dotsec v5 — encrypted environment file
-# https://github.com/jpwesselink/dotsec-rs#getting-started
+# https://github.com/jpwesselink/dotsec-rs
 # @provider=local @default-encrypt
 
 # @encrypt
