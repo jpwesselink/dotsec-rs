@@ -1033,4 +1033,87 @@ mod tests {
         assert_eq!(entries[0].value, "hello");
         assert!(!entries[0].has_directive("encrypt"), "plaintext default should not add encrypt");
     }
+
+    // --- local encryption integration ---
+
+    #[tokio::test]
+    async fn local_encrypt_decrypt_roundtrip() {
+        let dir = std::env::temp_dir().join("dotsec-test-local-roundtrip");
+        let _ = std::fs::create_dir_all(&dir);
+        let sec_file = dir.join("test.sec").to_string_lossy().to_string();
+        let key_file = dir.join("test.sec.key").to_string_lossy().to_string();
+
+        let (identity, _) = crypto::local::generate_keypair();
+        std::fs::write(&key_file, &identity).unwrap();
+
+        let lines = vec![
+            Line::Directive { name: "provider".to_string(), value: Some("local".to_string()) },
+            Line::Newline,
+            Line::Directive { name: "encrypt".to_string(), value: None },
+            Line::Newline,
+            Line::Kv { key: "SECRET".into(), value: "hunter2".into(), quote_type: QuoteType::Double },
+            Line::Newline,
+            Line::Kv { key: "PUBLIC".into(), value: "hello".into(), quote_type: QuoteType::None },
+            Line::Newline,
+        ];
+
+        let engine = EncryptionEngine::Local(LocalEncryptionOptions {
+            key_file: Some(key_file.clone()),
+        });
+
+        encrypt_lines_to_sec(&lines, &sec_file, &engine).await.unwrap();
+
+        let content = std::fs::read_to_string(&sec_file).unwrap();
+        assert!(content.contains("ENC["), "encrypted value should contain ENC[...]");
+        assert!(content.contains("__DOTSEC_KEY__"), "should contain wrapped DEK");
+        assert!(!content.contains("hunter2"), "plaintext should not appear");
+
+        let decrypted = decrypt_sec_to_lines(&sec_file, &engine).await.unwrap();
+        let secret_val = decrypted.iter().find_map(|l| {
+            if let Line::Kv { key, value, .. } = l { if key == "SECRET" { Some(value.clone()) } else { None } } else { None }
+        });
+        assert_eq!(secret_val.as_deref(), Some("hunter2"));
+
+        let public_val = decrypted.iter().find_map(|l| {
+            if let Line::Kv { key, value, .. } = l { if key == "PUBLIC" { Some(value.clone()) } else { None } } else { None }
+        });
+        assert_eq!(public_val.as_deref(), Some("hello"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn local_decrypt_with_wrong_key_fails() {
+        let dir = std::env::temp_dir().join("dotsec-test-local-wrong-key");
+        let _ = std::fs::create_dir_all(&dir);
+        let sec_file = dir.join("test.sec").to_string_lossy().to_string();
+        let key_file = dir.join("test.sec.key").to_string_lossy().to_string();
+        let wrong_key_file = dir.join("wrong.sec.key").to_string_lossy().to_string();
+
+        let (identity, _) = crypto::local::generate_keypair();
+        let (wrong_identity, _) = crypto::local::generate_keypair();
+        std::fs::write(&key_file, &identity).unwrap();
+        std::fs::write(&wrong_key_file, &wrong_identity).unwrap();
+
+        let lines = vec![
+            Line::Directive { name: "encrypt".to_string(), value: None },
+            Line::Newline,
+            Line::Kv { key: "SECRET".into(), value: "hunter2".into(), quote_type: QuoteType::Double },
+            Line::Newline,
+        ];
+
+        let engine = EncryptionEngine::Local(LocalEncryptionOptions {
+            key_file: Some(key_file),
+        });
+
+        encrypt_lines_to_sec(&lines, &sec_file, &engine).await.unwrap();
+
+        let wrong_engine = EncryptionEngine::Local(LocalEncryptionOptions {
+            key_file: Some(wrong_key_file),
+        });
+        let result = decrypt_sec_to_lines(&sec_file, &wrong_engine).await;
+        assert!(result.is_err(), "decrypting with wrong key should fail");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

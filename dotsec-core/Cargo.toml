@@ -12,3 +12,6 @@ base64 = { workspace = true }
 dotenv = { path = "../dotenv" }
 serde_json = "1.0"
 zeroize = "1.8"
+
+[dev-dependencies]
+tokio = { workspace = true }
