@@ -22,11 +22,8 @@
 }
 
 /* Hero action buttons — prevent text overflow on install command */
-.rspress-home-hero-actions a,
-.rspress-home-hero-actions .rspress-nav-action {
-  padding: 12px 28px !important;
-  white-space: nowrap !important;
-  min-width: fit-content !important;
+.rp-button--big {
+  padding: 0 28px;
 }
 
 /* Version switcher banner */
