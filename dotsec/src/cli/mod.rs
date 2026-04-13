@@ -52,8 +52,7 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
     let is_set = matches.subcommand_matches("set").is_some();
     let is_run_env = matches
         .subcommand_matches("run")
-        .and_then(|m| m.get_one::<String>("using"))
-        .is_some_and(|v| v == "env");
+        .is_some_and(|m| m.contains_id("env-file") && m.get_one::<String>("env-file").is_some());
 
     // Resolve sec file from CLI arg or default
     let default_sec = ".sec".to_string();

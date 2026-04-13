@@ -71,12 +71,12 @@ dotsec show --output-format text         # formatted text
 Decrypt `.sec` in memory and inject env vars into a child process. Encrypted values are automatically redacted from stdout/stderr.
 
 ```bash
-dotsec run -- node server.js                        # from .sec (decrypts)
-dotsec run --using env -- cargo test                # from .env (plain)
-dotsec run --using env --env-file .env.local -- sh  # custom .env path
+dotsec run -- node server.js                  # from .sec (decrypts)
+dotsec run --env-file .env -- cargo test      # from plain .env
+dotsec run --env-file .env.local -- sh        # custom .env path
 ```
 
-The child process runs in a pseudo-terminal (PTY), so colors, interactive output, and `isatty()` detection work automatically.
+The `--` separates dotsec options from your command. The child process runs in a pseudo-terminal (PTY), so colors, interactive output, and `isatty()` detection work automatically.
 
 `${VAR}` interpolation is resolved before injection. Single-quoted values are not interpolated (bash convention).
 

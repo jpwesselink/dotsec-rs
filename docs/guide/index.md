@@ -33,7 +33,8 @@ npx dotsec set API_KEY sk-live-xxx
 ```bash
 dotsec set API_KEY sk-live-xxx --encrypt  # add a secret (auto-creates .sec + keypair)
 dotsec set PORT 3000                      # add a plaintext var
-dotsec run -- node server.js              # run with decrypted env vars
+dotsec run -- node server.js              # run with decrypted env vars (from .sec)
+dotsec run --env-file .env -- node server.js  # or from a plain .env
 ```
 
 That's it. Your `.sec` file goes into git, your `.sec.key` stays in `.gitignore`.

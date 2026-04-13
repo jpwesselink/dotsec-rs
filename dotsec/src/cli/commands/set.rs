@@ -109,6 +109,8 @@ pub async fn match_args(
         let output = dotenv::lines_to_string(&init_lines);
         dotsec::write_sec_file(sec_file, &output)?;
         eprintln!("{} Created {}", "✓".green(), sec_file);
+        eprintln!("  → Commit {} to git", sec_file);
+        eprintln!("  → Keep {}.key secret — share it with teammates over a secure channel", sec_file);
 
         resolved_engine = dotsec::EncryptionEngine::Local(dotsec::LocalEncryptionOptions {
             key_file: None,
