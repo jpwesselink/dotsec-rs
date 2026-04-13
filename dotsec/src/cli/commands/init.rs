@@ -90,7 +90,7 @@ pub async fn match_args(
                 .map(|c| c.lines().any(|l| l.trim() == "*.key" || l.contains(".key")))
                 .unwrap_or(false);
             if !has_key_pattern {
-                eprintln!("{} Add {} to .gitignore to avoid committing private keys", "⚠".yellow().bold(), "*.key");
+                eprintln!("{} Add *.key to .gitignore to avoid committing private keys", "⚠".yellow().bold());
             }
         }
     }

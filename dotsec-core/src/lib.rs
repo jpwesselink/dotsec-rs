@@ -136,6 +136,7 @@ pub async fn encrypt_lines_to_sec(
     encrypt_with_dek(lines, &entries, &dek, &wrapped_dek, sec_file)
 }
 
+#[allow(clippy::borrowed_box)]
 fn is_new_or_no_key(e: &Box<dyn std::error::Error>) -> bool {
     let is_new_file = e.downcast_ref::<std::io::Error>()
         .is_some_and(|io_err| io_err.kind() == std::io::ErrorKind::NotFound);
@@ -356,11 +357,13 @@ async fn decrypt_blob_v1(
 
 // --- DEK helpers ---
 
+type DekPair = (zeroize::Zeroizing<Vec<u8>>, Vec<u8>);
+
 /// Try to load and unwrap the existing DEK from a .sec file.
 async fn load_existing_dek_aws(
     sec_file: &str,
     region: Option<&str>,
-) -> Result<(zeroize::Zeroizing<Vec<u8>>, Vec<u8>), Box<dyn std::error::Error>> {
+) -> Result<DekPair, Box<dyn std::error::Error>> {
     let content = load_file(sec_file)?;
     let lines = dotenv::parse_dotenv(&content)?;
     let wrapped_b64 = dotenv::get_value(&lines, DOTSEC_KEY_NAME)
@@ -373,7 +376,7 @@ async fn load_existing_dek_aws(
 fn load_existing_dek_local(
     sec_file: &str,
     identity: &str,
-) -> Result<(zeroize::Zeroizing<Vec<u8>>, Vec<u8>), Box<dyn std::error::Error>> {
+) -> Result<DekPair, Box<dyn std::error::Error>> {
     let content = load_file(sec_file)?;
     let lines = dotenv::parse_dotenv(&content)?;
     let wrapped_b64 = dotenv::get_value(&lines, DOTSEC_KEY_NAME)
