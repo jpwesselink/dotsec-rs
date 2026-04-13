@@ -48,7 +48,7 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
     let is_import = matches.subcommand_matches("import").is_some();
     let is_migrate = matches.subcommand_matches("migrate").is_some();
     let is_diff = matches.subcommand_matches("diff").is_some();
-    let is_eject = matches.subcommand_matches("extract-schema").is_some() || matches.subcommand_matches("eject").is_some();
+    let is_eject = matches.subcommand_matches("extract-schema").is_some();
     let is_schema = matches.subcommand_matches("schema").is_some();
     let is_set = matches.subcommand_matches("set").is_some();
     let is_run_env = matches
