@@ -692,9 +692,9 @@ dependencies = [
 
 [[package]]
 name = "chromakopia"
-version = "0.1.0-beta.2ad179b"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70196a8d190509cd100ea0432dd5e8bba2ef0adbed85febe01adca66c91b9366"
+checksum = "fd77d2b7dc54c78239c9e6372349c1a44654adbbe6c27d18b89c3e42a4a9e1d1"
 dependencies = [
  "colored 3.1.1",
  "libc",
