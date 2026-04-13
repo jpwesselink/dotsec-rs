@@ -97,32 +97,50 @@ pub async fn encrypt_lines_to_sec(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let entries = lines_to_entries(lines);
 
-    let (key_id, region) = match encryption_engine {
-        EncryptionEngine::Aws(opts) => (
-            opts.key_id.as_deref().ok_or("AWS key_id is required")?,
-            opts.region.as_deref(),
-        ),
+    let (dek, wrapped_dek) = match encryption_engine {
+        EncryptionEngine::Aws(opts) => {
+            let key_id = opts.key_id.as_deref().ok_or("AWS key_id is required")?;
+            let region = opts.region.as_deref();
+            match load_existing_dek_aws(sec_file, region).await {
+                Ok(pair) => pair,
+                Err(e) => {
+                    let is_new = is_new_or_no_key(&e);
+                    if is_new {
+                        aws::generate_data_key(key_id, region).await?
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+        EncryptionEngine::Local(opts) => {
+            let private_key = crypto::local::load_private_key(sec_file, opts.key_file.as_deref())?;
+            let recipient = crypto::local::recipient_from_identity(&private_key)?;
+            match load_existing_dek_local(sec_file, &private_key) {
+                Ok(pair) => pair,
+                Err(e) => {
+                    let is_new = is_new_or_no_key(&e);
+                    if is_new {
+                        let dek = crypto::generate_dek();
+                        let wrapped = crypto::local::wrap_dek(&dek, &recipient)?;
+                        (dek, wrapped)
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        }
         EncryptionEngine::None => return Err("Encryption engine is required".into()),
     };
 
-    // Check if there's an existing __DOTSEC_KEY__ we can reuse
-    let (dek, wrapped_dek) = match load_existing_dek(sec_file, region).await {
-        Ok((dek, wrapped)) => (dek, wrapped),
-        Err(e) => {
-            let is_new_file = e.downcast_ref::<std::io::Error>()
-                .is_some_and(|io_err| io_err.kind() == std::io::ErrorKind::NotFound);
-            let is_no_key = e.to_string().contains("No __DOTSEC_KEY__ found");
-            if is_new_file || is_no_key {
-                let (plaintext, wrapped) = aws::generate_data_key(key_id, region).await?;
-                (plaintext, wrapped)
-            } else {
-                return Err(e);
-            }
-        }
-    };
-
-    // DEK is Zeroizing<Vec<u8>> — auto-zeroizes on drop (including error paths)
     encrypt_with_dek(lines, &entries, &dek, &wrapped_dek, sec_file)
+}
+
+fn is_new_or_no_key(e: &Box<dyn std::error::Error>) -> bool {
+    let is_new_file = e.downcast_ref::<std::io::Error>()
+        .is_some_and(|io_err| io_err.kind() == std::io::ErrorKind::NotFound);
+    let is_no_key = e.to_string().contains("No __DOTSEC_KEY__ found");
+    is_new_file || is_no_key
 }
 
 /// Inner encryption logic, separated so the caller can zeroize the DEK.
@@ -159,10 +177,10 @@ fn encrypt_with_dek(
                 let should_encrypt = entry.is_some_and(|e| e.has_directive("encrypt"));
 
                 if should_encrypt {
-                    if aws::is_encrypted_value(value) {
+                    if crypto::is_encrypted_value(value) {
                         sec_lines.push(line.clone());
                     } else {
-                        let encrypted = aws::encrypt_value(value, dek, key)?;
+                        let encrypted = crypto::encrypt_value(value, dek, key)?;
                         sec_lines.push(Line::Kv { key: key.clone(), value: encrypted, quote_type: quote_type.clone() });
                     }
                 } else {
@@ -215,7 +233,7 @@ pub async fn decrypt_sec_to_lines(
         SecFormat::V1 => decrypt_v1(&lines, encryption_engine).await,
         SecFormat::None => {
             let has_enc_values = lines.iter().any(|l| {
-                if let Line::Kv { value: v, .. } = l { aws::is_encrypted_value(v) } else { false }
+                if let Line::Kv { value: v, .. } = l { crypto::is_encrypted_value(v) } else { false }
             });
             if has_enc_values {
                 return Err("File contains ENC[...] values but no __DOTSEC_KEY__. File may be corrupted.".into());
@@ -230,17 +248,20 @@ async fn decrypt_v2(
     lines: &[Line],
     encryption_engine: &EncryptionEngine,
 ) -> Result<Vec<Line>, Box<dyn std::error::Error>> {
-    let region = match encryption_engine {
-        EncryptionEngine::Aws(opts) => opts.region.as_deref(),
-        EncryptionEngine::None => return Err("Encryption engine is required".into()),
-    };
-
-    // Find and unwrap the DEK
     let wrapped_dek_b64 = dotenv::get_value(lines, DOTSEC_KEY_NAME)
         .ok_or("No __DOTSEC_KEY__ found in .sec file")?;
     let wrapped_dek = base64::engine::general_purpose::STANDARD.decode(&wrapped_dek_b64)?;
-    // DEK is Zeroizing<Vec<u8>> — auto-zeroizes on drop (including error paths)
-    let dek = aws::unwrap_data_key(&wrapped_dek, region).await?;
+
+    let dek = match encryption_engine {
+        EncryptionEngine::Aws(opts) => {
+            aws::unwrap_data_key(&wrapped_dek, opts.region.as_deref()).await?
+        }
+        EncryptionEngine::Local(opts) => {
+            let private_key = crypto::local::load_private_key("", opts.key_file.as_deref())?;
+            crypto::local::unwrap_dek(&wrapped_dek, &private_key)?
+        }
+        EncryptionEngine::None => return Err("Encryption engine is required".into()),
+    };
 
     let mut resolved: Vec<Line> = Vec::new();
 
@@ -250,8 +271,8 @@ async fn decrypt_v2(
                 if key == DOTSEC_KEY_NAME {
                     continue;
                 }
-                if aws::is_encrypted_value(value) {
-                    let plaintext = aws::decrypt_value(value, &dek, key)?;
+                if crypto::is_encrypted_value(value) {
+                    let plaintext = crypto::decrypt_value(value, &dek, key)?;
                     resolved.push(Line::Kv { key: key.clone(), value: plaintext, quote_type: quote_type.clone() });
                 } else {
                     resolved.push(line.clone());
@@ -336,7 +357,7 @@ async fn decrypt_blob_v1(
 // --- DEK helpers ---
 
 /// Try to load and unwrap the existing DEK from a .sec file.
-async fn load_existing_dek(
+async fn load_existing_dek_aws(
     sec_file: &str,
     region: Option<&str>,
 ) -> Result<(zeroize::Zeroizing<Vec<u8>>, Vec<u8>), Box<dyn std::error::Error>> {
@@ -346,6 +367,19 @@ async fn load_existing_dek(
         .ok_or("No __DOTSEC_KEY__ found")?;
     let wrapped_dek = base64::engine::general_purpose::STANDARD.decode(&wrapped_b64)?;
     let dek = aws::unwrap_data_key(&wrapped_dek, region).await?;
+    Ok((dek, wrapped_dek))
+}
+
+fn load_existing_dek_local(
+    sec_file: &str,
+    identity: &str,
+) -> Result<(zeroize::Zeroizing<Vec<u8>>, Vec<u8>), Box<dyn std::error::Error>> {
+    let content = load_file(sec_file)?;
+    let lines = dotenv::parse_dotenv(&content)?;
+    let wrapped_b64 = dotenv::get_value(&lines, DOTSEC_KEY_NAME)
+        .ok_or("No __DOTSEC_KEY__ found")?;
+    let wrapped_dek = base64::engine::general_purpose::STANDARD.decode(&wrapped_b64)?;
+    let dek = crypto::local::unwrap_dek(&wrapped_dek, identity)?;
     Ok((dek, wrapped_dek))
 }
 
@@ -876,7 +910,7 @@ mod tests {
         // But we can detect the ENC values are present, which should be an error condition
         let has_enc_values = lines.iter().any(|l| {
             if let Line::Kv { value: v, .. } = l {
-                aws::is_encrypted_value(v)
+                crypto::is_encrypted_value(v)
             } else {
                 false
             }
