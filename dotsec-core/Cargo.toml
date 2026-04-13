@@ -7,6 +7,7 @@ license = "MIT"
 
 [dependencies]
 aws = { path = "../aws" }
+crypto = { path = "../crypto" }
 base64 = { workspace = true }
 dotenv = { path = "../dotenv" }
 serde_json = "1.0"
