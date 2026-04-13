@@ -31,6 +31,7 @@ pub fn command() -> Command {
         .about("Show the dotsec license")
 }
 
+// TODO: replace with chromakopia's built-in plasma effect once released
 fn plasma_effect(text: &str, frame: usize) -> String {
     use colored::Colorize;
     let t = frame as f64 * 0.06;
