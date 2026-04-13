@@ -21,6 +21,13 @@
   --rp-home-feature-bg: #1a1a1a;
 }
 
+/* Hero action buttons — prevent text overflow on install command */
+.rspress-home-hero .rspress-home-hero-actions a {
+  padding-left: 24px;
+  padding-right: 24px;
+  white-space: nowrap;
+}
+
 /* Version switcher banner */
 .version-banner {
   position: fixed;
