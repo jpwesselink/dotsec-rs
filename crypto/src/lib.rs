@@ -26,7 +26,7 @@ pub enum CryptoError {
 }
 
 /// Compute a 32-byte key commitment: HMAC-SHA256(key=DEK, msg="dotsec-key-commit").
-fn compute_key_commitment(dek: &[u8]) -> Vec<u8> {
+pub fn compute_key_commitment(dek: &[u8]) -> Vec<u8> {
     let mut mac = <HmacSha256 as Mac>::new_from_slice(dek).expect("HMAC accepts any key length");
     mac.update(b"dotsec-key-commit");
     mac.finalize().into_bytes().to_vec()
