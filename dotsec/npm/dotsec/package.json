@@ -1,7 +1,7 @@
 {
   "name": "dotsec",
   "version": "5.0.0",
-  "description": "Encrypt and manage environment variables with AWS KMS",
+  "description": "Encrypt your .env into a .sec file — committed to git, decrypted at runtime",
   "bin": {
     "dotsec": "bin/dotsec.js"
   },
