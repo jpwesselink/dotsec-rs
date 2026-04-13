@@ -49,6 +49,7 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
     let is_diff = matches.subcommand_matches("diff").is_some();
     let is_eject = matches.subcommand_matches("extract-schema").is_some() || matches.subcommand_matches("eject").is_some();
     let is_schema = matches.subcommand_matches("schema").is_some();
+    let is_set = matches.subcommand_matches("set").is_some();
     let is_run_env = matches
         .subcommand_matches("run")
         .and_then(|m| m.get_one::<String>("using"))
@@ -72,7 +73,7 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
         let file_config = dotenv::extract_file_config(&lines);
         debug!("file_config from {}: {:?}", sec_file, file_config);
         EncryptionEngine::try_from(file_config)?
-    } else if is_init || is_import || is_migrate || is_diff || is_eject || is_schema || is_run_env {
+    } else if is_init || is_import || is_migrate || is_diff || is_eject || is_schema || is_run_env || is_set {
         debug!("{} does not exist yet or not needed, using defaults", sec_file);
         EncryptionEngine::None
     } else {
