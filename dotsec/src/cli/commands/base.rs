@@ -9,7 +9,7 @@ pub fn command() -> Command {
              dotsec set API_KEY sk-live-xxx --encrypt   # new project: auto-creates .sec + keypair\n  \
              dotsec set PORT 3000                       # add a plaintext variable\n  \
              dotsec run -- node server.js               # run with decrypted env vars injected\n\n\
-             Docs: https://dotsec.dev",
+             Docs: https://jpwesselink.github.io/dotsec-rs",
         )
         .arg(arg!(-d --debug ... "Turn debugging information on"))
         .arg(

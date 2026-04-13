@@ -44,7 +44,7 @@ export DOTSEC_PRIVATE_KEY="AGE-SECRET-KEY-1..."
 
 ## Documentation
 
-**[dotsec.dev →](https://dotsec.dev)**
+**[Docs →](https://jpwesselink.github.io/dotsec-rs)**
 
 ## License
 

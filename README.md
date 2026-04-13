@@ -103,4 +103,4 @@ aws/               AWS KMS encryption (internal)
 
 ---
 
-**[Full documentation →](https://dotsec.dev)**
+**[Full documentation →](https://jpwesselink.github.io/dotsec-rs)**
