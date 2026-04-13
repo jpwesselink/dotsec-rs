@@ -77,7 +77,7 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
         debug!("{} does not exist yet or not needed, using defaults", sec_file);
         EncryptionEngine::None
     } else {
-        return Err(format!("{} not found. Run `dotsec init` or `dotsec import` first.", sec_file).into());
+        return Err(format!("{} not found. Run `dotsec set KEY value` to create one, or `dotsec import` to migrate from .env.", sec_file).into());
     };
 
     debug!("sec_file: {}, engine: {:?}", sec_file, encryption_engine);
