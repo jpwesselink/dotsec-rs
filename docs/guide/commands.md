@@ -224,6 +224,8 @@ JSON Schema output maps all directive types: `@type` → JSON Schema types, `@fo
 
 | Flag | Env var | Description |
 |------|---------|-------------|
-| `--sec-file <FILE>` | `SEC_FILE` | Path to `.sec` file (default: `.sec`) |
+| `-s, --sec-file <FILE>` | `SEC_FILE` | Path to `.sec` file (default: `.sec`) |
 | `--schema <FILE>` | `DOTSEC_SCHEMA` | Path to schema file (default: auto-discover `dotsec.schema`) |
-| `--debug` | — | Enable debug logging |
+| `-d, --debug` | — | Enable debug logging |
+| `-h, --help` | — | Print help |
+| `-V, --version` | — | Print version |
