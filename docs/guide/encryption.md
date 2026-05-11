@@ -13,6 +13,14 @@ Two providers are supported:
 
 dotsec uses [age](https://age-encryption.org/) for key management. Each `.sec` file has a corresponding keypair.
 
+<!-- TODO: add a "Why age?" section here. Cover: small audited library (Cure53 2021),
+multi-recipient support enables painless team key rotation later, standard interchange
+format (`age`/`rage` CLI can decrypt the wrapped DEK if dotsec ever broke), no curve or
+parameter choices to footgun, maintained Rust crate by the spec author. Contrast vs. raw
+libsodium/NaCl sealed boxes (no multi-recipient, no interchange format) and GPG (too much
+surface area, web-of-trust we don't need). -->
+
+
 ### How it works
 
 1. On first use, generate an X25519 keypair → store private key in `.sec.key`
