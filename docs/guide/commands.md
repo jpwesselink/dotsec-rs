@@ -5,11 +5,15 @@
 Add or update a single variable. On a new project with no `.sec` file, auto-creates `.sec` + keypair.
 
 ```bash
-dotsec set API_KEY sk-live-xxx --encrypt    # encrypted variable
-dotsec set PORT 3000                        # plaintext variable
-dotsec set                                  # fully interactive
-dotsec set API_KEY sk-live-xxx -y           # skip prompts, auto-detect directives
+dotsec set API_KEY sk-live-xxx --encrypt          # encrypted variable
+dotsec set PORT 3000                              # plaintext variable
+dotsec set                                        # fully interactive
+dotsec set API_KEY sk-live-xxx -y                 # skip prompts, auto-detect directives
+dotsec set PORT 3000 --type number                # set @type directive
+dotsec set DB_URL pg://... --push aws-ssm         # set @push target
 ```
+
+Flags: `--encrypt` / `--plaintext` to control encryption, `--type <TYPE>` for the `@type` directive (`string`, `number`, `boolean`, `enum(...)`), `--push <TARGET>` for the `@push` directive (`aws-ssm`, `aws-secrets-manager`), `-y/--yes` to skip directive prompts.
 
 Secret-looking names (containing `KEY`, `SECRET`, `PASSWORD`, `TOKEN`, etc.) use masked input in interactive mode.
 
@@ -66,6 +70,8 @@ dotsec show --output-format csv          # CSV format
 dotsec show --output-format text         # formatted text
 ```
 
+`--output-format` also reads from `DOTSEC_SHOW_OUTPUT_FORMAT`.
+
 ## `dotsec run`
 
 Decrypt `.sec` in memory and inject env vars into a child process. Encrypted values are automatically redacted from stdout/stderr.
@@ -112,12 +118,12 @@ Keys defined in the schema are emitted in schema order. Keys not in the schema a
 
 ## `dotsec diff`
 
-Compare `.sec` files for structural differences:
+Compare `.sec` files for structural differences. The `--sec-file` (default `.sec`) is always included; positional args add more files to compare. The most recently modified file is auto-selected as the reference.
 
 ```bash
-dotsec diff .sec.staging                  # compare default .sec vs .sec.staging
-dotsec diff .sec.staging .sec.production  # compare two files
-dotsec diff --values .sec.staging         # include value differences
+dotsec diff .sec.staging                              # compare default .sec vs .sec.staging
+dotsec diff .sec.staging .sec.production              # compare three files (.sec + both)
+dotsec diff --values .sec.staging                     # include value differences
 ```
 
 Reports: missing keys, extra keys, directive mismatches, ordering differences, and optionally value differences.
@@ -174,7 +180,10 @@ The header identifies the file as a dotsec secrets file and includes a link to t
 Push variables to AWS SSM Parameter Store and/or Secrets Manager based on `@push` directives:
 
 ```bash
-dotsec push
+dotsec push                              # push all variables with @push
+dotsec push API_KEY DB_URL               # push only specific keys
+dotsec push --dry-run                    # show what would be pushed, no API calls
+dotsec push -y                           # skip confirmation prompt
 ```
 
 ## `dotsec rotate-key`
@@ -189,11 +198,15 @@ For local encryption: generates a new DEK wrapped with the same age key. For AWS
 
 ## `dotsec migrate`
 
-Migrate from dotsec v4 format to v5:
+Migrate from dotsec v4 (`dotsec.config.ts` + plaintext `.env`) to v5 `.sec` format:
 
 ```bash
-dotsec migrate
+dotsec migrate                                       # uses dotsec.config.ts and .env
+dotsec migrate .env.production                       # specify env-file
+dotsec migrate --config dotsec.config.staging.ts     # specify v4 config
 ```
+
+Arguments: positional `[env-file]` (default `.env`, also reads `ENV_FILE`) for the plaintext source, `-c, --config <FILE>` (default `dotsec.config.ts`) for the v4 config.
 
 ## `dotsec schema export`
 
@@ -220,6 +233,14 @@ Zero runtime dependencies — the generated code is the validator.
 
 JSON Schema output maps all directive types: `@type` → JSON Schema types, `@format` → formats, `@pattern` → pattern, `@min`/`@max` → minimum/maximum, `@optional` → omitted from required, `@deprecated` → deprecated flag.
 
+## `dotsec license`
+
+Show the dotsec license:
+
+```bash
+dotsec license
+```
+
 ## Global options
 
 | Flag | Env var | Description |
@@ -229,3 +250,4 @@ JSON Schema output maps all directive types: `@type` → JSON Schema types, `@fo
 | `-d, --debug` | — | Enable debug logging |
 | `-h, --help` | — | Print help |
 | `-V, --version` | — | Print version |
+| — | `DOTSEC_PRIVATE_KEY` | Age private key for local-provider decryption — checked before any `<sec>.key` file |

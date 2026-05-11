@@ -42,7 +42,7 @@ This creates:
 - `.sec` — your encrypted secrets file (commit this)
 - `.sec.key` — your age private key (never commit this)
 
-`.sec.key` is automatically added to `.gitignore` if one exists.
+Make sure `.sec.key` is in your `.gitignore` — dotsec warns on `set`/`init` if no `.gitignore` rule excludes it.
 
 ## Team sharing
 
