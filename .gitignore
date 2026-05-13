@@ -15,7 +15,8 @@ node_modules/
 .idea/
 
 # Cargo
-.cargo/
+.cargo/*
+!.cargo/audit.toml
 
 # OS
 .DS_Store

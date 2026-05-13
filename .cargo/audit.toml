@@ -1,0 +1,60 @@
+# cargo-audit configuration for dotsec-rs.
+#
+# Each `ignore` entry must include a rationale. Revisit on every major aws-sdk bump
+# (most of these are transitive through the TLS / aws-sdk stack and resolve when
+# we move to a newer aws-sdk minor that pulls in updated rustls/ring/idna/etc).
+
+[advisories]
+# Treat unmaintained crates as warnings, not failures — they're not vulnerabilities,
+# only signals that the upstream repo is dormant. We surface them in audit output
+# but don't gate CI on them.
+informational_warnings = ["unmaintained"]
+
+ignore = [
+    # --- Transitive via aws-sdk-* / TLS stack ---
+    # We use aws-sdk-{kms,ssm,secretsmanager} 1.47.x. These all resolve when we bump
+    # the aws-sdk-* family (planned in a separate PR — too disruptive to bundle).
+
+    # bytes BytesMut::reserve integer overflow. Reached only via aws-sdk HTTP body
+    # buffering. Exploitation needs attacker-influenced very-large `reserve` sizes,
+    # which dotsec's KMS/SSM request paths don't produce.
+    "RUSTSEC-2026-0007",
+
+    # hashbrown Borsh serialization non-canonical. We don't use Borsh anywhere.
+    "RUSTSEC-2024-0402",
+
+    # idna accepts certain Punycode labels. TLS hostname validation path inside the
+    # aws-sdk; not user-controllable in dotsec.
+    "RUSTSEC-2024-0421",
+
+    # ring AES panic when overflow-checks=on. We don't enable overflow checks in
+    # release; debug-only panic is acceptable.
+    "RUSTSEC-2025-0009",
+
+    # rustls-webpki: CRL parse panic. We don't load CRLs (aws-sdk doesn't either).
+    "RUSTSEC-2026-0104",
+
+    # rustls-webpki: name constraints accepted for URI names. dotsec only validates
+    # AWS service endpoints, which use trusted Amazon roots — no path-controllable
+    # CA chains.
+    "RUSTSEC-2026-0098",
+
+    # rustls-webpki: wildcard-in-name-constraints. Same containment as above.
+    "RUSTSEC-2026-0099",
+
+    # time stack DoS on deeply nested format strings. Format strings are static in
+    # aws-sdk; not attacker-controllable.
+    "RUSTSEC-2026-0009",
+
+    # --- Other ---
+
+    # rand 0.8.5 unsoundness — requires the `log` feature + a custom logger that
+    # accesses `rand::rng()` at trace level. dotsec does neither (we use plain
+    # tracing/log targets without TLS RNG calls in formatters).
+    "RUSTSEC-2026-0097",
+
+    # `dotenv` crate on crates.io is unmaintained (RUSTSEC-2021-0141). False
+    # positive for us: our workspace-internal crate is named `dotenv` too but
+    # is independent. cargo-audit matches by name, not crate identity.
+    "RUSTSEC-2021-0141",
+]
