@@ -6,8 +6,7 @@ use crate::cli::helpers::with_progress;
 use crate::default_options::DefaultOptions;
 
 pub fn command() -> Command {
-    Command::new("rotate-key")
-        .about("Generate a new DEK and re-encrypt all values")
+    Command::new("rotate-key").about("Generate a new DEK and re-encrypt all values")
 }
 
 pub async fn match_args(
@@ -43,8 +42,7 @@ pub async fn match_args(
         }
         dotsec::EncryptionEngine::None => return Err("Encryption engine is required".into()),
     };
-    let new_wrapped_b64 =
-        base64::engine::general_purpose::STANDARD.encode(&new_wrapped_dek);
+    let new_wrapped_b64 = base64::engine::general_purpose::STANDARD.encode(&new_wrapped_dek);
 
     // Re-encrypt: build new lines with the new DEK
     let entries = dotenv::lines_to_entries(&lines);
@@ -52,13 +50,21 @@ pub async fn match_args(
 
     for line in &lines {
         match line {
-            dotenv::Line::Kv { key, value, quote_type } => {
+            dotenv::Line::Kv {
+                key,
+                value,
+                quote_type,
+            } => {
                 let entry = entries.iter().find(|e| e.key == *key);
                 let should_encrypt = entry.is_some_and(|e| e.has_directive("encrypt"));
 
                 if should_encrypt {
                     let encrypted = crypto::encrypt_value(value, &new_dek, key)?;
-                    sec_lines.push(dotenv::Line::Kv { key: key.clone(), value: encrypted, quote_type: quote_type.clone() });
+                    sec_lines.push(dotenv::Line::Kv {
+                        key: key.clone(),
+                        value: encrypted,
+                        quote_type: quote_type.clone(),
+                    });
                 } else {
                     sec_lines.push(line.clone());
                 }

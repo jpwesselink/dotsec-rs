@@ -1,6 +1,4 @@
-use comfy_table::{
-    modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, ContentArrangement, Table,
-};
+use comfy_table::{modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, ContentArrangement, Table};
 use dotenv::{lines_to_json, Line};
 
 // Re-export everything from dotsec-core
@@ -32,13 +30,21 @@ fn mask_all_values(lines: &[dotenv::Line]) -> Vec<dotenv::Line> {
     lines
         .iter()
         .map(|line| match line {
-            dotenv::Line::Kv { key, value, quote_type } => {
+            dotenv::Line::Kv {
+                key,
+                value,
+                quote_type,
+            } => {
                 let masked = if value.chars().count() > 4 {
                     format!("{}****", value.chars().take(4).collect::<String>())
                 } else {
                     "****".to_string()
                 };
-                dotenv::Line::Kv { key: key.clone(), value: masked, quote_type: quote_type.clone() }
+                dotenv::Line::Kv {
+                    key: key.clone(),
+                    value: masked,
+                    quote_type: quote_type.clone(),
+                }
             }
             other => other.clone(),
         })
@@ -190,7 +196,9 @@ pub async fn run_command(
                     let mut lines_end: usize = 0;
                     {
                         let mut search_from = 0;
-                        while let Some(pos) = remainder[search_from..].iter().position(|&b| b == b'\n') {
+                        while let Some(pos) =
+                            remainder[search_from..].iter().position(|&b| b == b'\n')
+                        {
                             lines_end = search_from + pos + 1;
                             search_from = lines_end;
                         }
@@ -288,65 +296,114 @@ mod tests {
 
     #[test]
     fn mask_short_value_becomes_stars() {
-        let lines = vec![Line::Kv { key: "K".into(), value: "abc".into(), quote_type: QuoteType::Double }];
+        let lines = vec![Line::Kv {
+            key: "K".into(),
+            value: "abc".into(),
+            quote_type: QuoteType::Double,
+        }];
         let masked = mask_all_values(&lines);
         assert_eq!(masked.len(), 1);
-        if let Line::Kv { value: v, .. } = &masked[0] { assert_eq!(v, "****"); }
-        else { panic!("expected Kv"); }
+        if let Line::Kv { value: v, .. } = &masked[0] {
+            assert_eq!(v, "****");
+        } else {
+            panic!("expected Kv");
+        }
     }
 
     #[test]
     fn mask_empty_value_becomes_stars() {
-        let lines = vec![Line::Kv { key: "K".into(), value: "".into(), quote_type: QuoteType::None }];
+        let lines = vec![Line::Kv {
+            key: "K".into(),
+            value: "".into(),
+            quote_type: QuoteType::None,
+        }];
         let masked = mask_all_values(&lines);
-        if let Line::Kv { value: v, .. } = &masked[0] { assert_eq!(v, "****"); }
-        else { panic!("expected Kv"); }
+        if let Line::Kv { value: v, .. } = &masked[0] {
+            assert_eq!(v, "****");
+        } else {
+            panic!("expected Kv");
+        }
     }
 
     #[test]
     fn mask_exactly_four_chars_becomes_stars() {
-        let lines = vec![Line::Kv { key: "K".into(), value: "abcd".into(), quote_type: QuoteType::Double }];
+        let lines = vec![Line::Kv {
+            key: "K".into(),
+            value: "abcd".into(),
+            quote_type: QuoteType::Double,
+        }];
         let masked = mask_all_values(&lines);
-        if let Line::Kv { value: v, .. } = &masked[0] { assert_eq!(v, "****"); }
-        else { panic!("expected Kv"); }
+        if let Line::Kv { value: v, .. } = &masked[0] {
+            assert_eq!(v, "****");
+        } else {
+            panic!("expected Kv");
+        }
     }
 
     #[test]
     fn mask_long_value_shows_first_four_plus_stars() {
-        let lines = vec![Line::Kv { key: "K".into(), value: "secret_password".into(), quote_type: QuoteType::Double }];
+        let lines = vec![Line::Kv {
+            key: "K".into(),
+            value: "secret_password".into(),
+            quote_type: QuoteType::Double,
+        }];
         let masked = mask_all_values(&lines);
-        if let Line::Kv { value: v, .. } = &masked[0] { assert_eq!(v, "secr****"); }
-        else { panic!("expected Kv"); }
+        if let Line::Kv { value: v, .. } = &masked[0] {
+            assert_eq!(v, "secr****");
+        } else {
+            panic!("expected Kv");
+        }
     }
 
     #[test]
     fn mask_multibyte_utf8_no_panic() {
-        let lines = vec![Line::Kv { key: "E".into(), value: "\u{1F600}\u{1F601}\u{1F602}\u{1F603}\u{1F604}".into(), quote_type: QuoteType::Double }];
+        let lines = vec![Line::Kv {
+            key: "E".into(),
+            value: "\u{1F600}\u{1F601}\u{1F602}\u{1F603}\u{1F604}".into(),
+            quote_type: QuoteType::Double,
+        }];
         let masked = mask_all_values(&lines);
-        if let Line::Kv { value: v, .. } = &masked[0] { assert_eq!(v, "\u{1F600}\u{1F601}\u{1F602}\u{1F603}****"); }
-        else { panic!("expected Kv"); }
+        if let Line::Kv { value: v, .. } = &masked[0] {
+            assert_eq!(v, "\u{1F600}\u{1F601}\u{1F602}\u{1F603}****");
+        } else {
+            panic!("expected Kv");
+        }
     }
 
     #[test]
     fn mask_multibyte_short_utf8_no_panic() {
-        let lines = vec![Line::Kv { key: "K".into(), value: "\u{1F600}\u{1F601}".into(), quote_type: QuoteType::Double }];
+        let lines = vec![Line::Kv {
+            key: "K".into(),
+            value: "\u{1F600}\u{1F601}".into(),
+            quote_type: QuoteType::Double,
+        }];
         let masked = mask_all_values(&lines);
-        if let Line::Kv { value: v, .. } = &masked[0] { assert_eq!(v, "****"); }
-        else { panic!("expected Kv"); }
+        if let Line::Kv { value: v, .. } = &masked[0] {
+            assert_eq!(v, "****");
+        } else {
+            panic!("expected Kv");
+        }
     }
 
     #[test]
     fn mask_non_kv_lines_unchanged() {
         let lines = vec![
-            Line::Comment { text: "# a comment".into() },
-            Line::Directive { name: "encrypt".into(), value: None },
+            Line::Comment {
+                text: "# a comment".into(),
+            },
+            Line::Directive {
+                name: "encrypt".into(),
+                value: None,
+            },
             Line::Newline,
             Line::Whitespace { text: "  ".into() },
         ];
         let masked = mask_all_values(&lines);
         assert_eq!(masked.len(), 4);
         assert!(matches!(&masked[0], Line::Comment { text: ref c } if c == "# a comment"));
-        assert!(matches!(&masked[1], Line::Directive { name: ref n, value: None } if n == "encrypt"));
+        assert!(
+            matches!(&masked[1], Line::Directive { name: ref n, value: None } if n == "encrypt")
+        );
         assert!(matches!(&masked[2], Line::Newline));
         assert!(matches!(&masked[3], Line::Whitespace { text: ref w } if w == "  "));
     }
@@ -354,17 +411,31 @@ mod tests {
     #[test]
     fn mask_mixed_lines() {
         let lines = vec![
-            Line::Comment { text: "# header".into() },
+            Line::Comment {
+                text: "# header".into(),
+            },
             Line::Newline,
-            Line::Kv { key: "SHORT".into(), value: "ab".into(), quote_type: QuoteType::None },
+            Line::Kv {
+                key: "SHORT".into(),
+                value: "ab".into(),
+                quote_type: QuoteType::None,
+            },
             Line::Newline,
-            Line::Kv { key: "LONG".into(), value: "abcdefgh".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "LONG".into(),
+                value: "abcdefgh".into(),
+                quote_type: QuoteType::Double,
+            },
         ];
         let masked = mask_all_values(&lines);
         assert!(matches!(&masked[0], Line::Comment { .. }));
         assert!(matches!(&masked[1], Line::Newline));
-        if let Line::Kv { value: v, .. } = &masked[2] { assert_eq!(v, "****"); }
+        if let Line::Kv { value: v, .. } = &masked[2] {
+            assert_eq!(v, "****");
+        }
         assert!(matches!(&masked[3], Line::Newline));
-        if let Line::Kv { value: v, .. } = &masked[4] { assert_eq!(v, "abcd****"); }
+        if let Line::Kv { value: v, .. } = &masked[4] {
+            assert_eq!(v, "abcd****");
+        }
     }
 }

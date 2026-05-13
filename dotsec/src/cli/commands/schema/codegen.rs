@@ -37,7 +37,9 @@ pub async fn match_args(
         let output = match lang.as_str() {
             "typescript" | "ts" => dotenv::schema_to_typescript(&schema),
             _ => {
-                return Err(format!("Unsupported language: {}. Supported: typescript", lang).into());
+                return Err(
+                    format!("Unsupported language: {}. Supported: typescript", lang).into(),
+                );
             }
         };
 

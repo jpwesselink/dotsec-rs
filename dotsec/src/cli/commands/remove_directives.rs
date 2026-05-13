@@ -17,12 +17,12 @@ pub async fn match_args(
         let sec_file = default_options.sec_file;
 
         // Require schema to exist
-        let schema_path = dotenv::schema::discover_schema(
-            sec_file,
-            default_options.schema_path.as_deref(),
-        )?;
+        let schema_path =
+            dotenv::schema::discover_schema(sec_file, default_options.schema_path.as_deref())?;
         if schema_path.is_none() {
-            return Err("No dotsec.schema found. Run `dotsec extract-schema` first to create one.".into());
+            return Err(
+                "No dotsec.schema found. Run `dotsec extract-schema` first to create one.".into(),
+            );
         }
 
         // Parse the .sec file (decrypt if needed)
@@ -50,7 +50,10 @@ pub async fn match_args(
         let schema_content = std::fs::read_to_string(schema_path.as_ref().unwrap())?;
         let schema = dotenv::parse_schema(&schema_content)?;
         let new_content = dotenv::lines_to_string(&stripped_lines);
-        if matches!(default_options.encryption_engine, dotsec::EncryptionEngine::None) {
+        if matches!(
+            default_options.encryption_engine,
+            dotsec::EncryptionEngine::None
+        ) {
             dotsec::write_sec_file(sec_file, &new_content)?;
         } else {
             let new_lines = dotenv::parse_dotenv(&new_content)?;

@@ -89,7 +89,10 @@ pub async fn match_args(
                 .map(|c| c.lines().any(|l| l.trim() == "*.key" || l.contains(".key")))
                 .unwrap_or(false);
             if !has_key_pattern {
-                eprintln!("{} Add *.key to .gitignore to avoid committing private keys", "⚠".yellow().bold());
+                eprintln!(
+                    "{} Add *.key to .gitignore to avoid committing private keys",
+                    "⚠".yellow().bold()
+                );
             }
         }
 
@@ -110,19 +113,19 @@ pub async fn match_args(
         dotsec::write_sec_file(sec_file, &output)?;
         eprintln!("{} Created {}", "✓".green(), sec_file);
         eprintln!("  → Commit {} to git", sec_file);
-        eprintln!("  → Keep {}.key secret — share it with teammates over a secure channel", sec_file);
+        eprintln!(
+            "  → Keep {}.key secret — share it with teammates over a secure channel",
+            sec_file
+        );
 
-        resolved_engine = dotsec::EncryptionEngine::Local(dotsec::LocalEncryptionOptions {
-            key_file: None,
-        });
+        resolved_engine =
+            dotsec::EncryptionEngine::Local(dotsec::LocalEncryptionOptions { key_file: None });
         &resolved_engine
     };
 
     // Discover schema
-    let schema_path = dotenv::schema::discover_schema(
-        sec_file,
-        default_options.schema_path.as_deref(),
-    )?;
+    let schema_path =
+        dotenv::schema::discover_schema(sec_file, default_options.schema_path.as_deref())?;
     let mut schema = if let Some(ref path) = schema_path {
         let content = std::fs::read_to_string(path)?;
         Some(dotenv::parse_schema(&content)?)
@@ -140,24 +143,40 @@ pub async fn match_args(
     };
 
     // Check file-level encryption default from raw lines
-    let file_default_encrypt = raw_lines.iter().any(|l| matches!(l, dotenv::Line::Directive { name: n, .. } if n == "default-encrypt"));
+    let file_default_encrypt = raw_lines
+        .iter()
+        .any(|l| matches!(l, dotenv::Line::Directive { name: n, .. } if n == "default-encrypt"));
     // Find existing key in raw lines (value will be an opaque ID if encrypted, but we only need position)
-    let existing_pos = raw_lines.iter().position(|l| matches!(l, dotenv::Line::Kv { key: k, .. } if k == &key));
+    let existing_pos = raw_lines
+        .iter()
+        .position(|l| matches!(l, dotenv::Line::Kv { key: k, .. } if k == &key));
 
     // Check if the existing variable was encrypted (has @encrypt directive or inherits from default)
     let old_was_encrypted = if let Some(kv_pos) = existing_pos {
         if key_in_schema {
             // When schema exists, check schema for encrypt directive
-            schema.as_ref().unwrap().get(&key).unwrap().has_directive("encrypt") || file_default_encrypt
+            schema
+                .as_ref()
+                .unwrap()
+                .get(&key)
+                .unwrap()
+                .has_directive("encrypt")
+                || file_default_encrypt
         } else {
             let dir_start = find_directive_start(&raw_lines, kv_pos);
-            let has_explicit_encrypt = raw_lines[dir_start..kv_pos].iter()
+            let has_explicit_encrypt = raw_lines[dir_start..kv_pos]
+                .iter()
                 .any(|l| matches!(l, dotenv::Line::Directive { name: n, .. } if n == "encrypt"));
-            let has_explicit_plaintext = raw_lines[dir_start..kv_pos].iter()
+            let has_explicit_plaintext = raw_lines[dir_start..kv_pos]
+                .iter()
                 .any(|l| matches!(l, dotenv::Line::Directive { name: n, .. } if n == "plaintext"));
-            if has_explicit_encrypt { true }
-            else if has_explicit_plaintext { false }
-            else { file_default_encrypt }
+            if has_explicit_encrypt {
+                true
+            } else if has_explicit_plaintext {
+                false
+            } else {
+                file_default_encrypt
+            }
         }
     } else {
         false
@@ -199,7 +218,8 @@ pub async fn match_args(
     if let Some(ref schema) = schema {
         if let Some(schema_entry) = schema.get(&key) {
             let errors = dotenv::validate_value_against_constraints(&key, &value, schema_entry);
-            let real_errors: Vec<_> = errors.iter()
+            let real_errors: Vec<_> = errors
+                .iter()
                 .filter(|e| e.severity == dotenv::Severity::Error)
                 .collect();
             if !real_errors.is_empty() {
@@ -208,7 +228,10 @@ pub async fn match_args(
                 }
                 return Err("Value violates schema constraints".into());
             }
-            for warn in errors.iter().filter(|e| e.severity == dotenv::Severity::Warning) {
+            for warn in errors
+                .iter()
+                .filter(|e| e.severity == dotenv::Severity::Warning)
+            {
                 eprintln!("  {} {}", "!".yellow().bold(), warn);
             }
         }
@@ -241,41 +264,65 @@ pub async fn match_args(
     } else if schema.is_some() {
         // Schema exists but key is new — prompt for directives (or auto-detect with -y), write to schema
         if interactive {
-            new_directives = helpers::prompt_variable_directives(&key, &value, file_default_encrypt, None)?;
+            new_directives =
+                helpers::prompt_variable_directives(&key, &value, file_default_encrypt, None)?;
         } else if auto_yes {
             // Auto-detect directives like import -y
             let is_secret = helpers::looks_like_secret(&key);
             if file_default_encrypt {
                 if !is_secret {
-                    new_directives.push(dotenv::Line::Directive { name: "plaintext".to_string(), value: None });
+                    new_directives.push(dotenv::Line::Directive {
+                        name: "plaintext".to_string(),
+                        value: None,
+                    });
                 }
             } else if is_secret {
-                new_directives.push(dotenv::Line::Directive { name: "encrypt".to_string(), value: None });
+                new_directives.push(dotenv::Line::Directive {
+                    name: "encrypt".to_string(),
+                    value: None,
+                });
             }
             let type_name = match helpers::guess_type(&value) {
                 1 => "number",
                 2 => "boolean",
                 _ => "string",
             };
-            new_directives.push(dotenv::Line::Directive { name: "type".to_string(), value: Some(type_name.to_string()) });
+            new_directives.push(dotenv::Line::Directive {
+                name: "type".to_string(),
+                value: Some(type_name.to_string()),
+            });
         } else {
             if has_encrypt_flag {
-                new_directives.push(dotenv::Line::Directive { name: "encrypt".to_string(), value: None });
+                new_directives.push(dotenv::Line::Directive {
+                    name: "encrypt".to_string(),
+                    value: None,
+                });
             } else if has_plaintext_flag {
-                new_directives.push(dotenv::Line::Directive { name: "plaintext".to_string(), value: None });
+                new_directives.push(dotenv::Line::Directive {
+                    name: "plaintext".to_string(),
+                    value: None,
+                });
             }
             if let Some(t) = type_arg {
-                new_directives.push(dotenv::Line::Directive { name: "type".to_string(), value: Some(t.clone()) });
+                new_directives.push(dotenv::Line::Directive {
+                    name: "type".to_string(),
+                    value: Some(t.clone()),
+                });
             }
             if let Some(p) = push_arg {
-                new_directives.push(dotenv::Line::Directive { name: "push".to_string(), value: Some(p.clone()) });
+                new_directives.push(dotenv::Line::Directive {
+                    name: "push".to_string(),
+                    value: Some(p.clone()),
+                });
             }
         }
 
         // Determine encryption from the directives we just built
-        let has_explicit_encrypt = new_directives.iter()
+        let has_explicit_encrypt = new_directives
+            .iter()
             .any(|l| matches!(l, dotenv::Line::Directive { name: n, .. } if n == "encrypt"));
-        let has_explicit_plaintext = new_directives.iter()
+        let has_explicit_plaintext = new_directives
+            .iter()
             .any(|l| matches!(l, dotenv::Line::Directive { name: n, .. } if n == "plaintext"));
         if has_explicit_encrypt {
             new_is_encrypted = true;
@@ -305,11 +352,14 @@ pub async fn match_args(
     } else {
         // No schema — directives inline in .sec
         if interactive {
-            new_directives = helpers::prompt_variable_directives(&key, &value, file_default_encrypt, None)?;
+            new_directives =
+                helpers::prompt_variable_directives(&key, &value, file_default_encrypt, None)?;
 
-            let has_explicit_encrypt = new_directives.iter()
+            let has_explicit_encrypt = new_directives
+                .iter()
                 .any(|l| matches!(l, dotenv::Line::Directive { name: n, .. } if n == "encrypt"));
-            let has_explicit_plaintext = new_directives.iter()
+            let has_explicit_plaintext = new_directives
+                .iter()
                 .any(|l| matches!(l, dotenv::Line::Directive { name: n, .. } if n == "plaintext"));
             if has_explicit_encrypt {
                 new_is_encrypted = true;
@@ -323,12 +373,18 @@ pub async fn match_args(
             let is_secret = helpers::looks_like_secret(&key);
             if file_default_encrypt {
                 if !is_secret {
-                    new_directives.push(dotenv::Line::Directive { name: "plaintext".to_string(), value: None });
+                    new_directives.push(dotenv::Line::Directive {
+                        name: "plaintext".to_string(),
+                        value: None,
+                    });
                 }
                 new_is_encrypted = is_secret || file_default_encrypt;
             } else if is_secret {
                 new_is_encrypted = true;
-                new_directives.push(dotenv::Line::Directive { name: "encrypt".to_string(), value: None });
+                new_directives.push(dotenv::Line::Directive {
+                    name: "encrypt".to_string(),
+                    value: None,
+                });
             } else {
                 new_is_encrypted = false;
             }
@@ -337,23 +393,38 @@ pub async fn match_args(
                 2 => "boolean",
                 _ => "string",
             };
-            new_directives.push(dotenv::Line::Directive { name: "type".to_string(), value: Some(type_name.to_string()) });
+            new_directives.push(dotenv::Line::Directive {
+                name: "type".to_string(),
+                value: Some(type_name.to_string()),
+            });
         } else {
             if has_encrypt_flag {
                 new_is_encrypted = true;
-                new_directives.push(dotenv::Line::Directive { name: "encrypt".to_string(), value: None });
+                new_directives.push(dotenv::Line::Directive {
+                    name: "encrypt".to_string(),
+                    value: None,
+                });
             } else if has_plaintext_flag {
-                new_directives.push(dotenv::Line::Directive { name: "plaintext".to_string(), value: None });
+                new_directives.push(dotenv::Line::Directive {
+                    name: "plaintext".to_string(),
+                    value: None,
+                });
             } else {
                 new_is_encrypted = file_default_encrypt;
             }
 
             if let Some(t) = type_arg {
-                new_directives.push(dotenv::Line::Directive { name: "type".to_string(), value: Some(t.clone()) });
+                new_directives.push(dotenv::Line::Directive {
+                    name: "type".to_string(),
+                    value: Some(t.clone()),
+                });
             }
 
             if let Some(p) = push_arg {
-                new_directives.push(dotenv::Line::Directive { name: "push".to_string(), value: Some(p.clone()) });
+                new_directives.push(dotenv::Line::Directive {
+                    name: "push".to_string(),
+                    value: Some(p.clone()),
+                });
             }
         }
     }
@@ -362,10 +433,20 @@ pub async fn match_args(
 
     if needs_kms {
         // Decrypt → modify → re-encrypt (full KMS round trip)
-        let mut lines = with_progress("Decrypting...", dotsec::decrypt_sec_to_lines(sec_file, encryption_engine)).await?;
+        let mut lines = with_progress(
+            "Decrypting...",
+            dotsec::decrypt_sec_to_lines(sec_file, encryption_engine),
+        )
+        .await?;
 
-        let existing_pos = lines.iter().position(|l| matches!(l, dotenv::Line::Kv { key: k, .. } if k == &key));
-        let kv_line = dotenv::Line::Kv { key: key.clone(), value, quote_type: dotenv::QuoteType::Double };
+        let existing_pos = lines
+            .iter()
+            .position(|l| matches!(l, dotenv::Line::Kv { key: k, .. } if k == &key));
+        let kv_line = dotenv::Line::Kv {
+            key: key.clone(),
+            value,
+            quote_type: dotenv::QuoteType::Double,
+        };
         let action;
 
         if let Some(kv_pos) = existing_pos {
@@ -386,13 +467,23 @@ pub async fn match_args(
             action = "Added";
         }
 
-        with_progress("Encrypting...", dotsec::encrypt_lines_to_sec(&lines, sec_file, encryption_engine, schema.as_ref())).await?;
+        with_progress(
+            "Encrypting...",
+            dotsec::encrypt_lines_to_sec(&lines, sec_file, encryption_engine, schema.as_ref()),
+        )
+        .await?;
         println!("{} {} {} in {}", "✓".green(), action, key.bold(), sec_file);
     } else {
         // Plaintext — modify raw .sec lines directly, no KMS needed
         let mut lines = raw_lines;
-        let existing_pos = lines.iter().position(|l| matches!(l, dotenv::Line::Kv { key: k, .. } if k == &key));
-        let kv_line = dotenv::Line::Kv { key: key.clone(), value, quote_type: dotenv::QuoteType::Double };
+        let existing_pos = lines
+            .iter()
+            .position(|l| matches!(l, dotenv::Line::Kv { key: k, .. } if k == &key));
+        let kv_line = dotenv::Line::Kv {
+            key: key.clone(),
+            value,
+            quote_type: dotenv::QuoteType::Double,
+        };
         let action;
 
         if let Some(kv_pos) = existing_pos {
@@ -510,18 +601,27 @@ mod tests {
 
     #[test]
     fn find_directive_start_no_directives() {
-        let lines = vec![
-            Line::Kv { key: "FOO".into(), value: "bar".into(), quote_type: QuoteType::Double },
-        ];
+        let lines = vec![Line::Kv {
+            key: "FOO".into(),
+            value: "bar".into(),
+            quote_type: QuoteType::Double,
+        }];
         assert_eq!(find_directive_start(&lines, 0), 0);
     }
 
     #[test]
     fn find_directive_start_one_directive() {
         let lines = vec![
-            Line::Directive { name: "encrypt".into(), value: None },
+            Line::Directive {
+                name: "encrypt".into(),
+                value: None,
+            },
             Line::Newline,
-            Line::Kv { key: "FOO".into(), value: "bar".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "FOO".into(),
+                value: "bar".into(),
+                quote_type: QuoteType::Double,
+            },
         ];
         assert_eq!(find_directive_start(&lines, 2), 0);
     }
@@ -529,10 +629,20 @@ mod tests {
     #[test]
     fn find_directive_start_multiple_directives() {
         let lines = vec![
-            Line::Directive { name: "encrypt".into(), value: None },
-            Line::Directive { name: "type".into(), value: Some("string".into()) },
+            Line::Directive {
+                name: "encrypt".into(),
+                value: None,
+            },
+            Line::Directive {
+                name: "type".into(),
+                value: Some("string".into()),
+            },
             Line::Newline,
-            Line::Kv { key: "FOO".into(), value: "bar".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "FOO".into(),
+                value: "bar".into(),
+                quote_type: QuoteType::Double,
+            },
         ];
         assert_eq!(find_directive_start(&lines, 3), 0);
     }
@@ -540,11 +650,20 @@ mod tests {
     #[test]
     fn find_directive_start_stops_at_comment() {
         let lines = vec![
-            Line::Comment { text: "# some comment".into() },
+            Line::Comment {
+                text: "# some comment".into(),
+            },
             Line::Newline,
-            Line::Directive { name: "encrypt".into(), value: None },
+            Line::Directive {
+                name: "encrypt".into(),
+                value: None,
+            },
             Line::Newline,
-            Line::Kv { key: "FOO".into(), value: "bar".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "FOO".into(),
+                value: "bar".into(),
+                quote_type: QuoteType::Double,
+            },
         ];
         assert_eq!(find_directive_start(&lines, 4), 2);
     }
@@ -552,12 +671,23 @@ mod tests {
     #[test]
     fn find_directive_start_stops_at_other_kv() {
         let lines = vec![
-            Line::Kv { key: "OTHER".into(), value: "val".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "OTHER".into(),
+                value: "val".into(),
+                quote_type: QuoteType::Double,
+            },
             Line::Newline,
             Line::Newline,
-            Line::Directive { name: "encrypt".into(), value: None },
+            Line::Directive {
+                name: "encrypt".into(),
+                value: None,
+            },
             Line::Newline,
-            Line::Kv { key: "FOO".into(), value: "bar".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "FOO".into(),
+                value: "bar".into(),
+                quote_type: QuoteType::Double,
+            },
         ];
         assert_eq!(find_directive_start(&lines, 5), 3);
     }
@@ -567,7 +697,11 @@ mod tests {
     #[test]
     fn find_dotsec_block_no_dotsec() {
         let lines = vec![
-            Line::Kv { key: "FOO".into(), value: "bar".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "FOO".into(),
+                value: "bar".into(),
+                quote_type: QuoteType::Double,
+            },
             Line::Newline,
         ];
         assert_eq!(find_dotsec_block_start(&lines), None);
@@ -576,12 +710,22 @@ mod tests {
     #[test]
     fn find_dotsec_block_with_comment() {
         let lines = vec![
-            Line::Kv { key: "FOO".into(), value: "bar".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "FOO".into(),
+                value: "bar".into(),
+                quote_type: QuoteType::Double,
+            },
             Line::Newline,
             Line::Newline,
-            Line::Comment { text: "# do not edit the line below, it is managed by dotsec".into() },
+            Line::Comment {
+                text: "# do not edit the line below, it is managed by dotsec".into(),
+            },
             Line::Newline,
-            Line::Kv { key: "__DOTSEC__".into(), value: "blob".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "__DOTSEC__".into(),
+                value: "blob".into(),
+                quote_type: QuoteType::Double,
+            },
             Line::Newline,
         ];
         // Should find the newline before the comment (index 2)
@@ -591,10 +735,18 @@ mod tests {
     #[test]
     fn find_dotsec_block_without_comment() {
         let lines = vec![
-            Line::Kv { key: "FOO".into(), value: "bar".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "FOO".into(),
+                value: "bar".into(),
+                quote_type: QuoteType::Double,
+            },
             Line::Newline,
             Line::Newline,
-            Line::Kv { key: "__DOTSEC__".into(), value: "blob".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "__DOTSEC__".into(),
+                value: "blob".into(),
+                quote_type: QuoteType::Double,
+            },
             Line::Newline,
         ];
         // Should walk back past newlines
@@ -606,7 +758,11 @@ mod tests {
     #[test]
     fn append_entry_to_empty() {
         let mut lines: Vec<Line> = Vec::new();
-        let kv = Line::Kv { key: "FOO".into(), value: "bar".into(), quote_type: QuoteType::Double };
+        let kv = Line::Kv {
+            key: "FOO".into(),
+            value: "bar".into(),
+            quote_type: QuoteType::Double,
+        };
         append_entry(&mut lines, vec![], kv);
         assert_eq!(lines.len(), 2); // KV + Newline
         assert!(matches!(&lines[0], Line::Kv { key: k, .. } if k == "FOO"));
@@ -617,10 +773,20 @@ mod tests {
     fn append_entry_with_directives() {
         let mut lines: Vec<Line> = Vec::new();
         let directives = vec![
-            Line::Directive { name: "encrypt".into(), value: None },
-            Line::Directive { name: "type".into(), value: Some("string".into()) },
+            Line::Directive {
+                name: "encrypt".into(),
+                value: None,
+            },
+            Line::Directive {
+                name: "type".into(),
+                value: Some("string".into()),
+            },
         ];
-        let kv = Line::Kv { key: "FOO".into(), value: "bar".into(), quote_type: QuoteType::Double };
+        let kv = Line::Kv {
+            key: "FOO".into(),
+            value: "bar".into(),
+            quote_type: QuoteType::Double,
+        };
         append_entry(&mut lines, directives, kv);
         // directives + newline + KV + newline
         assert_eq!(lines.len(), 5);
@@ -634,10 +800,18 @@ mod tests {
     #[test]
     fn append_entry_adds_blank_line_separator() {
         let mut lines = vec![
-            Line::Kv { key: "EXISTING".into(), value: "val".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "EXISTING".into(),
+                value: "val".into(),
+                quote_type: QuoteType::Double,
+            },
             Line::Newline,
         ];
-        let kv = Line::Kv { key: "NEW".into(), value: "val".into(), quote_type: QuoteType::Double };
+        let kv = Line::Kv {
+            key: "NEW".into(),
+            value: "val".into(),
+            quote_type: QuoteType::Double,
+        };
         append_entry(&mut lines, vec![], kv);
         // existing KV + newline + blank line + new KV + newline
         assert_eq!(lines.len(), 5);
@@ -647,10 +821,16 @@ mod tests {
 
     #[test]
     fn append_entry_adds_newline_if_missing() {
-        let mut lines = vec![
-            Line::Kv { key: "EXISTING".into(), value: "val".into(), quote_type: QuoteType::Double },
-        ];
-        let kv = Line::Kv { key: "NEW".into(), value: "val".into(), quote_type: QuoteType::Double };
+        let mut lines = vec![Line::Kv {
+            key: "EXISTING".into(),
+            value: "val".into(),
+            quote_type: QuoteType::Double,
+        }];
+        let kv = Line::Kv {
+            key: "NEW".into(),
+            value: "val".into(),
+            quote_type: QuoteType::Double,
+        };
         append_entry(&mut lines, vec![], kv);
         // existing KV + added newline + blank line + new KV + newline
         assert_eq!(lines.len(), 5);
@@ -672,7 +852,8 @@ mod tests {
             key: "PORT".into(),
         };
         let errors = dotenv::validate_value_against_constraints("PORT", "999", &schema_entry);
-        let real_errors: Vec<_> = errors.iter()
+        let real_errors: Vec<_> = errors
+            .iter()
             .filter(|e| e.severity == dotenv::Severity::Error)
             .collect();
         assert!(!real_errors.is_empty(), "should reject value exceeding max");
@@ -690,10 +871,15 @@ mod tests {
             key: "PORT".into(),
         };
         let errors = dotenv::validate_value_against_constraints("PORT", "50", &schema_entry);
-        let real_errors: Vec<_> = errors.iter()
+        let real_errors: Vec<_> = errors
+            .iter()
             .filter(|e| e.severity == dotenv::Severity::Error)
             .collect();
-        assert!(real_errors.is_empty(), "should accept valid value: {:?}", real_errors);
+        assert!(
+            real_errors.is_empty(),
+            "should accept valid value: {:?}",
+            real_errors
+        );
     }
 
     #[test]
@@ -706,7 +892,8 @@ mod tests {
             key: "NAME".into(),
         };
         let errors = dotenv::validate_value_against_constraints("NAME", "", &schema_entry);
-        let real_errors: Vec<_> = errors.iter()
+        let real_errors: Vec<_> = errors
+            .iter()
             .filter(|e| e.severity == dotenv::Severity::Error)
             .collect();
         assert_eq!(real_errors.len(), 1);
@@ -716,13 +903,13 @@ mod tests {
     #[test]
     fn set_value_rejected_by_enum_constraint() {
         let schema_entry = dotenv::SchemaEntry {
-            directives: vec![
-                ("type".into(), Some("enum(\"dev\", \"prod\")".into())),
-            ],
+            directives: vec![("type".into(), Some("enum(\"dev\", \"prod\")".into()))],
             key: "NODE_ENV".into(),
         };
-        let errors = dotenv::validate_value_against_constraints("NODE_ENV", "staging", &schema_entry);
-        let real_errors: Vec<_> = errors.iter()
+        let errors =
+            dotenv::validate_value_against_constraints("NODE_ENV", "staging", &schema_entry);
+        let real_errors: Vec<_> = errors
+            .iter()
             .filter(|e| e.severity == dotenv::Severity::Error)
             .collect();
         assert_eq!(real_errors.len(), 1);
@@ -739,7 +926,8 @@ mod tests {
             key: "OLD_KEY".into(),
         };
         let errors = dotenv::validate_value_against_constraints("OLD_KEY", "value", &schema_entry);
-        let warnings: Vec<_> = errors.iter()
+        let warnings: Vec<_> = errors
+            .iter()
             .filter(|e| e.severity == dotenv::Severity::Warning)
             .collect();
         assert_eq!(warnings.len(), 1);

@@ -3,7 +3,7 @@ use thiserror::Error;
 use zeroize::Zeroizing;
 
 // Re-export shared crypto functions so existing callers (dotsec-core) don't break
-pub use crypto::{encrypt_value, decrypt_value, is_encrypted_value, pad, unpad, CryptoError};
+pub use crypto::{decrypt_value, encrypt_value, is_encrypted_value, pad, unpad, CryptoError};
 
 #[derive(Error, Debug)]
 pub enum DataStoreError {
@@ -36,8 +36,9 @@ impl From<CryptoError> for DataStoreError {
 
 async fn create_kms_client(region: Option<&str>) -> aws_sdk_kms::Client {
     let region_provider = match region {
-        Some(r) => RegionProviderChain::default_provider()
-            .or_else(aws_config::Region::new(r.to_string())),
+        Some(r) => {
+            RegionProviderChain::default_provider().or_else(aws_config::Region::new(r.to_string()))
+        }
         None => RegionProviderChain::default_provider(),
     };
     let config = aws_config::defaults(BehaviorVersion::latest())
@@ -163,8 +164,9 @@ pub async fn unwrap_data_key(
 
 async fn create_ssm_client(region: Option<&str>) -> aws_sdk_ssm::Client {
     let region_provider = match region {
-        Some(r) => RegionProviderChain::default_provider()
-            .or_else(aws_config::Region::new(r.to_string())),
+        Some(r) => {
+            RegionProviderChain::default_provider().or_else(aws_config::Region::new(r.to_string()))
+        }
         None => RegionProviderChain::default_provider(),
     };
     let config = aws_config::defaults(BehaviorVersion::latest())
@@ -174,12 +176,11 @@ async fn create_ssm_client(region: Option<&str>) -> aws_sdk_ssm::Client {
     aws_sdk_ssm::Client::new(&config)
 }
 
-async fn create_secrets_manager_client(
-    region: Option<&str>,
-) -> aws_sdk_secretsmanager::Client {
+async fn create_secrets_manager_client(region: Option<&str>) -> aws_sdk_secretsmanager::Client {
     let region_provider = match region {
-        Some(r) => RegionProviderChain::default_provider()
-            .or_else(aws_config::Region::new(r.to_string())),
+        Some(r) => {
+            RegionProviderChain::default_provider().or_else(aws_config::Region::new(r.to_string()))
+        }
         None => RegionProviderChain::default_provider(),
     };
     let config = aws_config::defaults(BehaviorVersion::latest())
@@ -348,13 +349,19 @@ mod tests {
     fn pad_rejects_oversized_input() {
         let data = vec![0u8; 65536];
         let result = pad(&data);
-        assert!(result.is_err(), "pad should reject data larger than u16::MAX bytes");
+        assert!(
+            result.is_err(),
+            "pad should reject data larger than u16::MAX bytes"
+        );
     }
 
     #[test]
     fn pad_accepts_max_size() {
         let data = vec![0u8; 65535];
         let result = pad(&data);
-        assert!(result.is_ok(), "pad should accept data of exactly u16::MAX bytes");
+        assert!(
+            result.is_ok(),
+            "pad should accept data of exactly u16::MAX bytes"
+        );
     }
 }

@@ -4,8 +4,7 @@ use colored::Colorize;
 use crate::default_options::DefaultOptions;
 
 pub fn command() -> Command {
-    Command::new("header")
-        .about("Add or update the dotsec header in a .sec file")
+    Command::new("header").about("Add or update the dotsec header in a .sec file")
 }
 
 pub async fn match_args(
@@ -37,7 +36,9 @@ pub async fn match_args(
                         lines.remove(i);
                     }
                 }
-                dotenv::Line::Comment { text } if text.contains("github.com/jpwesselink/dotsec-rs") => {
+                dotenv::Line::Comment { text }
+                    if text.contains("github.com/jpwesselink/dotsec-rs") =>
+                {
                     lines.remove(i);
                     // Remove trailing newline
                     if i < lines.len() && matches!(lines[i], dotenv::Line::Newline) {

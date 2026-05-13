@@ -1,5 +1,5 @@
-use std::fmt;
 use indexmap::IndexMap;
+use std::fmt;
 use zeroize::Zeroize;
 
 #[derive(PartialEq, Clone, Debug)]
@@ -12,11 +12,22 @@ pub enum QuoteType {
 
 #[derive(Clone, Debug)]
 pub enum Line {
-    Comment { text: String },
-    Directive { name: String, value: Option<String> },
-    Kv { key: String, value: String, quote_type: QuoteType },
+    Comment {
+        text: String,
+    },
+    Directive {
+        name: String,
+        value: Option<String>,
+    },
+    Kv {
+        key: String,
+        value: String,
+        quote_type: QuoteType,
+    },
     Newline,
-    Whitespace { text: String },
+    Whitespace {
+        text: String,
+    },
 }
 
 /// File-level configuration extracted from directives at the top of a .sec file.
@@ -63,11 +74,19 @@ pub struct ValidationError {
 
 impl ValidationError {
     pub fn error(key: impl Into<String>, message: impl Into<String>) -> Self {
-        Self { key: key.into(), message: message.into(), severity: Severity::Error }
+        Self {
+            key: key.into(),
+            message: message.into(),
+            severity: Severity::Error,
+        }
     }
 
     pub fn warning(key: impl Into<String>, message: impl Into<String>) -> Self {
-        Self { key: key.into(), message: message.into(), severity: Severity::Warning }
+        Self {
+            key: key.into(),
+            message: message.into(),
+            severity: Severity::Warning,
+        }
     }
 }
 
@@ -81,13 +100,30 @@ impl fmt::Display for ValidationError {
 }
 
 /// File-level config directives (not attached to entries).
-const FILE_CONFIG_DIRECTIVES: &[&str] = &["provider", "key-id", "region", "default-encrypt", "default-plaintext"];
+const FILE_CONFIG_DIRECTIVES: &[&str] = &[
+    "provider",
+    "key-id",
+    "region",
+    "default-encrypt",
+    "default-plaintext",
+];
 
 /// Per-key directives that belong in a schema file (shared across environments).
 pub const SCHEMA_DIRECTIVES: &[&str] = &[
-    "type", "push", "encrypt", "plaintext", "format", "pattern",
-    "min", "max", "min-length", "max-length",
-    "optional", "not-empty", "deprecated", "description",
+    "type",
+    "push",
+    "encrypt",
+    "plaintext",
+    "format",
+    "pattern",
+    "min",
+    "max",
+    "min-length",
+    "max-length",
+    "optional",
+    "not-empty",
+    "deprecated",
+    "description",
 ];
 
 /// File-level directives that are schema-owned (defaults).
@@ -141,7 +177,10 @@ impl FormatType {
                 if value.starts_with("http://") || value.starts_with("https://") {
                     None
                 } else {
-                    Some(format!("expected url format (http:// or https://), got \"{}\"", value))
+                    Some(format!(
+                        "expected url format (http:// or https://), got \"{}\"",
+                        value
+                    ))
                 }
             }
             Self::Uuid => {
@@ -153,11 +192,16 @@ impl FormatType {
                     && parts[2].len() == 4
                     && parts[3].len() == 4
                     && parts[4].len() == 12
-                    && parts.iter().all(|p| p.chars().all(|c| c.is_ascii_hexdigit()))
+                    && parts
+                        .iter()
+                        .all(|p| p.chars().all(|c| c.is_ascii_hexdigit()))
                 {
                     None
                 } else {
-                    Some(format!("expected uuid format (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx), got \"{}\"", value))
+                    Some(format!(
+                        "expected uuid format (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx), got \"{}\"",
+                        value
+                    ))
                 }
             }
             Self::Ipv4 => {
@@ -174,8 +218,11 @@ impl FormatType {
                 let parts: Vec<&str> = value.split(':').collect();
                 if parts.len() >= 2
                     && parts.len() <= 8
-                    && parts.iter().all(|p| p.is_empty() || (p.len() <= 4 && p.chars().all(|c| c.is_ascii_hexdigit())))
-                    && parts.iter().any(|p| !p.is_empty()) // require at least one non-empty group
+                    && parts.iter().all(|p| {
+                        p.is_empty() || (p.len() <= 4 && p.chars().all(|c| c.is_ascii_hexdigit()))
+                    })
+                    && parts.iter().any(|p| !p.is_empty())
+                // require at least one non-empty group
                 {
                     None
                 } else {
@@ -207,7 +254,10 @@ impl FormatType {
                         }
                     }
                 }
-                Some(format!("expected date format (YYYY-MM-DD), got \"{}\"", value))
+                Some(format!(
+                    "expected date format (YYYY-MM-DD), got \"{}\"",
+                    value
+                ))
             }
             Self::Semver => {
                 // MAJOR.MINOR.PATCH with optional pre-release
@@ -216,7 +266,10 @@ impl FormatType {
                 if parts.len() == 3 && parts.iter().all(|p| p.parse::<u64>().is_ok()) {
                     None
                 } else {
-                    Some(format!("expected semver format (MAJOR.MINOR.PATCH), got \"{}\"", value))
+                    Some(format!(
+                        "expected semver format (MAJOR.MINOR.PATCH), got \"{}\"",
+                        value
+                    ))
                 }
             }
         }
@@ -245,7 +298,12 @@ pub trait DirectiveSource {
 }
 
 /// Validate a value against its declared type. Returns errors appended to the provided vector.
-pub fn validate_value_for_type(key: &str, var_type: &VarType, value: &str, errors: &mut Vec<ValidationError>) {
+pub fn validate_value_for_type(
+    key: &str,
+    var_type: &VarType,
+    value: &str,
+    errors: &mut Vec<ValidationError>,
+) {
     match var_type {
         VarType::Number => {
             if value.parse::<f64>().is_err() {
@@ -255,17 +313,15 @@ pub fn validate_value_for_type(key: &str, var_type: &VarType, value: &str, error
                 ));
             }
         }
-        VarType::Boolean => {
-            match value {
-                "true" | "false" | "1" | "0" => {}
-                _ => {
-                    errors.push(ValidationError::error(
-                        key,
-                        format!("expected boolean (true/false/1/0), got \"{}\"", value),
-                    ));
-                }
+        VarType::Boolean => match value {
+            "true" | "false" | "1" | "0" => {}
+            _ => {
+                errors.push(ValidationError::error(
+                    key,
+                    format!("expected boolean (true/false/1/0), got \"{}\"", value),
+                ));
             }
-        }
+        },
         VarType::Enum(variants) => {
             if !variants.contains(&value.to_string()) {
                 errors.push(ValidationError::error(
@@ -273,7 +329,11 @@ pub fn validate_value_for_type(key: &str, var_type: &VarType, value: &str, error
                     format!(
                         "value \"{}\" not in enum. Expected one of: {}",
                         value,
-                        variants.iter().map(|v| format!("\"{}\"", v)).collect::<Vec<_>>().join(", ")
+                        variants
+                            .iter()
+                            .map(|v| format!("\"{}\"", v))
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ),
                 ));
             }
@@ -389,14 +449,20 @@ pub fn validate_value_against_constraints(
                 if char_count < min_len {
                     errors.push(ValidationError::error(
                         key,
-                        format!("value has {} characters, less than minimum length {}", char_count, min_len),
+                        format!(
+                            "value has {} characters, less than minimum length {}",
+                            char_count, min_len
+                        ),
                     ));
                 }
             }
             Err(_) => {
                 errors.push(ValidationError::error(
                     key,
-                    format!("@min-length value \"{}\" is not a valid integer", min_len_str),
+                    format!(
+                        "@min-length value \"{}\" is not a valid integer",
+                        min_len_str
+                    ),
                 ));
             }
         }
@@ -408,14 +474,20 @@ pub fn validate_value_against_constraints(
                 if char_count > max_len {
                     errors.push(ValidationError::error(
                         key,
-                        format!("value has {} characters, exceeds maximum length {}", char_count, max_len),
+                        format!(
+                            "value has {} characters, exceeds maximum length {}",
+                            char_count, max_len
+                        ),
                     ));
                 }
             }
             Err(_) => {
                 errors.push(ValidationError::error(
                     key,
-                    format!("@max-length value \"{}\" is not a valid integer", max_len_str),
+                    format!(
+                        "@max-length value \"{}\" is not a valid integer",
+                        max_len_str
+                    ),
                 ));
             }
         }
@@ -450,7 +522,10 @@ impl DirectiveSource for Entry {
     }
 
     fn get_directive(&self, name: &str) -> Option<&Option<String>> {
-        self.directives.iter().find(|(n, _)| n == name).map(|(_, v)| v)
+        self.directives
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v)
     }
 }
 
@@ -498,12 +573,19 @@ impl Entry {
             if FILE_CONFIG_DIRECTIVES.contains(&name.as_str()) {
                 errors.push(ValidationError::error(
                     &self.key,
-                    format!("@{} is a file-level directive and should not be attached to a variable", name),
+                    format!(
+                        "@{} is a file-level directive and should not be attached to a variable",
+                        name
+                    ),
                 ));
             }
         }
 
-        errors.extend(validate_value_against_constraints(&self.key, &self.value, self));
+        errors.extend(validate_value_against_constraints(
+            &self.key,
+            &self.value,
+            self,
+        ));
 
         // Validate @push targets — report unknown target names (Entry-specific, not in schema)
         if let Some(Some(push_value)) = self.get_directive("push") {
@@ -520,7 +602,12 @@ impl Entry {
     }
 
     /// Validate a value against its declared type.
-    pub fn validate_value(&self, var_type: &VarType, value: &str, errors: &mut Vec<ValidationError>) {
+    pub fn validate_value(
+        &self,
+        var_type: &VarType,
+        value: &str,
+        errors: &mut Vec<ValidationError>,
+    ) {
         validate_value_for_type(&self.key, var_type, value, errors);
     }
 
@@ -572,7 +659,10 @@ fn parse_push_targets(value: &str) -> (Vec<PushTarget>, Vec<String>) {
 
         // read target name using peek so we don't consume the delimiter
         let mut name = String::new();
-        while chars.peek().is_some_and(|c| c.is_alphanumeric() || *c == '-' || *c == '_') {
+        while chars
+            .peek()
+            .is_some_and(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+        {
             name.push(chars.next().unwrap());
         }
 
@@ -632,7 +722,10 @@ fn parse_params(s: &str) -> std::collections::HashMap<String, String> {
 
         // read key
         let mut key = String::new();
-        while chars.peek().is_some_and(|c| c.is_alphanumeric() || *c == '_' || *c == '-') {
+        while chars
+            .peek()
+            .is_some_and(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+        {
             key.push(chars.next().unwrap());
         }
 
@@ -725,7 +818,10 @@ impl DirectiveSource for SchemaEntry {
     }
 
     fn get_directive(&self, name: &str) -> Option<&Option<String>> {
-        self.directives.iter().find(|(n, _)| n == name).map(|(_, v)| v)
+        self.directives
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v)
     }
 }
 
@@ -793,7 +889,10 @@ impl SchemaEntry {
             Some(Some(value)) => match value.parse() {
                 Ok(v) => Some(v),
                 Err(_) => {
-                    eprintln!("warning: @{} value \"{}\" on key \"{}\" is not a valid number", name, value, self.key);
+                    eprintln!(
+                        "warning: @{} value \"{}\" on key \"{}\" is not a valid number",
+                        name, value, self.key
+                    );
                     None
                 }
             },
@@ -801,10 +900,18 @@ impl SchemaEntry {
         }
     }
 
-    pub fn min(&self) -> Option<f64> { self.numeric_directive("min") }
-    pub fn max(&self) -> Option<f64> { self.numeric_directive("max") }
-    pub fn min_length(&self) -> Option<usize> { self.numeric_directive("min-length").map(|v| v as usize) }
-    pub fn max_length(&self) -> Option<usize> { self.numeric_directive("max-length").map(|v| v as usize) }
+    pub fn min(&self) -> Option<f64> {
+        self.numeric_directive("min")
+    }
+    pub fn max(&self) -> Option<f64> {
+        self.numeric_directive("max")
+    }
+    pub fn min_length(&self) -> Option<usize> {
+        self.numeric_directive("min-length").map(|v| v as usize)
+    }
+    pub fn max_length(&self) -> Option<usize> {
+        self.numeric_directive("max-length").map(|v| v as usize)
+    }
 }
 
 /// A parsed schema file.
@@ -815,7 +922,9 @@ pub struct Schema {
 
 impl Default for Schema {
     fn default() -> Self {
-        Self { entries: IndexMap::new() }
+        Self {
+            entries: IndexMap::new(),
+        }
     }
 }
 
@@ -900,16 +1009,42 @@ impl fmt::Display for DiffItem {
             DiffItem::ExtraKey { key } => {
                 write!(f, "{} exists in target but not in base", key)
             }
-            DiffItem::DirectiveMismatch { key, base_directives, target_directives } => {
+            DiffItem::DirectiveMismatch {
+                key,
+                base_directives,
+                target_directives,
+            } => {
                 let base_str = format_directives(base_directives);
                 let target_str = format_directives(target_directives);
-                write!(f, "directive mismatch on {}: base [{}] vs target [{}]", key, base_str, target_str)
+                write!(
+                    f,
+                    "directive mismatch on {}: base [{}] vs target [{}]",
+                    key, base_str, target_str
+                )
             }
-            DiffItem::ValueDifference { key, base_value, target_value } => {
-                write!(f, "value difference on {}: \"{}\" vs \"{}\"", key, base_value, target_value)
+            DiffItem::ValueDifference {
+                key,
+                base_value,
+                target_value,
+            } => {
+                write!(
+                    f,
+                    "value difference on {}: \"{}\" vs \"{}\"",
+                    key, base_value, target_value
+                )
             }
-            DiffItem::OrderingDifference { key, base_index, target_index } => {
-                write!(f, "ordering difference: {} is at position {} in base, {} in target", key, base_index + 1, target_index + 1)
+            DiffItem::OrderingDifference {
+                key,
+                base_index,
+                target_index,
+            } => {
+                write!(
+                    f,
+                    "ordering difference: {} is at position {} in base, {} in target",
+                    key,
+                    base_index + 1,
+                    target_index + 1
+                )
             }
         }
     }

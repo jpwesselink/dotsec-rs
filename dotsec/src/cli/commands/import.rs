@@ -61,17 +61,30 @@ pub async fn match_args(
         let existing_keys: std::collections::HashSet<String> =
             sec_entries.iter().map(|e| e.key.clone()).collect();
 
-        let new_count = entries.iter().filter(|e| !existing_keys.contains(&e.key)).count();
-        let existing_count = entries.iter().filter(|e| existing_keys.contains(&e.key)).count();
+        let new_count = entries
+            .iter()
+            .filter(|e| !existing_keys.contains(&e.key))
+            .count();
+        let existing_count = entries
+            .iter()
+            .filter(|e| existing_keys.contains(&e.key))
+            .count();
 
         if new_count == 0 {
-            println!("All {} variables already exist in {}, nothing to import.", entries.len(), sec_file);
+            println!(
+                "All {} variables already exist in {}, nothing to import.",
+                entries.len(),
+                sec_file
+            );
             return Ok(());
         }
 
         if existing_count > 0 {
             let options = vec![
-                format!("New variables only ({} new, skip {} existing)", new_count, existing_count),
+                format!(
+                    "New variables only ({} new, skip {} existing)",
+                    new_count, existing_count
+                ),
                 "Overwrite all".to_string(),
                 "Cancel".to_string(),
             ];
@@ -93,10 +106,19 @@ pub async fn match_args(
         }
 
         // Check for config conflicts between source .env and existing .sec
-        if source_config.provider.is_some() || source_config.key_id.is_some() || source_config.region.is_some() || source_config.default_encrypt.is_some() {
+        if source_config.provider.is_some()
+            || source_config.key_id.is_some()
+            || source_config.region.is_some()
+            || source_config.default_encrypt.is_some()
+        {
             let diffs = helpers::config_diffs(&source_config, &sec_config);
             if !diffs.is_empty() {
-                println!("\n{} Config differences between {} and {}:", "!".yellow().bold(), env_file, sec_file);
+                println!(
+                    "\n{} Config differences between {} and {}:",
+                    "!".yellow().bold(),
+                    env_file,
+                    sec_file
+                );
                 for diff in &diffs {
                     println!("  {} {}", "•".yellow(), diff);
                 }
@@ -142,7 +164,10 @@ pub async fn match_args(
     // Build encryption engine: use existing engine from .sec if available,
     // otherwise build from the resolved config (new .sec case)
     let resolved_engine;
-    let encryption_engine = if !matches!(default_options.encryption_engine, dotsec::EncryptionEngine::None) {
+    let encryption_engine = if !matches!(
+        default_options.encryption_engine,
+        dotsec::EncryptionEngine::None
+    ) {
         &default_options.encryption_engine
     } else {
         let effective_config = existing_config.as_ref().unwrap_or(&source_config);
@@ -182,10 +207,8 @@ pub async fn match_args(
     };
 
     // --- Schema awareness ---
-    let schema_path = dotenv::schema::discover_schema(
-        sec_file,
-        default_options.schema_path.as_deref(),
-    )?;
+    let schema_path =
+        dotenv::schema::discover_schema(sec_file, default_options.schema_path.as_deref())?;
     let mut schema = if let Some(ref path) = schema_path {
         let content = std::fs::read_to_string(path)?;
         Some(dotenv::parse_schema(&content)?)
@@ -216,13 +239,24 @@ pub async fn match_args(
                 // Key already in schema — no directives needed inline
                 var_directives.push(vec![]);
             } else {
-                let directives = auto_directives(&entry.key, &entry.value, encrypt_all, &entry.directives);
+                let directives =
+                    auto_directives(&entry.key, &entry.value, encrypt_all, &entry.directives);
                 if schema.is_some() {
                     // Schema exists, new key — directives go to schema
-                    let schema_dirs: Vec<(String, Option<String>)> = directives.iter().filter_map(|d| {
-                        if let dotenv::Line::Directive { name, value } = d { Some((name.clone(), value.clone())) } else { None }
-                    }).collect();
-                    new_schema_entries.push(dotenv::SchemaEntry { directives: schema_dirs, key: entry.key.clone() });
+                    let schema_dirs: Vec<(String, Option<String>)> = directives
+                        .iter()
+                        .filter_map(|d| {
+                            if let dotenv::Line::Directive { name, value } = d {
+                                Some((name.clone(), value.clone()))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    new_schema_entries.push(dotenv::SchemaEntry {
+                        directives: schema_dirs,
+                        key: entry.key.clone(),
+                    });
                     var_directives.push(vec![]); // No inline directives
                 } else {
                     var_directives.push(directives);
@@ -261,14 +295,33 @@ pub async fn match_args(
                     helpers::truncate_value(&entry.value, 40).dimmed(),
                 );
 
-                let source_dirs = if entry.directives.is_empty() { None } else { Some(entry.directives.as_slice()) };
-                let directives = helpers::prompt_variable_directives(&entry.key, &entry.value, encrypt_all, source_dirs)?;
+                let source_dirs = if entry.directives.is_empty() {
+                    None
+                } else {
+                    Some(entry.directives.as_slice())
+                };
+                let directives = helpers::prompt_variable_directives(
+                    &entry.key,
+                    &entry.value,
+                    encrypt_all,
+                    source_dirs,
+                )?;
                 if schema.is_some() {
                     // Schema exists, new key — directives go to schema
-                    let schema_dirs: Vec<(String, Option<String>)> = directives.iter().filter_map(|d| {
-                        if let dotenv::Line::Directive { name, value } = d { Some((name.clone(), value.clone())) } else { None }
-                    }).collect();
-                    new_schema_entries.push(dotenv::SchemaEntry { directives: schema_dirs, key: entry.key.clone() });
+                    let schema_dirs: Vec<(String, Option<String>)> = directives
+                        .iter()
+                        .filter_map(|d| {
+                            if let dotenv::Line::Directive { name, value } = d {
+                                Some((name.clone(), value.clone()))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    new_schema_entries.push(dotenv::SchemaEntry {
+                        directives: schema_dirs,
+                        key: entry.key.clone(),
+                    });
                     var_directives.push(vec![]); // No inline directives
                 } else {
                     var_directives.push(directives);
@@ -309,7 +362,9 @@ pub async fn match_args(
                     continue;
                 }
 
-                dotenv::Line::Comment { .. } | dotenv::Line::Whitespace { .. } | dotenv::Line::Newline => {
+                dotenv::Line::Comment { .. }
+                | dotenv::Line::Whitespace { .. }
+                | dotenv::Line::Newline => {
                     if !inserted_config {
                         if let dotenv::Line::Comment { .. } = line {
                             new_lines.extend(header.clone());
@@ -353,14 +408,27 @@ pub async fn match_args(
             new_lines.push(dotenv::Line::Newline);
         }
 
-        with_progress("Encrypting...", dotsec::encrypt_lines_to_sec(&new_lines, sec_file, encryption_engine, schema.as_ref())).await?;
+        with_progress(
+            "Encrypting...",
+            dotsec::encrypt_lines_to_sec(&new_lines, sec_file, encryption_engine, schema.as_ref()),
+        )
+        .await?;
     } else {
         // New-only mode: decrypt existing .sec, append new variables
-        let mut existing_lines = with_progress("Decrypting...", dotsec::decrypt_sec_to_lines(sec_file, encryption_engine)).await?;
+        let mut existing_lines = with_progress(
+            "Decrypting...",
+            dotsec::decrypt_sec_to_lines(sec_file, encryption_engine),
+        )
+        .await?;
 
         let mut var_index = 0;
         for line in &lines {
-            if let dotenv::Line::Kv { key, value, quote_type } = line {
+            if let dotenv::Line::Kv {
+                key,
+                value,
+                quote_type,
+            } = line
+            {
                 if !import_keys.contains(key.as_str()) {
                     continue;
                 }
@@ -368,7 +436,8 @@ pub async fn match_args(
                 if var_index < var_directives.len() {
                     let dirs = &var_directives[var_index];
                     // Ensure blank line before new entry
-                    let last_is_newline = matches!(existing_lines.last(), Some(dotenv::Line::Newline));
+                    let last_is_newline =
+                        matches!(existing_lines.last(), Some(dotenv::Line::Newline));
                     if !existing_lines.is_empty() {
                         if !last_is_newline {
                             existing_lines.push(dotenv::Line::Newline);
@@ -381,12 +450,25 @@ pub async fn match_args(
                     }
                     var_index += 1;
                 }
-                existing_lines.push(dotenv::Line::Kv { key: key.clone(), value: value.clone(), quote_type: quote_type.clone() });
+                existing_lines.push(dotenv::Line::Kv {
+                    key: key.clone(),
+                    value: value.clone(),
+                    quote_type: quote_type.clone(),
+                });
                 existing_lines.push(dotenv::Line::Newline);
             }
         }
 
-        with_progress("Encrypting...", dotsec::encrypt_lines_to_sec(&existing_lines, sec_file, encryption_engine, schema.as_ref())).await?;
+        with_progress(
+            "Encrypting...",
+            dotsec::encrypt_lines_to_sec(
+                &existing_lines,
+                sec_file,
+                encryption_engine,
+                schema.as_ref(),
+            ),
+        )
+        .await?;
     }
 
     println!(
@@ -418,12 +500,18 @@ fn auto_directives(
     if encrypt_all {
         // Only add @plaintext for non-secrets (exceptions to encrypt-all)
         if source_has_plaintext || (!source_has_encrypt && !is_secret) {
-            directives.push(dotenv::Line::Directive { name: "plaintext".to_string(), value: None });
+            directives.push(dotenv::Line::Directive {
+                name: "plaintext".to_string(),
+                value: None,
+            });
         }
     } else {
         // Only add @encrypt for secrets (exceptions to plaintext-all)
         if source_has_encrypt || (!source_has_plaintext && is_secret) {
-            directives.push(dotenv::Line::Directive { name: "encrypt".to_string(), value: None });
+            directives.push(dotenv::Line::Directive {
+                name: "encrypt".to_string(),
+                value: None,
+            });
         }
     }
 
@@ -434,24 +522,36 @@ fn auto_directives(
         .and_then(|(_, v)| v.as_deref());
 
     if let Some(st) = source_type {
-        directives.push(dotenv::Line::Directive { name: "type".to_string(), value: Some(st.to_string()) });
+        directives.push(dotenv::Line::Directive {
+            name: "type".to_string(),
+            value: Some(st.to_string()),
+        });
     } else {
         let type_name = match helpers::guess_type(value) {
             1 => "number",
             2 => "boolean",
             _ => "string",
         };
-        directives.push(dotenv::Line::Directive { name: "type".to_string(), value: Some(type_name.to_string()) });
+        directives.push(dotenv::Line::Directive {
+            name: "type".to_string(),
+            value: Some(type_name.to_string()),
+        });
     }
 
     // Optional: empty values are treated as optional
     if value.is_empty() {
-        directives.push(dotenv::Line::Directive { name: "optional".to_string(), value: None });
+        directives.push(dotenv::Line::Directive {
+            name: "optional".to_string(),
+            value: None,
+        });
     }
 
     // Push: carry over from source if present
     if let Some((_, v)) = source_directives.iter().find(|(n, _)| n == "push") {
-        directives.push(dotenv::Line::Directive { name: "push".to_string(), value: v.clone() });
+        directives.push(dotenv::Line::Directive {
+            name: "push".to_string(),
+            value: v.clone(),
+        });
     }
 
     directives
@@ -464,10 +564,13 @@ mod tests {
     #[test]
     fn auto_directives_secret_key_gets_encrypt() {
         let directives = auto_directives("API_SECRET_KEY", "sk-123", false, &[]);
-        let has_encrypt = directives.iter().any(|d| {
-            matches!(d, dotenv::Line::Directive { name, value: None } if name == "encrypt")
-        });
-        assert!(has_encrypt, "secret key should get @encrypt when encrypt_all is false");
+        let has_encrypt = directives.iter().any(
+            |d| matches!(d, dotenv::Line::Directive { name, value: None } if name == "encrypt"),
+        );
+        assert!(
+            has_encrypt,
+            "secret key should get @encrypt when encrypt_all is false"
+        );
     }
 
     #[test]
@@ -476,7 +579,10 @@ mod tests {
         let has_type_number = directives.iter().any(|d| {
             matches!(d, dotenv::Line::Directive { name, value: Some(v) } if name == "type" && v == "number")
         });
-        assert!(has_type_number, "numeric value should be detected as @type=number");
+        assert!(
+            has_type_number,
+            "numeric value should be detected as @type=number"
+        );
     }
 
     #[test]
@@ -485,15 +591,21 @@ mod tests {
         let has_type_boolean = directives.iter().any(|d| {
             matches!(d, dotenv::Line::Directive { name, value: Some(v) } if name == "type" && v == "boolean")
         });
-        assert!(has_type_boolean, "boolean value should be detected as @type=boolean");
+        assert!(
+            has_type_boolean,
+            "boolean value should be detected as @type=boolean"
+        );
     }
 
     #[test]
     fn auto_directives_plaintext_for_non_secret() {
         let directives = auto_directives("LOG_LEVEL", "info", false, &[]);
-        let has_encrypt = directives.iter().any(|d| {
-            matches!(d, dotenv::Line::Directive { name, .. } if name == "encrypt")
-        });
-        assert!(!has_encrypt, "non-secret key should NOT get @encrypt when encrypt_all is false");
+        let has_encrypt = directives
+            .iter()
+            .any(|d| matches!(d, dotenv::Line::Directive { name, .. } if name == "encrypt"));
+        assert!(
+            !has_encrypt,
+            "non-secret key should NOT get @encrypt when encrypt_all is false"
+        );
     }
 }

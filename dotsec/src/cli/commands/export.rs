@@ -28,17 +28,16 @@ pub async fn match_args(
     let sec_file = default_options.sec_file;
     let encryption_engine = &default_options.encryption_engine;
 
-    let lines = with_progress("Decrypting...", dotsec::decrypt_sec_to_lines(sec_file, encryption_engine)).await?;
+    let lines = with_progress(
+        "Decrypting...",
+        dotsec::decrypt_sec_to_lines(sec_file, encryption_engine),
+    )
+    .await?;
     let output = dotenv::lines_to_string(&lines);
 
     if let Some(out_file) = sub.get_one::<String>("output") {
         dotsec::write_sec_file(out_file, &output)?;
-        eprintln!(
-            "{} Exported {} to {}",
-            "✓".green(),
-            sec_file,
-            out_file
-        );
+        eprintln!("{} Exported {} to {}", "✓".green(), sec_file, out_file);
     } else {
         print!("{}", output);
     }
@@ -60,7 +59,11 @@ mod tests {
         dotsec::write_sec_file(path.to_str().unwrap(), "FOO=bar\n").unwrap();
 
         let perms = std::fs::metadata(&path).unwrap().permissions();
-        assert_eq!(perms.mode() & 0o777, 0o600, "exported file should be owner-only");
+        assert_eq!(
+            perms.mode() & 0o777,
+            0o600,
+            "exported file should be owner-only"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

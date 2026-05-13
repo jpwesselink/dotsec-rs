@@ -43,7 +43,10 @@ pub fn parse(source: String) -> napi::Result<Vec<ParsedEntry>> {
             directives: e
                 .directives
                 .iter()
-                .map(|(name, value)| DirectiveItem { name: name.clone(), value: value.clone() })
+                .map(|(name, value)| DirectiveItem {
+                    name: name.clone(),
+                    value: value.clone(),
+                })
                 .collect(),
         })
         .collect())
@@ -69,7 +72,10 @@ pub fn validate(source: String) -> napi::Result<Vec<ParsedValidationError>> {
 
 /// Validate a .env file against a schema string. Returns validation errors.
 #[napi]
-pub fn validate_against_schema(source: String, schema_source: String) -> napi::Result<Vec<ParsedValidationError>> {
+pub fn validate_against_schema(
+    source: String,
+    schema_source: String,
+) -> napi::Result<Vec<ParsedValidationError>> {
     let lines = dotsec_core::dotenv::parse_dotenv(&source)
         .map_err(|e| napi::Error::from_reason(format!("Parse error: {e}")))?;
     let entries = dotsec_core::dotenv::lines_to_entries(&lines);
@@ -92,7 +98,8 @@ pub fn validate_against_schema(source: String, schema_source: String) -> napi::R
 pub fn to_json(source: String) -> napi::Result<String> {
     let lines = dotsec_core::dotenv::parse_dotenv(&source)
         .map_err(|e| napi::Error::from_reason(format!("Parse error: {e}")))?;
-    dotsec_core::dotenv::lines_to_json(&lines).map_err(|e| napi::Error::from_reason(format!("JSON error: {e}")))
+    dotsec_core::dotenv::lines_to_json(&lines)
+        .map_err(|e| napi::Error::from_reason(format!("JSON error: {e}")))
 }
 
 /// Roundtrip: parse a .env file string and serialize it back.
@@ -118,7 +125,10 @@ pub fn format_by_schema(source: String, schema_source: String) -> napi::Result<S
 /// Checks: explicit path → DOTSEC_SCHEMA env var → dotsec.schema in same dir.
 /// Returns null if no schema found. Throws if an explicit path was given but doesn't exist.
 #[napi]
-pub fn discover_schema(sec_file_path: String, explicit_schema: Option<String>) -> napi::Result<Option<String>> {
+pub fn discover_schema(
+    sec_file_path: String,
+    explicit_schema: Option<String>,
+) -> napi::Result<Option<String>> {
     dotsec_core::dotenv::schema::discover_schema(&sec_file_path, explicit_schema.as_deref())
         .map_err(napi::Error::from_reason)
 }
@@ -126,10 +136,14 @@ pub fn discover_schema(sec_file_path: String, explicit_schema: Option<String>) -
 /// Load and parse a schema file from disk. Uses discovery if no path given.
 /// Returns null if no schema found.
 #[napi]
-pub fn load_schema(sec_file_path: Option<String>, explicit_schema: Option<String>) -> napi::Result<Option<Vec<ParsedSchemaEntry>>> {
+pub fn load_schema(
+    sec_file_path: Option<String>,
+    explicit_schema: Option<String>,
+) -> napi::Result<Option<Vec<ParsedSchemaEntry>>> {
     let sec_path = sec_file_path.as_deref().unwrap_or(".sec");
-    let schema_path = dotsec_core::dotenv::schema::discover_schema(sec_path, explicit_schema.as_deref())
-        .map_err(napi::Error::from_reason)?;
+    let schema_path =
+        dotsec_core::dotenv::schema::discover_schema(sec_path, explicit_schema.as_deref())
+            .map_err(napi::Error::from_reason)?;
 
     let path = match schema_path {
         Some(p) => p,
@@ -141,17 +155,22 @@ pub fn load_schema(sec_file_path: Option<String>, explicit_schema: Option<String
     let schema = dotsec_core::dotenv::parse_schema(&content)
         .map_err(|e| napi::Error::from_reason(format!("Schema parse error: {e}")))?;
 
-    Ok(Some(schema
-        .iter()
-        .map(|(_key, e)| ParsedSchemaEntry {
-            key: e.key.clone(),
-            directives: e
-                .directives
-                .iter()
-                .map(|(name, value)| DirectiveItem { name: name.clone(), value: value.clone() })
-                .collect(),
-        })
-        .collect()))
+    Ok(Some(
+        schema
+            .iter()
+            .map(|(_key, e)| ParsedSchemaEntry {
+                key: e.key.clone(),
+                directives: e
+                    .directives
+                    .iter()
+                    .map(|(name, value)| DirectiveItem {
+                        name: name.clone(),
+                        value: value.clone(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    ))
 }
 
 /// Parse a schema file string and return entries with their directives.
@@ -167,7 +186,10 @@ pub fn parse_schema(source: String) -> napi::Result<Vec<ParsedSchemaEntry>> {
             directives: e
                 .directives
                 .iter()
-                .map(|(name, value)| DirectiveItem { name: name.clone(), value: value.clone() })
+                .map(|(name, value)| DirectiveItem {
+                    name: name.clone(),
+                    value: value.clone(),
+                })
                 .collect(),
         })
         .collect())

@@ -1,8 +1,8 @@
 mod codegen;
 mod export;
 
-use clap::Command;
 use crate::default_options::DefaultOptions;
+use clap::Command;
 
 pub fn command() -> Command {
     Command::new("schema")

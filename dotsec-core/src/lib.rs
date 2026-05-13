@@ -1,5 +1,5 @@
-pub use dotenv;
 use base64::Engine as _;
+pub use dotenv;
 use dotenv::{lines_to_entries, Line, Schema};
 
 mod configuration;
@@ -27,11 +27,7 @@ pub fn write_sec_file(path: &str, content: &str) -> Result<(), Box<dyn std::erro
     // prevents silently breaking any legitimate symlink the user may have placed.
     if let Ok(meta) = std::fs::symlink_metadata(path) {
         if meta.file_type().is_symlink() {
-            return Err(format!(
-                "refusing to write through symlink: {}",
-                path.display()
-            )
-            .into());
+            return Err(format!("refusing to write through symlink: {}", path.display()).into());
         }
     }
 
@@ -98,18 +94,22 @@ fn open_temp_write(tmp: &std::path::Path) -> std::io::Result<std::fs::File> {
 /// Generate the standard dotsec file header (two comment lines + newlines).
 pub fn generate_header() -> Vec<Line> {
     vec![
-        Line::Comment { text: "# dotsec v5 — encrypted environment file".into() },
+        Line::Comment {
+            text: "# dotsec v5 — encrypted environment file".into(),
+        },
         Line::Newline,
-        Line::Comment { text: "# https://github.com/jpwesselink/dotsec-rs".into() },
+        Line::Comment {
+            text: "# https://github.com/jpwesselink/dotsec-rs".into(),
+        },
         Line::Newline,
     ]
 }
 
 /// Check whether parsed lines contain the dotsec header.
 pub fn has_header(lines: &[Line]) -> bool {
-    lines.iter().any(|line| {
-        matches!(line, Line::Comment { text } if text.starts_with("# dotsec v"))
-    })
+    lines
+        .iter()
+        .any(|line| matches!(line, Line::Comment { text } if text.starts_with("# dotsec v")))
 }
 
 pub fn parse_content(content: &str) -> Result<Vec<Line>, Box<dyn std::error::Error>> {
@@ -197,7 +197,10 @@ pub async fn encrypt_lines_to_sec(
                 }
             }
             if !inline_encryption_override
-                && !entry.directives.iter().any(|(n, _)| n == "encrypt" || n == "plaintext")
+                && !entry
+                    .directives
+                    .iter()
+                    .any(|(n, _)| n == "encrypt" || n == "plaintext")
             {
                 if let Some(true) = schema_default_encrypt {
                     entry.directives.push(("encrypt".to_string(), None));
@@ -247,7 +250,8 @@ pub async fn encrypt_lines_to_sec(
 
 #[allow(clippy::borrowed_box)]
 fn is_new_or_no_key(e: &Box<dyn std::error::Error>) -> bool {
-    let is_new_file = e.downcast_ref::<std::io::Error>()
+    let is_new_file = e
+        .downcast_ref::<std::io::Error>()
         .is_some_and(|io_err| io_err.kind() == std::io::ErrorKind::NotFound);
     let is_no_key = e.to_string().contains("No __DOTSEC_KEY__ found");
     is_new_file || is_no_key
@@ -268,7 +272,11 @@ fn encrypt_with_dek(
 
     for line in lines {
         match line {
-            Line::Kv { key, value, quote_type } => {
+            Line::Kv {
+                key,
+                value,
+                quote_type,
+            } => {
                 if key == DOTSEC_KEY_NAME {
                     sec_lines.push(Line::Kv {
                         key: DOTSEC_KEY_NAME.to_string(),
@@ -291,13 +299,19 @@ fn encrypt_with_dek(
                         sec_lines.push(line.clone());
                     } else {
                         let encrypted = crypto::encrypt_value(value, dek, key)?;
-                        sec_lines.push(Line::Kv { key: key.clone(), value: encrypted, quote_type: quote_type.clone() });
+                        sec_lines.push(Line::Kv {
+                            key: key.clone(),
+                            value: encrypted,
+                            quote_type: quote_type.clone(),
+                        });
                     }
                 } else {
                     sec_lines.push(line.clone());
                 }
             }
-            Line::Comment { text } if text.contains("do not edit the line below, it is managed by dotsec") => {
+            Line::Comment { text }
+                if text.contains("do not edit the line below, it is managed by dotsec") =>
+            {
                 continue;
             }
             other => sec_lines.push(other.clone()),
@@ -343,10 +357,17 @@ pub async fn decrypt_sec_to_lines(
         SecFormat::V1 => decrypt_v1(&lines, encryption_engine).await,
         SecFormat::None => {
             let has_enc_values = lines.iter().any(|l| {
-                if let Line::Kv { value: v, .. } = l { crypto::is_encrypted_value(v) } else { false }
+                if let Line::Kv { value: v, .. } = l {
+                    crypto::is_encrypted_value(v)
+                } else {
+                    false
+                }
             });
             if has_enc_values {
-                return Err("File contains ENC[...] values but no __DOTSEC_KEY__. File may be corrupted.".into());
+                return Err(
+                    "File contains ENC[...] values but no __DOTSEC_KEY__. File may be corrupted."
+                        .into(),
+                );
             }
             Ok(lines)
         }
@@ -359,8 +380,8 @@ async fn decrypt_v2(
     lines: &[Line],
     encryption_engine: &EncryptionEngine,
 ) -> Result<Vec<Line>, Box<dyn std::error::Error>> {
-    let wrapped_dek_b64 = dotenv::get_value(lines, DOTSEC_KEY_NAME)
-        .ok_or("No __DOTSEC_KEY__ found in .sec file")?;
+    let wrapped_dek_b64 =
+        dotenv::get_value(lines, DOTSEC_KEY_NAME).ok_or("No __DOTSEC_KEY__ found in .sec file")?;
     let wrapped_dek = base64::engine::general_purpose::STANDARD.decode(&wrapped_dek_b64)?;
 
     let dek = match encryption_engine {
@@ -378,13 +399,21 @@ async fn decrypt_v2(
 
     for line in lines {
         match line {
-            Line::Kv { key, value, quote_type } => {
+            Line::Kv {
+                key,
+                value,
+                quote_type,
+            } => {
                 if key == DOTSEC_KEY_NAME {
                     continue;
                 }
                 if crypto::is_encrypted_value(value) {
                     let plaintext = crypto::decrypt_value(value, &dek, key)?;
-                    resolved.push(Line::Kv { key: key.clone(), value: plaintext, quote_type: quote_type.clone() });
+                    resolved.push(Line::Kv {
+                        key: key.clone(),
+                        value: plaintext,
+                        quote_type: quote_type.clone(),
+                    });
                 } else {
                     resolved.push(line.clone());
                 }
@@ -406,12 +435,11 @@ async fn decrypt_v1(
     lines: &[Line],
     encryption_engine: &EncryptionEngine,
 ) -> Result<Vec<Line>, Box<dyn std::error::Error>> {
-    let dotsec_value = dotenv::get_value(lines, DOTSEC_V1_NAME)
-        .ok_or("No __DOTSEC__ entry found")?;
+    let dotsec_value =
+        dotenv::get_value(lines, DOTSEC_V1_NAME).ok_or("No __DOTSEC__ entry found")?;
 
     let secrets_json = decrypt_blob_v1(&dotsec_value, encryption_engine).await?;
-    let secrets: std::collections::HashMap<String, String> =
-        serde_json::from_str(&secrets_json)?;
+    let secrets: std::collections::HashMap<String, String> = serde_json::from_str(&secrets_json)?;
 
     let mut resolved: Vec<Line> = Vec::new();
     let mut skip_dotsec_comment = false;
@@ -424,7 +452,11 @@ async fn decrypt_v1(
                 skip_dotsec_comment = true;
                 continue;
             }
-            Line::Kv { key, value, quote_type } => {
+            Line::Kv {
+                key,
+                value,
+                quote_type,
+            } => {
                 if key == DOTSEC_V1_NAME {
                     continue;
                 }
@@ -459,10 +491,12 @@ async fn decrypt_blob_v1(
     _ciphertext: &str,
     _engine: &EncryptionEngine,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    Err("This .sec file uses the legacy v1 format (single encrypted blob). \
+    Err(
+        "This .sec file uses the legacy v1 format (single encrypted blob). \
          Please decrypt it with dotsec v4.x first, then re-encrypt with v5.x to migrate \
          to the new per-value encryption format."
-        .into())
+            .into(),
+    )
 }
 
 // --- DEK helpers ---
@@ -476,8 +510,8 @@ async fn load_existing_dek_aws(
 ) -> Result<DekPair, Box<dyn std::error::Error>> {
     let content = load_file(sec_file)?;
     let lines = dotenv::parse_dotenv(&content)?;
-    let wrapped_b64 = dotenv::get_value(&lines, DOTSEC_KEY_NAME)
-        .ok_or("No __DOTSEC_KEY__ found")?;
+    let wrapped_b64 =
+        dotenv::get_value(&lines, DOTSEC_KEY_NAME).ok_or("No __DOTSEC_KEY__ found")?;
     let wrapped_dek = base64::engine::general_purpose::STANDARD.decode(&wrapped_b64)?;
     let dek = aws::unwrap_data_key(&wrapped_dek, region).await?;
     Ok((dek, wrapped_dek))
@@ -489,8 +523,8 @@ fn load_existing_dek_local(
 ) -> Result<DekPair, Box<dyn std::error::Error>> {
     let content = load_file(sec_file)?;
     let lines = dotenv::parse_dotenv(&content)?;
-    let wrapped_b64 = dotenv::get_value(&lines, DOTSEC_KEY_NAME)
-        .ok_or("No __DOTSEC_KEY__ found")?;
+    let wrapped_b64 =
+        dotenv::get_value(&lines, DOTSEC_KEY_NAME).ok_or("No __DOTSEC_KEY__ found")?;
     let wrapped_dek = base64::engine::general_purpose::STANDARD.decode(&wrapped_b64)?;
     let dek = crypto::local::unwrap_dek(&wrapped_dek, identity)?;
     Ok((dek, wrapped_dek))
@@ -504,7 +538,12 @@ pub fn resolve_env_vars(lines: &[Line]) -> Vec<(String, String)> {
     let mut resolved: Vec<(String, String)> = Vec::new();
 
     for line in lines {
-        if let Line::Kv { key, value, quote_type } = line {
+        if let Line::Kv {
+            key,
+            value,
+            quote_type,
+        } = line
+        {
             if key == DOTSEC_KEY_NAME || key == DOTSEC_V1_NAME {
                 continue;
             }
@@ -538,7 +577,10 @@ fn interpolate(value: &str, resolved: &[(String, String)]) -> String {
                     result.push_str(&val);
                 } else {
                     // Unclosed ${ — treat as literal text
-                    eprintln!("warning: unclosed ${{{}}} in value, treating as literal text", var_name);
+                    eprintln!(
+                        "warning: unclosed ${{{}}} in value, treating as literal text",
+                        var_name
+                    );
                     result.push_str("${");
                     result.push_str(&var_name);
                 }
@@ -630,7 +672,10 @@ mod tests {
     #[test]
     fn generate_header_has_two_comment_lines() {
         let header = generate_header();
-        let comments: Vec<_> = header.iter().filter(|l| matches!(l, Line::Comment { .. })).collect();
+        let comments: Vec<_> = header
+            .iter()
+            .filter(|l| matches!(l, Line::Comment { .. }))
+            .collect();
         assert_eq!(comments.len(), 2);
     }
 
@@ -643,7 +688,9 @@ mod tests {
     #[test]
     fn generate_header_second_line_contains_url() {
         let header = generate_header();
-        assert!(matches!(&header[2], Line::Comment { text } if text.contains("https://github.com/jpwesselink/dotsec-rs")));
+        assert!(
+            matches!(&header[2], Line::Comment { text } if text.contains("https://github.com/jpwesselink/dotsec-rs"))
+        );
     }
 
     #[test]
@@ -655,18 +702,24 @@ mod tests {
     #[test]
     fn has_header_false_when_absent() {
         let lines = vec![
-            Line::Comment { text: "# just a comment".into() },
+            Line::Comment {
+                text: "# just a comment".into(),
+            },
             Line::Newline,
-            Line::Kv { key: "FOO".into(), value: "bar".into(), quote_type: QuoteType::None },
+            Line::Kv {
+                key: "FOO".into(),
+                value: "bar".into(),
+                quote_type: QuoteType::None,
+            },
         ];
         assert!(!has_header(&lines));
     }
 
     #[test]
     fn has_header_matches_any_version() {
-        let lines = vec![
-            Line::Comment { text: "# dotsec v99 — encrypted environment file".into() },
-        ];
+        let lines = vec![Line::Comment {
+            text: "# dotsec v99 — encrypted environment file".into(),
+        }];
         assert!(has_header(&lines));
     }
 
@@ -692,10 +745,7 @@ mod tests {
 
     #[test]
     fn interpolate_multiple_vars() {
-        let resolved = vec![
-            ("A".into(), "hello".into()),
-            ("B".into(), "world".into()),
-        ];
+        let resolved = vec![("A".into(), "hello".into()), ("B".into(), "world".into())];
         assert_eq!(interpolate("${A} ${B}", &resolved), "hello world");
     }
 
@@ -714,13 +764,19 @@ mod tests {
     #[test]
     fn interpolate_unclosed_brace_is_literal() {
         let resolved = vec![("A".into(), "val".into())];
-        assert_eq!(interpolate("path is ${UNCLOSED", &resolved), "path is ${UNCLOSED");
+        assert_eq!(
+            interpolate("path is ${UNCLOSED", &resolved),
+            "path is ${UNCLOSED"
+        );
     }
 
     #[test]
     fn interpolate_unclosed_brace_mixed() {
         let resolved = vec![("A".into(), "val".into())];
-        assert_eq!(interpolate("${A} then ${UNCLOSED", &resolved), "val then ${UNCLOSED");
+        assert_eq!(
+            interpolate("${A} then ${UNCLOSED", &resolved),
+            "val then ${UNCLOSED"
+        );
     }
 
     // --- resolve_env_vars ---
@@ -728,9 +784,17 @@ mod tests {
     #[test]
     fn resolve_env_vars_basic() {
         let lines = vec![
-            Line::Kv { key: "FOO".into(), value: "bar".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "FOO".into(),
+                value: "bar".into(),
+                quote_type: QuoteType::Double,
+            },
             Line::Newline,
-            Line::Kv { key: "BAZ".into(), value: "qux".into(), quote_type: QuoteType::None },
+            Line::Kv {
+                key: "BAZ".into(),
+                value: "qux".into(),
+                quote_type: QuoteType::None,
+            },
         ];
         let resolved = resolve_env_vars(&lines);
         assert_eq!(
@@ -742,7 +806,11 @@ mod tests {
     #[test]
     fn resolve_env_vars_interpolation() {
         let lines = vec![
-            Line::Kv { key: "HOST".into(), value: "localhost".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "HOST".into(),
+                value: "localhost".into(),
+                quote_type: QuoteType::Double,
+            },
             Line::Newline,
             Line::Kv {
                 key: "URL".into(),
@@ -757,9 +825,17 @@ mod tests {
     #[test]
     fn resolve_env_vars_single_quote_no_interpolation() {
         let lines = vec![
-            Line::Kv { key: "HOST".into(), value: "localhost".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "HOST".into(),
+                value: "localhost".into(),
+                quote_type: QuoteType::Double,
+            },
             Line::Newline,
-            Line::Kv { key: "LITERAL".into(), value: "${HOST}".into(), quote_type: QuoteType::Single },
+            Line::Kv {
+                key: "LITERAL".into(),
+                value: "${HOST}".into(),
+                quote_type: QuoteType::Single,
+            },
         ];
         let resolved = resolve_env_vars(&lines);
         assert_eq!(resolved[1].1, "${HOST}");
@@ -768,9 +844,17 @@ mod tests {
     #[test]
     fn resolve_env_vars_skips_dotsec_key() {
         let lines = vec![
-            Line::Kv { key: "FOO".into(), value: "bar".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "FOO".into(),
+                value: "bar".into(),
+                quote_type: QuoteType::Double,
+            },
             Line::Newline,
-            Line::Kv { key: "__DOTSEC_KEY__".into(), value: "wrapped".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "__DOTSEC_KEY__".into(),
+                value: "wrapped".into(),
+                quote_type: QuoteType::Double,
+            },
         ];
         let resolved = resolve_env_vars(&lines);
         assert_eq!(resolved.len(), 1);
@@ -780,9 +864,17 @@ mod tests {
     #[test]
     fn resolve_env_vars_skips_dotsec_v1() {
         let lines = vec![
-            Line::Kv { key: "FOO".into(), value: "bar".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "FOO".into(),
+                value: "bar".into(),
+                quote_type: QuoteType::Double,
+            },
             Line::Newline,
-            Line::Kv { key: "__DOTSEC__".into(), value: "blob".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "__DOTSEC__".into(),
+                value: "blob".into(),
+                quote_type: QuoteType::Double,
+            },
         ];
         let resolved = resolve_env_vars(&lines);
         assert_eq!(resolved.len(), 1);
@@ -794,9 +886,17 @@ mod tests {
     #[test]
     fn detect_v2_format() {
         let lines = vec![
-            Line::Kv { key: "FOO".into(), value: "ENC[abc]".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "FOO".into(),
+                value: "ENC[abc]".into(),
+                quote_type: QuoteType::Double,
+            },
             Line::Newline,
-            Line::Kv { key: "__DOTSEC_KEY__".into(), value: "wrapped".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "__DOTSEC_KEY__".into(),
+                value: "wrapped".into(),
+                quote_type: QuoteType::Double,
+            },
         ];
         assert_eq!(detect_format(&lines), SecFormat::V2);
     }
@@ -804,18 +904,28 @@ mod tests {
     #[test]
     fn detect_v1_format() {
         let lines = vec![
-            Line::Kv { key: "FOO".into(), value: "hexid".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "FOO".into(),
+                value: "hexid".into(),
+                quote_type: QuoteType::Double,
+            },
             Line::Newline,
-            Line::Kv { key: "__DOTSEC__".into(), value: "blob".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "__DOTSEC__".into(),
+                value: "blob".into(),
+                quote_type: QuoteType::Double,
+            },
         ];
         assert_eq!(detect_format(&lines), SecFormat::V1);
     }
 
     #[test]
     fn detect_no_format() {
-        let lines = vec![
-            Line::Kv { key: "FOO".into(), value: "bar".into(), quote_type: QuoteType::Double },
-        ];
+        let lines = vec![Line::Kv {
+            key: "FOO".into(),
+            value: "bar".into(),
+            quote_type: QuoteType::Double,
+        }];
         assert_eq!(detect_format(&lines), SecFormat::None);
     }
 
@@ -823,9 +933,17 @@ mod tests {
     fn detect_none_with_enc_values_but_no_dotsec_key() {
         // ENC[...] values present but no __DOTSEC_KEY__ or __DOTSEC__ marker
         let lines = vec![
-            Line::Kv { key: "SECRET".into(), value: "ENC[base64data]".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "SECRET".into(),
+                value: "ENC[base64data]".into(),
+                quote_type: QuoteType::Double,
+            },
             Line::Newline,
-            Line::Kv { key: "OTHER".into(), value: "ENC[moredata]".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "OTHER".into(),
+                value: "ENC[moredata]".into(),
+                quote_type: QuoteType::Double,
+            },
         ];
         assert_eq!(detect_format(&lines), SecFormat::None);
     }
@@ -839,7 +957,9 @@ mod tests {
     #[test]
     fn detect_none_for_only_comments_and_newlines() {
         let lines = vec![
-            Line::Comment { text: "# just a comment".into() },
+            Line::Comment {
+                text: "# just a comment".into(),
+            },
             Line::Newline,
             Line::Newline,
         ];
@@ -850,9 +970,17 @@ mod tests {
     fn detect_v2_takes_priority_over_enc_values() {
         // Both ENC values and __DOTSEC_KEY__ present → V2
         let lines = vec![
-            Line::Kv { key: "SECRET".into(), value: "ENC[data]".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "SECRET".into(),
+                value: "ENC[data]".into(),
+                quote_type: QuoteType::Double,
+            },
             Line::Newline,
-            Line::Kv { key: "__DOTSEC_KEY__".into(), value: "wrapped_key".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "__DOTSEC_KEY__".into(),
+                value: "wrapped_key".into(),
+                quote_type: QuoteType::Double,
+            },
         ];
         assert_eq!(detect_format(&lines), SecFormat::V2);
     }
@@ -894,11 +1022,22 @@ mod tests {
     #[test]
     fn collect_secrets_only_encrypted_entries() {
         let lines = vec![
-            Line::Directive { name: "encrypt".into(), value: None },
+            Line::Directive {
+                name: "encrypt".into(),
+                value: None,
+            },
             Line::Newline,
-            Line::Kv { key: "SECRET".into(), value: "shhh".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "SECRET".into(),
+                value: "shhh".into(),
+                quote_type: QuoteType::Double,
+            },
             Line::Newline,
-            Line::Kv { key: "PUBLIC".into(), value: "visible".into(), quote_type: QuoteType::None },
+            Line::Kv {
+                key: "PUBLIC".into(),
+                value: "visible".into(),
+                quote_type: QuoteType::None,
+            },
         ];
         let env_vars = vec![
             ("SECRET".into(), "shhh".into()),
@@ -911,18 +1050,29 @@ mod tests {
     #[test]
     fn collect_secrets_sorted_longest_first() {
         let lines = vec![
-            Line::Directive { name: "encrypt".into(), value: None },
+            Line::Directive {
+                name: "encrypt".into(),
+                value: None,
+            },
             Line::Newline,
-            Line::Kv { key: "A".into(), value: "ab".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "A".into(),
+                value: "ab".into(),
+                quote_type: QuoteType::Double,
+            },
             Line::Newline,
-            Line::Directive { name: "encrypt".into(), value: None },
+            Line::Directive {
+                name: "encrypt".into(),
+                value: None,
+            },
             Line::Newline,
-            Line::Kv { key: "B".into(), value: "abcdef".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "B".into(),
+                value: "abcdef".into(),
+                quote_type: QuoteType::Double,
+            },
         ];
-        let env_vars = vec![
-            ("A".into(), "ab".into()),
-            ("B".into(), "abcdef".into()),
-        ];
+        let env_vars = vec![("A".into(), "ab".into()), ("B".into(), "abcdef".into())];
         let secrets = collect_secret_values(&lines, &env_vars);
         assert_eq!(secrets, vec!["abcdef", "ab"]);
     }
@@ -930,9 +1080,16 @@ mod tests {
     #[test]
     fn collect_secrets_skips_empty_values() {
         let lines = vec![
-            Line::Directive { name: "encrypt".into(), value: None },
+            Line::Directive {
+                name: "encrypt".into(),
+                value: None,
+            },
             Line::Newline,
-            Line::Kv { key: "EMPTY".into(), value: "".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "EMPTY".into(),
+                value: "".into(),
+                quote_type: QuoteType::Double,
+            },
         ];
         let env_vars = vec![("EMPTY".into(), "".into())];
         let secrets = collect_secret_values(&lines, &env_vars);
@@ -943,9 +1100,11 @@ mod tests {
 
     #[test]
     fn detect_enc_values_without_key_is_none() {
-        let lines = vec![
-            Line::Kv { key: "SECRET".into(), value: "ENC[base64data]".into(), quote_type: QuoteType::Double },
-        ];
+        let lines = vec![Line::Kv {
+            key: "SECRET".into(),
+            value: "ENC[base64data]".into(),
+            quote_type: QuoteType::Double,
+        }];
         assert!(matches!(detect_format(&lines), SecFormat::None));
     }
 
@@ -958,8 +1117,16 @@ mod tests {
     #[test]
     fn detect_dotsec_key_is_v2() {
         let lines = vec![
-            Line::Kv { key: "__DOTSEC_KEY__".into(), value: "wrapped_dek".into(), quote_type: QuoteType::Double },
-            Line::Kv { key: "SECRET".into(), value: "ENC[data]".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "__DOTSEC_KEY__".into(),
+                value: "wrapped_dek".into(),
+                quote_type: QuoteType::Double,
+            },
+            Line::Kv {
+                key: "SECRET".into(),
+                value: "ENC[data]".into(),
+                quote_type: QuoteType::Double,
+            },
         ];
         assert!(matches!(detect_format(&lines), SecFormat::V2));
     }
@@ -970,12 +1137,23 @@ mod tests {
     fn plaintext_sec_roundtrip() {
         // Create lines with @default-plaintext + some Kv entries
         let lines = vec![
-            Line::Directive { name: "default-plaintext".into(), value: None },
+            Line::Directive {
+                name: "default-plaintext".into(),
+                value: None,
+            },
             Line::Newline,
             Line::Newline,
-            Line::Kv { key: "FOO".into(), value: "bar".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "FOO".into(),
+                value: "bar".into(),
+                quote_type: QuoteType::Double,
+            },
             Line::Newline,
-            Line::Kv { key: "PORT".into(), value: "3000".into(), quote_type: QuoteType::None },
+            Line::Kv {
+                key: "PORT".into(),
+                value: "3000".into(),
+                quote_type: QuoteType::None,
+            },
             Line::Newline,
         ];
 
@@ -996,12 +1174,23 @@ mod tests {
     fn detect_format_none_for_plaintext_file() {
         // A file with no ENC[...] values and no __DOTSEC_KEY__
         let lines = vec![
-            Line::Directive { name: "default-plaintext".into(), value: None },
+            Line::Directive {
+                name: "default-plaintext".into(),
+                value: None,
+            },
             Line::Newline,
             Line::Newline,
-            Line::Kv { key: "FOO".into(), value: "bar".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "FOO".into(),
+                value: "bar".into(),
+                quote_type: QuoteType::Double,
+            },
             Line::Newline,
-            Line::Kv { key: "PORT".into(), value: "3000".into(), quote_type: QuoteType::None },
+            Line::Kv {
+                key: "PORT".into(),
+                value: "3000".into(),
+                quote_type: QuoteType::None,
+            },
             Line::Newline,
         ];
         assert_eq!(detect_format(&lines), SecFormat::None);
@@ -1011,9 +1200,17 @@ mod tests {
     fn sec_format_none_with_enc_values_detected() {
         // A file with ENC[...] values but NO __DOTSEC_KEY__
         let lines = vec![
-            Line::Kv { key: "SECRET".into(), value: "ENC[base64data]".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "SECRET".into(),
+                value: "ENC[base64data]".into(),
+                quote_type: QuoteType::Double,
+            },
             Line::Newline,
-            Line::Kv { key: "OTHER".into(), value: "ENC[moredata]".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "OTHER".into(),
+                value: "ENC[moredata]".into(),
+                quote_type: QuoteType::Double,
+            },
             Line::Newline,
         ];
 
@@ -1066,7 +1263,8 @@ mod tests {
     #[test]
     fn collect_and_redact_integration() {
         // Parse a .sec-style string with @encrypt directive
-        let sec_content = "# @encrypt\nDB_PASSWORD=\"super-secret-pw\"\nPUBLIC_URL=http://example.com\n";
+        let sec_content =
+            "# @encrypt\nDB_PASSWORD=\"super-secret-pw\"\nPUBLIC_URL=http://example.com\n";
         let lines = dotenv::parse_dotenv(sec_content).unwrap();
 
         // Resolve env vars
@@ -1133,7 +1331,8 @@ mod tests {
 
     #[test]
     fn plaintext_lines_to_string_roundtrip_with_directives() {
-        let source = "# @default-plaintext\n\n# @type=string\nFOO=\"hello\"\n\n# @type=number\nPORT=3000\n";
+        let source =
+            "# @default-plaintext\n\n# @type=string\nFOO=\"hello\"\n\n# @type=number\nPORT=3000\n";
         let lines = dotenv::parse_dotenv(source).unwrap();
         let output = dotenv::lines_to_string(&lines);
         assert_eq!(output, source);
@@ -1144,7 +1343,10 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].key, "FOO");
         assert_eq!(entries[0].value, "hello");
-        assert!(!entries[0].has_directive("encrypt"), "plaintext default should not add encrypt");
+        assert!(
+            !entries[0].has_directive("encrypt"),
+            "plaintext default should not add encrypt"
+        );
     }
 
     // --- local encryption integration ---
@@ -1160,13 +1362,27 @@ mod tests {
         std::fs::write(&key_file, &identity).unwrap();
 
         let lines = vec![
-            Line::Directive { name: "provider".to_string(), value: Some("local".to_string()) },
+            Line::Directive {
+                name: "provider".to_string(),
+                value: Some("local".to_string()),
+            },
             Line::Newline,
-            Line::Directive { name: "encrypt".to_string(), value: None },
+            Line::Directive {
+                name: "encrypt".to_string(),
+                value: None,
+            },
             Line::Newline,
-            Line::Kv { key: "SECRET".into(), value: "hunter2".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "SECRET".into(),
+                value: "hunter2".into(),
+                quote_type: QuoteType::Double,
+            },
             Line::Newline,
-            Line::Kv { key: "PUBLIC".into(), value: "hello".into(), quote_type: QuoteType::None },
+            Line::Kv {
+                key: "PUBLIC".into(),
+                value: "hello".into(),
+                quote_type: QuoteType::None,
+            },
             Line::Newline,
         ];
 
@@ -1174,21 +1390,45 @@ mod tests {
             key_file: Some(key_file.clone()),
         });
 
-        encrypt_lines_to_sec(&lines, &sec_file, &engine, None).await.unwrap();
+        encrypt_lines_to_sec(&lines, &sec_file, &engine, None)
+            .await
+            .unwrap();
 
         let content = std::fs::read_to_string(&sec_file).unwrap();
-        assert!(content.contains("ENC["), "encrypted value should contain ENC[...]");
-        assert!(content.contains("__DOTSEC_KEY__"), "should contain wrapped DEK");
+        assert!(
+            content.contains("ENC["),
+            "encrypted value should contain ENC[...]"
+        );
+        assert!(
+            content.contains("__DOTSEC_KEY__"),
+            "should contain wrapped DEK"
+        );
         assert!(!content.contains("hunter2"), "plaintext should not appear");
 
         let decrypted = decrypt_sec_to_lines(&sec_file, &engine).await.unwrap();
         let secret_val = decrypted.iter().find_map(|l| {
-            if let Line::Kv { key, value, .. } = l { if key == "SECRET" { Some(value.clone()) } else { None } } else { None }
+            if let Line::Kv { key, value, .. } = l {
+                if key == "SECRET" {
+                    Some(value.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
         });
         assert_eq!(secret_val.as_deref(), Some("hunter2"));
 
         let public_val = decrypted.iter().find_map(|l| {
-            if let Line::Kv { key, value, .. } = l { if key == "PUBLIC" { Some(value.clone()) } else { None } } else { None }
+            if let Line::Kv { key, value, .. } = l {
+                if key == "PUBLIC" {
+                    Some(value.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
         });
         assert_eq!(public_val.as_deref(), Some("hello"));
 
@@ -1209,9 +1449,16 @@ mod tests {
         std::fs::write(&wrong_key_file, &wrong_identity).unwrap();
 
         let lines = vec![
-            Line::Directive { name: "encrypt".to_string(), value: None },
+            Line::Directive {
+                name: "encrypt".to_string(),
+                value: None,
+            },
             Line::Newline,
-            Line::Kv { key: "SECRET".into(), value: "hunter2".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "SECRET".into(),
+                value: "hunter2".into(),
+                quote_type: QuoteType::Double,
+            },
             Line::Newline,
         ];
 
@@ -1219,7 +1466,9 @@ mod tests {
             key_file: Some(key_file),
         });
 
-        encrypt_lines_to_sec(&lines, &sec_file, &engine, None).await.unwrap();
+        encrypt_lines_to_sec(&lines, &sec_file, &engine, None)
+            .await
+            .unwrap();
 
         let wrong_engine = EncryptionEngine::Local(LocalEncryptionOptions {
             key_file: Some(wrong_key_file),
@@ -1241,22 +1490,41 @@ mod tests {
         std::fs::write(&key_file, &identity).unwrap();
 
         let lines = vec![
-            Line::Directive { name: "encrypt".to_string(), value: None },
+            Line::Directive {
+                name: "encrypt".to_string(),
+                value: None,
+            },
             Line::Newline,
-            Line::Kv { key: "SECRET".into(), value: "hunter2".into(), quote_type: QuoteType::Double },
+            Line::Kv {
+                key: "SECRET".into(),
+                value: "hunter2".into(),
+                quote_type: QuoteType::Double,
+            },
             Line::Newline,
         ];
 
         let encrypt_engine = EncryptionEngine::Local(LocalEncryptionOptions {
             key_file: Some(key_file.clone()),
         });
-        encrypt_lines_to_sec(&lines, &sec_file, &encrypt_engine, None).await.unwrap();
+        encrypt_lines_to_sec(&lines, &sec_file, &encrypt_engine, None)
+            .await
+            .unwrap();
 
         // Decrypt with key_file: None — must auto-discover <sec>.key.
         let decrypt_engine = EncryptionEngine::Local(LocalEncryptionOptions { key_file: None });
-        let decrypted = decrypt_sec_to_lines(&sec_file, &decrypt_engine).await.unwrap();
+        let decrypted = decrypt_sec_to_lines(&sec_file, &decrypt_engine)
+            .await
+            .unwrap();
         let secret_val = decrypted.iter().find_map(|l| {
-            if let Line::Kv { key, value, .. } = l { if key == "SECRET" { Some(value.clone()) } else { None } } else { None }
+            if let Line::Kv { key, value, .. } = l {
+                if key == "SECRET" {
+                    Some(value.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
         });
         assert_eq!(secret_val.as_deref(), Some("hunter2"));
 
@@ -1288,12 +1556,24 @@ mod tests {
             Line::Newline,
         ];
 
-        let engine = EncryptionEngine::Local(LocalEncryptionOptions { key_file: Some(key_file) });
-        encrypt_lines_to_sec(&lines, &sec_file, &engine, Some(&schema)).await.unwrap();
+        let engine = EncryptionEngine::Local(LocalEncryptionOptions {
+            key_file: Some(key_file),
+        });
+        encrypt_lines_to_sec(&lines, &sec_file, &engine, Some(&schema))
+            .await
+            .unwrap();
 
         let on_disk = std::fs::read_to_string(&sec_file).unwrap();
-        assert!(on_disk.contains("ENC["), "schema-owned @encrypt should still encrypt: {}", on_disk);
-        assert!(!on_disk.contains("secret123"), "plaintext leaked to disk: {}", on_disk);
+        assert!(
+            on_disk.contains("ENC["),
+            "schema-owned @encrypt should still encrypt: {}",
+            on_disk
+        );
+        assert!(
+            !on_disk.contains("secret123"),
+            "plaintext leaked to disk: {}",
+            on_disk
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1320,12 +1600,24 @@ mod tests {
             Line::Newline,
         ];
 
-        let engine = EncryptionEngine::Local(LocalEncryptionOptions { key_file: Some(key_file) });
-        encrypt_lines_to_sec(&lines, &sec_file, &engine, Some(&schema)).await.unwrap();
+        let engine = EncryptionEngine::Local(LocalEncryptionOptions {
+            key_file: Some(key_file),
+        });
+        encrypt_lines_to_sec(&lines, &sec_file, &engine, Some(&schema))
+            .await
+            .unwrap();
 
         let on_disk = std::fs::read_to_string(&sec_file).unwrap();
-        assert!(on_disk.contains("ENC["), "schema @default-encrypt should encrypt: {}", on_disk);
-        assert!(!on_disk.contains("secret123"), "plaintext leaked: {}", on_disk);
+        assert!(
+            on_disk.contains("ENC["),
+            "schema @default-encrypt should encrypt: {}",
+            on_disk
+        );
+        assert!(
+            !on_disk.contains("secret123"),
+            "plaintext leaked: {}",
+            on_disk
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1344,18 +1636,37 @@ mod tests {
         let schema = dotenv::parse_schema("# @encrypt\nFOO\n").unwrap();
 
         let lines = vec![
-            Line::Directive { name: "plaintext".into(), value: None },
+            Line::Directive {
+                name: "plaintext".into(),
+                value: None,
+            },
             Line::Newline,
-            Line::Kv { key: "FOO".into(), value: "hello".into(), quote_type: QuoteType::None },
+            Line::Kv {
+                key: "FOO".into(),
+                value: "hello".into(),
+                quote_type: QuoteType::None,
+            },
             Line::Newline,
         ];
 
-        let engine = EncryptionEngine::Local(LocalEncryptionOptions { key_file: Some(key_file) });
-        encrypt_lines_to_sec(&lines, &sec_file, &engine, Some(&schema)).await.unwrap();
+        let engine = EncryptionEngine::Local(LocalEncryptionOptions {
+            key_file: Some(key_file),
+        });
+        encrypt_lines_to_sec(&lines, &sec_file, &engine, Some(&schema))
+            .await
+            .unwrap();
 
         let on_disk = std::fs::read_to_string(&sec_file).unwrap();
-        assert!(on_disk.contains("FOO=hello"), "inline @plaintext should keep value plain: {}", on_disk);
-        assert!(!on_disk.contains("FOO=ENC["), "inline @plaintext was ignored: {}", on_disk);
+        assert!(
+            on_disk.contains("FOO=hello"),
+            "inline @plaintext should keep value plain: {}",
+            on_disk
+        );
+        assert!(
+            !on_disk.contains("FOO=ENC["),
+            "inline @plaintext was ignored: {}",
+            on_disk
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1433,5 +1744,4 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
-
 }

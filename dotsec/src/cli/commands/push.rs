@@ -112,11 +112,7 @@ pub async fn match_args(
         for target in entry.push_targets() {
             match target {
                 dotenv::PushTarget::AwsSsm(opts) => {
-                    let path = opts
-                        .path
-                        .as_deref()
-                        .unwrap_or(&entry.key)
-                        .to_string();
+                    let path = opts.path.as_deref().unwrap_or(&entry.key).to_string();
                     validate_push_path(&path, &entry.key)?;
                     plan.push(PushAction {
                         key: entry.key.clone(),
@@ -127,11 +123,7 @@ pub async fn match_args(
                     });
                 }
                 dotenv::PushTarget::AwsSecretsManager(opts) => {
-                    let path = opts
-                        .path
-                        .as_deref()
-                        .unwrap_or(&entry.key)
-                        .to_string();
+                    let path = opts.path.as_deref().unwrap_or(&entry.key).to_string();
                     validate_push_path(&path, &entry.key)?;
                     plan.push(PushAction {
                         key: entry.key.clone(),
@@ -229,11 +221,7 @@ pub async fn match_args(
     // Summary
     println!();
     if errors.is_empty() {
-        println!(
-            "{} Pushed {} values successfully",
-            "✓".green(),
-            success
-        );
+        println!("{} Pushed {} values successfully", "✓".green(), success);
     } else {
         println!(
             "{} Pushed {}/{} values ({} failed)",

@@ -6,8 +6,7 @@ use crate::cli::helpers::with_progress;
 use crate::default_options::DefaultOptions;
 
 pub fn command() -> Command {
-    Command::new("format")
-        .about("Reorder .sec entries to match schema key ordering")
+    Command::new("format").about("Reorder .sec entries to match schema key ordering")
 }
 
 pub async fn match_args(
@@ -58,17 +57,16 @@ pub async fn match_args(
         let new_content = dotenv::lines_to_string(&formatted);
 
         if old_content == new_content {
-            println!(
-                "{} {} is already in schema order",
-                "✓".green(),
-                sec_file
-            );
+            println!("{} {} is already in schema order", "✓".green(), sec_file);
             return Ok(());
         }
 
         // Write back. Any non-None engine must re-encrypt so previously @encrypt'd values
         // do not get written back as plaintext (especially when @encrypt lives in the schema).
-        if matches!(default_options.encryption_engine, dotsec::EncryptionEngine::None) {
+        if matches!(
+            default_options.encryption_engine,
+            dotsec::EncryptionEngine::None
+        ) {
             dotsec::write_sec_file(sec_file, &new_content)?;
         } else {
             let new_lines = dotenv::parse_dotenv(&new_content)?;
