@@ -312,10 +312,12 @@ fn load_v4_config(config_path: &str) -> Result<DotsecV4Config, Box<dyn std::erro
         abs_str
     );
 
+    // Pin tsx to a known-good major to avoid pulling a "latest" that could be
+    // compromised or accidentally break us. v4 is the current stable major.
     let strategies: Vec<(&str, Vec<String>)> = match ext {
         "ts" | "mts" | "cts" | "tsx" => vec![(
             "npx",
-            vec!["tsx@latest".into(), "-e".into(), eval_script.clone()],
+            vec!["tsx@4".into(), "-e".into(), eval_script.clone()],
         )],
         "js" | "mjs" | "cjs" => vec![("node", vec!["-e".into(), eval_script.clone()])],
         _ => {
