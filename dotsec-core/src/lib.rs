@@ -12,22 +12,85 @@ pub fn load_file(file: &str) -> Result<String, std::io::Error> {
 }
 
 /// Write content to a .sec or schema file with restricted permissions (0600 on Unix).
+///
+/// Writes via a sibling temp file + atomic rename so a malicious symlink at `path`
+/// cannot be used to overwrite the symlink's target. Refuses outright if `path` is
+/// already a symlink (preserves user intent — we won't silently replace one).
 pub fn write_sec_file(path: &str, content: &str) -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new()
-            .write(true).create(true).truncate(true)
-            .mode(0o600)
-            .open(path)?
-            .write_all(content.as_bytes())?;
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+
+    let path = Path::new(path);
+
+    // Refuse to write through a symlink. The rename below replaces the symlink itself
+    // (not its target) so this check isn't strictly required for safety, but it
+    // prevents silently breaking any legitimate symlink the user may have placed.
+    if let Ok(meta) = std::fs::symlink_metadata(path) {
+        if meta.file_type().is_symlink() {
+            return Err(format!(
+                "refusing to write through symlink: {}",
+                path.display()
+            )
+            .into());
+        }
     }
-    #[cfg(not(unix))]
-    {
-        std::fs::write(path, content)?;
+
+    let dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let name = path
+        .file_name()
+        .ok_or("invalid output path: missing file name")?;
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = dir.join(format!(
+        ".{}.tmp.{}.{}",
+        name.to_string_lossy(),
+        std::process::id(),
+        nanos,
+    ));
+
+    // Drop guard: if we error out before the successful rename, remove the temp file
+    // so a crashed write doesn't leak partial plaintext or stale temp files.
+    struct TempCleanup(Option<PathBuf>);
+    impl Drop for TempCleanup {
+        fn drop(&mut self) {
+            if let Some(p) = self.0.take() {
+                let _ = std::fs::remove_file(&p);
+            }
+        }
     }
+    let mut cleanup = TempCleanup(Some(tmp.clone()));
+
+    let mut file = open_temp_write(&tmp)?;
+    file.write_all(content.as_bytes())?;
+    file.sync_all()?;
+    drop(file);
+
+    std::fs::rename(&tmp, path)?;
+    cleanup.0 = None; // success — keep the renamed file
     Ok(())
+}
+
+#[cfg(unix)]
+fn open_temp_write(tmp: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(tmp)
+}
+
+#[cfg(not(unix))]
+fn open_temp_write(tmp: &std::path::Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(tmp)
 }
 
 // --- Header ---
@@ -1296,4 +1359,79 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // --- write_sec_file safety ---
+
+    #[test]
+    #[cfg(unix)]
+    fn write_sec_file_refuses_to_follow_symlink_to_existing_file() {
+        // Layout: .sec.key is a symlink to ~/.ssh/id_rsa (mocked here as `target`).
+        // write_sec_file(".sec.key", "new content") must NOT overwrite target.
+        let dir = std::env::temp_dir().join("dotsec-test-symlink-refuse");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("target");
+        let link = dir.join("link.sec");
+        std::fs::write(&target, "do-not-touch").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let result = write_sec_file(link.to_str().unwrap(), "new content");
+        assert!(result.is_err(), "writing through symlink must error");
+        assert!(
+            result.unwrap_err().to_string().contains("symlink"),
+            "error should mention symlink"
+        );
+
+        let target_after = std::fs::read_to_string(&target).unwrap();
+        assert_eq!(target_after, "do-not-touch", "symlink target was clobbered");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_sec_file_creates_new_file_atomically() {
+        let dir = std::env::temp_dir().join("dotsec-test-write-create");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fresh.sec");
+
+        write_sec_file(path.to_str().unwrap(), "hello").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
+
+        // No stray temp files left behind in the directory.
+        let strays: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let n = e.file_name();
+                let n = n.to_string_lossy();
+                n.starts_with(".fresh.sec.tmp.")
+            })
+            .collect();
+        assert!(strays.is_empty(), "leftover temp files: {:?}", strays);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_sec_file_overwrites_existing_regular_file() {
+        let dir = std::env::temp_dir().join("dotsec-test-write-overwrite");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("existing.sec");
+        std::fs::write(&path, "old").unwrap();
+
+        write_sec_file(path.to_str().unwrap(), "new").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+
+        // Confirm we replaced the file (not the symlink-target attack — the original
+        // wasn't a symlink, so direct overwrite is the correct behavior).
+        let meta = std::fs::symlink_metadata(&path).unwrap();
+        assert!(meta.file_type().is_file());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }
