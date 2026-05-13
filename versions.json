@@ -1,8 +1,14 @@
 {
-  "stable": [],
+  "stable": [
+    {
+      "version": "v5.0.1",
+      "path": "/v5.0.1/"
+    }
+  ],
   "beta": {
     "label": "beta (5.0.1)",
     "path": "/beta/"
   },
-  "prs": []
+  "prs": [],
+  "latest": "/v5.0.1/"
 }
