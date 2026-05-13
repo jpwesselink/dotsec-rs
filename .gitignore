@@ -8,6 +8,7 @@ node_modules/
 .env.*
 .sec
 .sec.*
+*.key
 
 # IDE
 .vscode/
