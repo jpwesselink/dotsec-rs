@@ -8,6 +8,10 @@
     {
       "label": "#14 release-plz-2026-05-13T08-47-55Z",
       "path": "/pr-14/"
+    },
+    {
+      "label": "#15 fix/security-review-findings",
+      "path": "/pr-15/"
     }
   ]
 }
