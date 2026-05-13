@@ -1,5 +1,5 @@
-use std::io::{Read, Write};
 use age::secrecy::ExposeSecret;
+use std::io::{Read, Write};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::CryptoError;
@@ -8,7 +8,10 @@ use crate::CryptoError;
 pub fn generate_keypair() -> (String, String) {
     let identity = age::x25519::Identity::generate();
     let recipient = identity.to_public();
-    (identity.to_string().expose_secret().to_string(), recipient.to_string())
+    (
+        identity.to_string().expose_secret().to_string(),
+        recipient.to_string(),
+    )
 }
 
 /// Wrap (encrypt) a DEK using an age recipient string.
@@ -17,10 +20,9 @@ pub fn wrap_dek(dek: &[u8], recipient_str: &str) -> Result<Vec<u8>, CryptoError>
         .parse()
         .map_err(|e: &str| CryptoError::AesError(format!("invalid age recipient: {}", e)))?;
 
-    let encryptor = age::Encryptor::with_recipients(
-        std::iter::once(&recipient as &dyn age::Recipient)
-    )
-        .map_err(|e| CryptoError::AesError(format!("age encryptor error: {}", e)))?;
+    let encryptor =
+        age::Encryptor::with_recipients(std::iter::once(&recipient as &dyn age::Recipient))
+            .map_err(|e| CryptoError::AesError(format!("age encryptor error: {}", e)))?;
 
     let mut encrypted = vec![];
     let mut writer = encryptor
@@ -108,7 +110,10 @@ pub fn discover_key_file(sec_file: &str) -> Option<String> {
 }
 
 /// Load the private key from DOTSEC_PRIVATE_KEY env var or <sec_file>.key file.
-pub fn load_private_key(sec_file: &str, key_file_override: Option<&str>) -> Result<Zeroizing<String>, CryptoError> {
+pub fn load_private_key(
+    sec_file: &str,
+    key_file_override: Option<&str>,
+) -> Result<Zeroizing<String>, CryptoError> {
     // 1. Check env var
     if let Ok(key) = std::env::var("DOTSEC_PRIVATE_KEY") {
         return Ok(Zeroizing::new(key));
@@ -120,18 +125,22 @@ pub fn load_private_key(sec_file: &str, key_file_override: Option<&str>) -> Resu
         None => format!("{}.key", sec_file),
     };
 
-    let content = std::fs::read_to_string(&key_path)
-        .map_err(|_| CryptoError::AesError(format!(
+    let content = std::fs::read_to_string(&key_path).map_err(|_| {
+        CryptoError::AesError(format!(
             "private key not found — set DOTSEC_PRIVATE_KEY or create {}",
             key_path
-        )))?;
+        ))
+    })?;
 
-    let key = content.lines()
+    let key = content
+        .lines()
         .find(|l| l.starts_with("AGE-SECRET-KEY-"))
-        .ok_or_else(|| CryptoError::AesError(format!(
-            "{} does not contain a valid age identity (expected AGE-SECRET-KEY-...)",
-            key_path
-        )))?
+        .ok_or_else(|| {
+            CryptoError::AesError(format!(
+                "{} does not contain a valid age identity (expected AGE-SECRET-KEY-...)",
+                key_path
+            ))
+        })?
         .trim()
         .to_string();
 
@@ -205,7 +214,11 @@ mod tests {
         let result = load_private_key("/nonexistent/.sec", None);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("DOTSEC_PRIVATE_KEY"), "error should mention env var: {}", err);
+        assert!(
+            err.contains("DOTSEC_PRIVATE_KEY"),
+            "error should mention env var: {}",
+            err
+        );
     }
 
     #[test]
@@ -217,8 +230,11 @@ mod tests {
         let result = unwrap_dek(&oversized, &identity);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("max allowed") || err.contains("1024"),
-            "expected size-limit error, got: {}", err);
+        assert!(
+            err.contains("max allowed") || err.contains("1024"),
+            "expected size-limit error, got: {}",
+            err
+        );
     }
 
     #[test]
@@ -231,7 +247,10 @@ mod tests {
         let result = unwrap_dek(&wrapped, &identity);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("invalid length"),
-            "expected length-mismatch error, got: {}", err);
+        assert!(
+            err.contains("invalid length"),
+            "expected length-mismatch error, got: {}",
+            err
+        );
     }
 }

@@ -15,10 +15,7 @@ pub fn command() -> Command {
              dotsec run -- cargo run\n\n\
              The -- separates dotsec options from your command.",
         )
-        .arg(
-            arg!(--"env-file" <FILE> "Use a plain .env file instead of .sec")
-                .required(false),
-        )
+        .arg(arg!(--"env-file" <FILE> "Use a plain .env file instead of .sec").required(false))
         .arg(arg!(<cmd> ... "Command to run").trailing_var_arg(true))
 }
 
@@ -46,7 +43,11 @@ pub async fn match_args(
         } else {
             let encryption_engine = &default_options.encryption_engine;
             debug!("Decrypting {} for run", default_options.sec_file);
-            with_progress("Decrypting...", dotsec::decrypt_sec_to_lines(default_options.sec_file, encryption_engine)).await?
+            with_progress(
+                "Decrypting...",
+                dotsec::decrypt_sec_to_lines(default_options.sec_file, encryption_engine),
+            )
+            .await?
         };
 
         let env_vars = dotsec::resolve_env_vars(&lines);

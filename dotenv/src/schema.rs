@@ -8,7 +8,10 @@ use std::path::Path;
 /// 3. `dotsec.schema` in same directory as the .sec file
 ///
 /// Returns `Err` if an explicit path was given but does not exist.
-pub fn discover_schema(sec_file_path: &str, explicit: Option<&str>) -> Result<Option<String>, String> {
+pub fn discover_schema(
+    sec_file_path: &str,
+    explicit: Option<&str>,
+) -> Result<Option<String>, String> {
     // 1. Explicit path — error if it doesn't exist
     if let Some(path) = explicit {
         if Path::new(path).exists() {
@@ -22,7 +25,10 @@ pub fn discover_schema(sec_file_path: &str, explicit: Option<&str>) -> Result<Op
         if Path::new(&path).exists() {
             return Ok(Some(path));
         }
-        return Err(format!("DOTSEC_SCHEMA is set to \"{}\" but file does not exist", path));
+        return Err(format!(
+            "DOTSEC_SCHEMA is set to \"{}\" but file does not exist",
+            path
+        ));
     }
 
     // 3. dotsec.schema in same directory as .sec file

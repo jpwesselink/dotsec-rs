@@ -17,10 +17,11 @@ pub async fn match_args(
     if matches.subcommand_matches("validate").is_some() {
         let sec_file = default_options.sec_file;
         debug!("Decrypting {} for validation", sec_file);
-        let lines = with_progress("Decrypting...", dotsec::decrypt_sec_to_lines(
-            sec_file,
-            &default_options.encryption_engine,
-        )).await?;
+        let lines = with_progress(
+            "Decrypting...",
+            dotsec::decrypt_sec_to_lines(sec_file, &default_options.encryption_engine),
+        )
+        .await?;
 
         let entries = dotenv::lines_to_entries(&lines);
         let mut errors = dotenv::validate_entries_with_env(&entries);
@@ -34,8 +35,14 @@ pub async fn match_args(
             errors.extend(schema_errors);
         }
 
-        let error_count = errors.iter().filter(|e| e.severity == dotenv::Severity::Error).count();
-        let warning_count = errors.iter().filter(|e| e.severity == dotenv::Severity::Warning).count();
+        let error_count = errors
+            .iter()
+            .filter(|e| e.severity == dotenv::Severity::Error)
+            .count();
+        let warning_count = errors
+            .iter()
+            .filter(|e| e.severity == dotenv::Severity::Warning)
+            .count();
 
         if errors.is_empty() {
             println!(
@@ -45,33 +52,28 @@ pub async fn match_args(
                 format!("{} entries", entries.len()).dimmed()
             );
             if let Some(ref schema_path) = default_options.schema_path {
-                println!(
-                    "  {} validated against {}",
-                    "✓".green(),
-                    schema_path,
-                );
+                println!("  {} validated against {}", "✓".green(), schema_path,);
             }
         } else {
             // Print errors first, then warnings
             if error_count > 0 {
-                eprintln!(
-                    "{} {} — {} error(s):\n",
-                    "✗".red(),
-                    sec_file,
-                    error_count
-                );
-                for error in errors.iter().filter(|e| e.severity == dotenv::Severity::Error) {
+                eprintln!("{} {} — {} error(s):\n", "✗".red(), sec_file, error_count);
+                for error in errors
+                    .iter()
+                    .filter(|e| e.severity == dotenv::Severity::Error)
+                {
                     eprintln!("  {} {}", "•".red(), error);
                 }
             }
             if warning_count > 0 {
-                if error_count > 0 { eprintln!(); }
-                eprintln!(
-                    "{} {} warning(s):\n",
-                    "⚠".yellow(),
-                    warning_count
-                );
-                for warning in errors.iter().filter(|e| e.severity == dotenv::Severity::Warning) {
+                if error_count > 0 {
+                    eprintln!();
+                }
+                eprintln!("{} {} warning(s):\n", "⚠".yellow(), warning_count);
+                for warning in errors
+                    .iter()
+                    .filter(|e| e.severity == dotenv::Severity::Warning)
+                {
                     eprintln!("  {} {}", "•".yellow(), warning);
                 }
             }

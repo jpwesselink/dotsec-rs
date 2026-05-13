@@ -5,8 +5,7 @@ use crate::cli::helpers;
 use crate::default_options::DefaultOptions;
 
 pub fn command() -> Command {
-    Command::new("init")
-        .about("Initialize a .sec file with encryption config")
+    Command::new("init").about("Initialize a .sec file with encryption config")
 }
 
 pub async fn match_args(
@@ -76,7 +75,11 @@ pub async fn match_args(
     if config.provider.as_deref() == Some("local") {
         let key_file = format!("{}.key", sec_file);
         if std::path::Path::new(&key_file).exists() {
-            println!("{} {} already exists, reusing existing keypair", "✓".green(), key_file);
+            println!(
+                "{} {} already exists, reusing existing keypair",
+                "✓".green(),
+                key_file
+            );
         } else {
             let (identity, _) = crypto::local::generate_keypair();
             dotsec::write_sec_file(&key_file, &format!("{}\n", identity))?;
@@ -90,7 +93,10 @@ pub async fn match_args(
                 .map(|c| c.lines().any(|l| l.trim() == "*.key" || l.contains(".key")))
                 .unwrap_or(false);
             if !has_key_pattern {
-                eprintln!("{} Add *.key to .gitignore to avoid committing private keys", "⚠".yellow().bold());
+                eprintln!(
+                    "{} Add *.key to .gitignore to avoid committing private keys",
+                    "⚠".yellow().bold()
+                );
             }
         }
     }

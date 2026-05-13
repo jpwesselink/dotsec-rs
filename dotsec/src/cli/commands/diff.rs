@@ -57,7 +57,9 @@ pub async fn match_args(
         }
 
         if files.len() < 2 {
-            return Err("Need at least 2 files to compare. Pass additional .sec files as arguments.".into());
+            return Err(
+                "Need at least 2 files to compare. Pass additional .sec files as arguments.".into(),
+            );
         }
 
         // Find the most recently modified file to use as reference

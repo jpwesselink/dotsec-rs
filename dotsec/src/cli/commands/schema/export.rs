@@ -12,10 +12,7 @@ pub fn command() -> Command {
                 .default_value("json-schema")
                 .value_parser(["json-schema", "typescript", "ts"]),
         )
-        .arg(
-            arg!(-o --output <FILE> "Write to file instead of stdout")
-                .required(false),
-        )
+        .arg(arg!(-o --output <FILE> "Write to file instead of stdout").required(false))
 }
 
 pub async fn match_args(

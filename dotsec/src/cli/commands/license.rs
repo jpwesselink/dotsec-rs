@@ -27,8 +27,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.";
 
 pub fn command() -> Command {
-    Command::new("license")
-        .about("Show the dotsec license")
+    Command::new("license").about("Show the dotsec license")
 }
 
 // TODO: replace with chromakopia native plasma once pr-7 ships, e.g.:
@@ -76,12 +75,12 @@ fn hsv_to_rgb(h: f64, s: f64, v: f64) -> (u8, u8, u8) {
     let m = v - c;
 
     let (r1, g1, b1) = match h as u32 {
-        0..=59   => (c, x, 0.0),
+        0..=59 => (c, x, 0.0),
         60..=119 => (x, c, 0.0),
         120..=179 => (0.0, c, x),
         180..=239 => (0.0, x, c),
         240..=299 => (x, 0.0, c),
-        _         => (c, 0.0, x),
+        _ => (c, 0.0, x),
     };
 
     (

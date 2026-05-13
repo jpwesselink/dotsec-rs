@@ -35,7 +35,16 @@ pub async fn match_args(
         let sec_file = default_options.sec_file;
         debug!("Showing decrypted {}", sec_file);
 
-        let output = with_progress("Decrypting...", dotsec::show(sec_file, &default_options.encryption_engine, output_format, reveal)).await?;
+        let output = with_progress(
+            "Decrypting...",
+            dotsec::show(
+                sec_file,
+                &default_options.encryption_engine,
+                output_format,
+                reveal,
+            ),
+        )
+        .await?;
         println!("{}", output);
     }
     Ok(())

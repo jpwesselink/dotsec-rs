@@ -28,7 +28,8 @@ pub async fn match_args(
             return Err(format!(
                 "{} already exists. Delete it first or use --output to specify a different path.",
                 output
-            ).into());
+            )
+            .into());
         }
 
         // Parse the .sec file (decrypt if needed)
@@ -88,7 +89,10 @@ pub async fn match_args(
         // to encrypt_lines_to_sec so values whose @encrypt directive just moved into the schema
         // are still re-encrypted (otherwise they would be silently written as plaintext).
         let new_content = dotenv::lines_to_string(&stripped_lines);
-        if matches!(default_options.encryption_engine, dotsec::EncryptionEngine::None) {
+        if matches!(
+            default_options.encryption_engine,
+            dotsec::EncryptionEngine::None
+        ) {
             dotsec::write_sec_file(sec_file, &new_content)?;
         } else {
             let new_lines = dotenv::parse_dotenv(&new_content)?;
@@ -101,7 +105,10 @@ pub async fn match_args(
             .await?;
         }
 
-        let entry_count = schema.iter().filter(|(_, e)| !e.directives.is_empty()).count();
+        let entry_count = schema
+            .iter()
+            .filter(|(_, e)| !e.directives.is_empty())
+            .count();
         println!(
             "{} Extracted {} entries into {}",
             "✓".green(),
