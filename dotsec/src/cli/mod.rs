@@ -1,4 +1,4 @@
-use self::commands::{create_command, diff, eject, export, format, header, import, init, migrate, push, remove_directives, rotate_key, run, schema, set, show, validate};
+use self::commands::{create_command, diff, eject, export, format, header, import, init, license, migrate, push, remove_directives, rotate_key, run, schema, set, show, validate};
 use crate::default_options::DefaultOptions;
 use dotsec::EncryptionEngine;
 use log::debug;
@@ -43,16 +43,17 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
+    let is_license = matches.subcommand_matches("license").is_some();
     let is_init = matches.subcommand_matches("init").is_some();
     let is_import = matches.subcommand_matches("import").is_some();
     let is_migrate = matches.subcommand_matches("migrate").is_some();
     let is_diff = matches.subcommand_matches("diff").is_some();
-    let is_eject = matches.subcommand_matches("extract-schema").is_some() || matches.subcommand_matches("eject").is_some();
+    let is_eject = matches.subcommand_matches("extract-schema").is_some();
     let is_schema = matches.subcommand_matches("schema").is_some();
+    let is_set = matches.subcommand_matches("set").is_some();
     let is_run_env = matches
         .subcommand_matches("run")
-        .and_then(|m| m.get_one::<String>("using"))
-        .is_some_and(|v| v == "env");
+        .is_some_and(|m| m.contains_id("env-file") && m.get_one::<String>("env-file").is_some());
 
     // Resolve sec file from CLI arg or default
     let default_sec = ".sec".to_string();
@@ -72,11 +73,11 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
         let file_config = dotenv::extract_file_config(&lines);
         debug!("file_config from {}: {:?}", sec_file, file_config);
         EncryptionEngine::try_from(file_config)?
-    } else if is_init || is_import || is_migrate || is_diff || is_eject || is_schema || is_run_env {
+    } else if is_init || is_import || is_migrate || is_diff || is_eject || is_schema || is_run_env || is_set || is_license {
         debug!("{} does not exist yet or not needed, using defaults", sec_file);
         EncryptionEngine::None
     } else {
-        return Err(format!("{} not found. Run `dotsec init` or `dotsec import` first.", sec_file).into());
+        return Err(format!("{} not found. Run `dotsec set KEY value` to create one, or `dotsec import` to migrate from .env.", sec_file).into());
     };
 
     debug!("sec_file: {}, engine: {:?}", sec_file, encryption_engine);
@@ -103,6 +104,7 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
     header::match_args(&matches, &default_options).await?;
     remove_directives::match_args(&matches, &default_options).await?;
     schema::match_args(&matches, &default_options).await?;
+    license::match_args(&matches, &default_options).await?;
 
     Ok(())
 }
