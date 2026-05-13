@@ -1,6 +1,6 @@
 use std::io::{Read, Write};
 use age::secrecy::ExposeSecret;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::CryptoError;
 
@@ -36,8 +36,24 @@ pub fn wrap_dek(dek: &[u8], recipient_str: &str) -> Result<Vec<u8>, CryptoError>
     Ok(encrypted)
 }
 
+/// Maximum size of the age-wrapped DEK blob accepted by `unwrap_dek`. The real envelope is
+/// well under 256 bytes; cap at 1 KiB so a crafted oversized blob can't force large
+/// allocations inside the age decryptor before we ever look at the payload.
+const MAX_WRAPPED_DEK_BYTES: usize = 1024;
+
+/// Size of the unwrapped DEK in bytes (AES-256).
+const DEK_LEN: usize = 32;
+
 /// Unwrap (decrypt) a DEK using an age identity string.
 pub fn unwrap_dek(wrapped: &[u8], identity_str: &str) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+    if wrapped.len() > MAX_WRAPPED_DEK_BYTES {
+        return Err(CryptoError::AesError(format!(
+            "wrapped DEK is {} bytes; max allowed is {}",
+            wrapped.len(),
+            MAX_WRAPPED_DEK_BYTES
+        )));
+    }
+
     let identity: age::x25519::Identity = identity_str
         .parse()
         .map_err(|e: &str| CryptoError::AesError(format!("invalid age identity: {}", e)))?;
@@ -49,10 +65,26 @@ pub fn unwrap_dek(wrapped: &[u8], identity_str: &str) -> Result<Zeroizing<Vec<u8
         .decrypt(std::iter::once(&identity as &dyn age::Identity))
         .map_err(|e| CryptoError::AesError(format!("age decrypt error: {}", e)))?;
 
-    let mut dek = vec![];
-    reader
-        .read_to_end(&mut dek)
+    // Cap the unwrapped read at DEK_LEN+1 so a crafted age payload that decompresses to
+    // arbitrary size can't blow up memory before we discover the length is wrong.
+    let mut dek = Vec::with_capacity(DEK_LEN);
+    let mut buf = [0u8; DEK_LEN + 1];
+    let n = reader
+        .read(&mut buf)
         .map_err(|e| CryptoError::AesError(format!("age read error: {}", e)))?;
+    dek.extend_from_slice(&buf[..n]);
+
+    // Verify EOF and exact length.
+    let extra = reader
+        .read(&mut [0u8; 1])
+        .map_err(|e| CryptoError::AesError(format!("age read error: {}", e)))?;
+    if extra != 0 || dek.len() != DEK_LEN {
+        dek.zeroize();
+        return Err(CryptoError::AesError(format!(
+            "unwrapped DEK has invalid length (expected {})",
+            DEK_LEN
+        )));
+    }
 
     Ok(Zeroizing::new(dek))
 }
@@ -174,5 +206,32 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("DOTSEC_PRIVATE_KEY"), "error should mention env var: {}", err);
+    }
+
+    #[test]
+    fn unwrap_dek_rejects_oversized_blob() {
+        // A 2 KiB blob exceeds MAX_WRAPPED_DEK_BYTES (1 KiB) and must be rejected before
+        // any age parsing happens.
+        let (identity, _) = generate_keypair();
+        let oversized = vec![0u8; 2048];
+        let result = unwrap_dek(&oversized, &identity);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("max allowed") || err.contains("1024"),
+            "expected size-limit error, got: {}", err);
+    }
+
+    #[test]
+    fn unwrap_dek_rejects_wrong_length_payload() {
+        // A valid age payload that decrypts to something other than exactly 32 bytes
+        // must be rejected. Build one by wrapping a 16-byte buffer.
+        let (identity, recipient) = generate_keypair();
+        let short_dek = vec![0u8; 16];
+        let wrapped = wrap_dek(&short_dek, &recipient).unwrap();
+        let result = unwrap_dek(&wrapped, &identity);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("invalid length"),
+            "expected length-mismatch error, got: {}", err);
     }
 }
