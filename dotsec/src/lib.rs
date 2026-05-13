@@ -256,6 +256,9 @@ pub async fn run_command(
         let (stop, _handle) = _sigwinch_guard;
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
         // Send ourselves SIGWINCH to unblock the signal iterator
+        // SAFETY: libc::raise is async-signal-safe and only delivers SIGWINCH to the
+        // current process. We previously installed the SIGWINCH handler ourselves
+        // (via signal-hook), so the signal cannot have an unintended effect.
         unsafe {
             libc::raise(libc::SIGWINCH);
         }
@@ -272,7 +275,13 @@ fn terminal_size() -> Option<(u16, u16)> {
     }
     #[cfg(unix)]
     {
+        // SAFETY: libc::winsize is a POD struct of integers; an all-zero bit pattern
+        // is a valid value. The ioctl below populates the struct on success.
         let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+        // SAFETY: STDOUT_FILENO is always a valid file descriptor for the running
+        // process. TIOCGWINSZ writes a winsize through the pointer we provide; we
+        // pass a valid &mut to a stack-allocated winsize. Failure (non-tty stdout,
+        // EINVAL, etc.) returns non-zero and we discard the struct below.
         let ret = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut ws) };
         if ret == 0 && ws.ws_col > 0 && ws.ws_row > 0 {
             return Some((ws.ws_col, ws.ws_row));
