@@ -1,10 +1,16 @@
 [workspace]
 semver_check = false
 
+# Crate names on crates.io are owned by unrelated parties (RustCrypto for `crypto`,
+# junhsonjb for `dotsec`, etc.), so we never publish to crates.io. Users get dotsec
+# via npm (`npm i -g dotsec`) and @dotsec/core. release-plz still manages versions
+# and changelogs for internal consistency.
+
 # All crates share the same version.
 [[package]]
 name = "dotsec"
 version_group = "dotsec"
+publish = false
 
 [[package]]
 name = "dotenv"
@@ -23,5 +29,10 @@ publish = false
 
 [[package]]
 name = "dotsec-napi"
+version_group = "dotsec"
+publish = false
+
+[[package]]
+name = "crypto"
 version_group = "dotsec"
 publish = false
