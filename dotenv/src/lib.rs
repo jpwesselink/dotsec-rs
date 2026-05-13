@@ -785,7 +785,7 @@ pub fn schema_to_typescript(schema: &Schema) -> String {
             Some(VarType::Boolean) => "boolean".to_string(),
             Some(VarType::Enum(variants)) => variants
                 .iter()
-                .map(|v| format!("\"{}\"", v))
+                .map(|v| format!("\"{}\"", js_string_escape(v)))
                 .collect::<Vec<_>>()
                 .join(" | "),
         };
@@ -796,17 +796,35 @@ pub fn schema_to_typescript(schema: &Schema) -> String {
         if has_desc || has_deprecated {
             out.push_str("  /**\n");
             if let Some(desc) = entry.description() {
-                out.push_str(&format!("   * {}\n", desc));
+                for line in jsdoc_escape(desc).lines() {
+                    out.push_str(&format!("   * {}\n", line));
+                }
             }
             if let Some(msg) = entry.deprecated_message() {
                 match msg {
-                    Some(text) => out.push_str(&format!("   * @deprecated {}\n", text)),
+                    Some(text) => {
+                        let escaped = jsdoc_escape(text);
+                        let mut iter = escaped.lines();
+                        if let Some(first) = iter.next() {
+                            out.push_str(&format!("   * @deprecated {}\n", first));
+                            for line in iter {
+                                out.push_str(&format!("   * {}\n", line));
+                            }
+                        } else {
+                            out.push_str("   * @deprecated\n");
+                        }
+                    }
                     None => out.push_str("   * @deprecated\n"),
                 }
             }
             out.push_str("   */\n");
         }
-        out.push_str(&format!("  {}{}: {}\n", entry.key, optional, ts_type));
+        out.push_str(&format!(
+            "  {}{}: {}\n",
+            interface_key(&entry.key),
+            optional,
+            ts_type
+        ));
     }
     out.push_str("}\n\n");
 
@@ -825,8 +843,9 @@ pub fn schema_to_typescript(schema: &Schema) -> String {
     if !required_entries.is_empty() {
         for entry in &required_entries {
             out.push_str(&format!(
-                "  if (source.{} === undefined) errors.push(\"{} is required\")\n",
-                entry.key, entry.key
+                "  if ({access} === undefined) errors.push(\"{key} is required\")\n",
+                access = prop_access("source", &entry.key),
+                key = js_string_escape(&entry.key)
             ));
         }
         out.push('\n');
@@ -834,35 +853,43 @@ pub fn schema_to_typescript(schema: &Schema) -> String {
 
     // Validation checks
     for (_key, entry) in schema.iter() {
-        let key = &entry.key;
+        let raw_key = &entry.key;
+        let k = prop_access("source", raw_key); // expression: source.FOO or source["foo.bar"]
+        let key_lit = js_string_escape(raw_key); // for string-literal interpolation
         let mut checks = Vec::new();
 
         // not-empty
         if entry.has_directive("not-empty") {
             checks.push(format!(
-                "  if (source.{k} !== undefined && source.{k}.length === 0)\n    errors.push(\"{k} must not be empty\")",
-                k = key
+                "  if ({k} !== undefined && {k}.length === 0)\n    errors.push(\"{key} must not be empty\")",
+                k = k,
+                key = key_lit
             ));
         }
 
         // type=number validation
         if entry.var_type() == Some(VarType::Number) {
             checks.push(format!(
-                "  if (source.{k} !== undefined && isNaN(Number(source.{k})))\n    errors.push(\"{k} must be a number\")",
-                k = key
+                "  if ({k} !== undefined && isNaN(Number({k})))\n    errors.push(\"{key} must be a number\")",
+                k = k,
+                key = key_lit
             ));
             if let Some(min) = entry.min() {
                 let min_s = format_f64(min);
                 checks.push(format!(
-                    "  if (source.{k} !== undefined && Number(source.{k}) < {min})\n    errors.push(\"{k} must be >= {min}\")",
-                    k = key, min = min_s
+                    "  if ({k} !== undefined && Number({k}) < {min})\n    errors.push(\"{key} must be >= {min}\")",
+                    k = k,
+                    key = key_lit,
+                    min = min_s
                 ));
             }
             if let Some(max) = entry.max() {
                 let max_s = format_f64(max);
                 checks.push(format!(
-                    "  if (source.{k} !== undefined && Number(source.{k}) > {max})\n    errors.push(\"{k} must be <= {max}\")",
-                    k = key, max = max_s
+                    "  if ({k} !== undefined && Number({k}) > {max})\n    errors.push(\"{key} must be <= {max}\")",
+                    k = k,
+                    key = key_lit,
+                    max = max_s
                 ));
             }
         }
@@ -870,8 +897,9 @@ pub fn schema_to_typescript(schema: &Schema) -> String {
         // type=boolean validation
         if entry.var_type() == Some(VarType::Boolean) {
             checks.push(format!(
-                "  if (source.{k} !== undefined && ![\"true\", \"false\", \"1\", \"0\"].includes(source.{k}))\n    errors.push(\"{k} must be a boolean (true/false/1/0)\")",
-                k = key
+                "  if ({k} !== undefined && ![\"true\", \"false\", \"1\", \"0\"].includes({k}))\n    errors.push(\"{key} must be a boolean (true/false/1/0)\")",
+                k = k,
+                key = key_lit
             ));
         }
 
@@ -879,14 +907,22 @@ pub fn schema_to_typescript(schema: &Schema) -> String {
         if let Some(VarType::Enum(ref variants)) = entry.var_type() {
             let items = variants
                 .iter()
-                .map(|v| format!("\"{}\"", v))
+                .map(|v| format!("\"{}\"", js_string_escape(v)))
                 .collect::<Vec<_>>()
                 .join(", ");
+            let display = variants
+                .iter()
+                .map(|v| js_string_escape(v))
+                .collect::<Vec<_>>()
+                .join(", ");
+            // Use double-quoted string (not template literal) so backticks in variants
+            // can't break the literal.
             checks.push(format!(
-                "  if (source.{k} !== undefined && ![{items}].includes(source.{k}))\n    errors.push(`{k} must be one of: {display}`)",
-                k = key,
+                "  if ({k} !== undefined && ![{items}].includes({k}))\n    errors.push(\"{key} must be one of: {display}\")",
+                k = k,
                 items = items,
-                display = variants.join(", ")
+                key = key_lit,
+                display = display
             ));
         }
 
@@ -894,32 +930,32 @@ pub fn schema_to_typescript(schema: &Schema) -> String {
         if let Some(fmt) = entry.format_type() {
             let check = match fmt {
                 FormatType::Email => Some(format!(
-                    "  if (source.{k} !== undefined && source.{k}.length > 0 && !source.{k}.includes(\"@\"))\n    errors.push(\"{k} must be an email\")",
-                    k = key
+                    "  if ({k} !== undefined && {k}.length > 0 && !{k}.includes(\"@\"))\n    errors.push(\"{key} must be an email\")",
+                    k = k, key = key_lit
                 )),
                 FormatType::Url => Some(format!(
-                    "  if (source.{k} !== undefined && source.{k}.length > 0 && !source.{k}.startsWith(\"http://\") && !source.{k}.startsWith(\"https://\"))\n    errors.push(\"{k} must be a url\")",
-                    k = key
+                    "  if ({k} !== undefined && {k}.length > 0 && !{k}.startsWith(\"http://\") && !{k}.startsWith(\"https://\"))\n    errors.push(\"{key} must be a url\")",
+                    k = k, key = key_lit
                 )),
                 FormatType::Uuid => Some(format!(
-                    "  if (source.{k} !== undefined && source.{k}.length > 0 && !/^[0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}}$/i.test(source.{k}))\n    errors.push(\"{k} must be a uuid\")",
-                    k = key
+                    "  if ({k} !== undefined && {k}.length > 0 && !/^[0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}}$/i.test({k}))\n    errors.push(\"{key} must be a uuid\")",
+                    k = k, key = key_lit
                 )),
                 FormatType::Ipv4 => Some(format!(
-                    "  if (source.{k} !== undefined && source.{k}.length > 0 && !/^((25[0-5]|2[0-4]\\d|[01]?\\d\\d?)\\.?){{4}}$/.test(source.{k}))\n    errors.push(\"{k} must be an ipv4 address\")",
-                    k = key
+                    "  if ({k} !== undefined && {k}.length > 0 && !/^((25[0-5]|2[0-4]\\d|[01]?\\d\\d?)\\.?){{4}}$/.test({k}))\n    errors.push(\"{key} must be an ipv4 address\")",
+                    k = k, key = key_lit
                 )),
                 FormatType::Ipv6 => Some(format!(
-                    "  if (source.{k} !== undefined && source.{k}.length > 0 && !source.{k}.includes(\":\"))\n    errors.push(\"{k} must be an ipv6 address\")",
-                    k = key
+                    "  if ({k} !== undefined && {k}.length > 0 && !{k}.includes(\":\"))\n    errors.push(\"{key} must be an ipv6 address\")",
+                    k = k, key = key_lit
                 )),
                 FormatType::Date => Some(format!(
-                    "  if (source.{k} !== undefined && source.{k}.length > 0 && !/^\\d{{4}}-\\d{{2}}-\\d{{2}}$/.test(source.{k}))\n    errors.push(\"{k} must be a date (YYYY-MM-DD)\")",
-                    k = key
+                    "  if ({k} !== undefined && {k}.length > 0 && !/^\\d{{4}}-\\d{{2}}-\\d{{2}}$/.test({k}))\n    errors.push(\"{key} must be a date (YYYY-MM-DD)\")",
+                    k = k, key = key_lit
                 )),
                 FormatType::Semver => Some(format!(
-                    "  if (source.{k} !== undefined && source.{k}.length > 0 && !/^\\d+\\.\\d+\\.\\d+/.test(source.{k}))\n    errors.push(\"{k} must be a semver (MAJOR.MINOR.PATCH)\")",
-                    k = key
+                    "  if ({k} !== undefined && {k}.length > 0 && !/^\\d+\\.\\d+\\.\\d+/.test({k}))\n    errors.push(\"{key} must be a semver (MAJOR.MINOR.PATCH)\")",
+                    k = k, key = key_lit
                 )),
             };
             if let Some(c) = check {
@@ -927,14 +963,16 @@ pub fn schema_to_typescript(schema: &Schema) -> String {
             }
         }
 
-        // pattern validation
+        // pattern validation. Compile the pattern via the RegExp(string) form so we
+        // only need JS string-escaping (no template-literal context). The error
+        // message is always a quoted JS string literal — escape accordingly.
         if let Some(pattern) = entry.pattern() {
-            let escaped = pattern.replace('\\', "\\\\").replace('`', "\\`");
             checks.push(format!(
-                "  if (source.{k} !== undefined && source.{k}.length > 0 && !new RegExp(`{pat}`).test(source.{k}))\n    errors.push(\"{k} must match pattern {pat_display}\")",
-                k = key,
-                pat = escaped,
-                pat_display = pattern.replace('"', "\\\"")
+                "  if ({k} !== undefined && {k}.length > 0 && !new RegExp(\"{pat}\").test({k}))\n    errors.push(\"{key} must match pattern {pat_display}\")",
+                k = k,
+                pat = js_string_escape(pattern),
+                pat_display = js_string_escape(pattern),
+                key = key_lit
             ));
         }
 
@@ -942,15 +980,15 @@ pub fn schema_to_typescript(schema: &Schema) -> String {
         if let Some(min_len) = entry.min_length() {
             if !entry.has_directive("not-empty") || min_len > 1 {
                 checks.push(format!(
-                    "  if (source.{k} !== undefined && source.{k}.length < {n})\n    errors.push(\"{k} must be at least {n} characters\")",
-                    k = key, n = min_len
+                    "  if ({k} !== undefined && {k}.length < {n})\n    errors.push(\"{key} must be at least {n} characters\")",
+                    k = k, key = key_lit, n = min_len
                 ));
             }
         }
         if let Some(max_len) = entry.max_length() {
             checks.push(format!(
-                "  if (source.{k} !== undefined && source.{k}.length > {n})\n    errors.push(\"{k} must be at most {n} characters\")",
-                k = key, n = max_len
+                "  if ({k} !== undefined && {k}.length > {n})\n    errors.push(\"{key} must be at most {n} characters\")",
+                k = k, key = key_lit, n = max_len
             ));
         }
 
@@ -970,52 +1008,116 @@ pub fn schema_to_typescript(schema: &Schema) -> String {
     // Return object
     out.push_str("  return {\n");
     for (_key, entry) in schema.iter() {
-        let key = &entry.key;
+        let raw_key = &entry.key;
+        let k = prop_access("source", raw_key);
+        let key_for_env_index = js_string_escape(raw_key);
         let is_optional = entry.is_optional();
 
         let value_expr = match entry.var_type() {
             Some(VarType::Number) => {
                 if is_optional {
-                    format!(
-                        "source.{k} !== undefined ? Number(source.{k}) : undefined",
-                        k = key
-                    )
+                    format!("{k} !== undefined ? Number({k}) : undefined", k = k)
                 } else {
-                    format!("Number(source.{}!)", key)
+                    format!("Number({k}!)", k = k)
                 }
             }
             Some(VarType::Boolean) => {
                 if is_optional {
-                    format!("source.{k} !== undefined ? source.{k} === \"true\" || source.{k} === \"1\" : undefined", k = key)
+                    format!(
+                        "{k} !== undefined ? {k} === \"true\" || {k} === \"1\" : undefined",
+                        k = k
+                    )
                 } else {
-                    format!("source.{k}! === \"true\" || source.{k}! === \"1\"", k = key)
+                    format!("{k}! === \"true\" || {k}! === \"1\"", k = k)
                 }
             }
             Some(VarType::Enum(_)) => {
                 if is_optional {
                     format!(
-                        "source.{k} !== undefined ? source.{k} as Env[\"{k}\"] : undefined",
-                        k = key
+                        "{k} !== undefined ? {k} as Env[\"{idx}\"] : undefined",
+                        k = k,
+                        idx = key_for_env_index
                     )
                 } else {
-                    format!("source.{k}! as Env[\"{k}\"]", k = key)
+                    format!("{k}! as Env[\"{idx}\"]", k = k, idx = key_for_env_index)
                 }
             }
             Some(VarType::String) | None => {
                 if is_optional {
-                    format!("source.{}", key)
+                    k.clone()
                 } else {
-                    format!("source.{}!", key)
+                    format!("{k}!", k = k)
                 }
             }
         };
 
-        out.push_str(&format!("    {}: {},\n", key, value_expr));
+        out.push_str(&format!(
+            "    {}: {},\n",
+            interface_key(raw_key),
+            value_expr
+        ));
     }
     out.push_str("  }\n");
     out.push_str("}\n");
 
     out
+}
+
+/// Escape a string for safe embedding inside a JavaScript double-quoted string literal.
+fn js_string_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\x08' => out.push_str("\\b"),
+            '\x0c' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Escape text for safe inclusion inside a JSDoc block comment. Sequences that would
+/// close the comment (`*/`) are split so the comment stays well-formed. Newlines are
+/// preserved so the caller can split into ` * ` continuation lines.
+fn jsdoc_escape(s: &str) -> String {
+    s.replace("*/", "* /")
+}
+
+/// Whether a string is a valid JavaScript identifier (ASCII subset — covers all keys
+/// produced by our grammar). Used to decide between `obj.key` and `obj["key"]`.
+fn is_js_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '$' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+}
+
+/// Property-access expression for a JS object. Falls back to bracket notation for
+/// keys that are not valid identifiers (eg `spring.datasource.url`).
+fn prop_access(base: &str, key: &str) -> String {
+    if is_js_identifier(key) {
+        format!("{}.{}", base, key)
+    } else {
+        format!("{}[\"{}\"]", base, js_string_escape(key))
+    }
+}
+
+/// Interface / object literal property name. Quotes only when the key isn't a valid
+/// JS identifier, so the common `FOO_BAR: string` case stays readable.
+fn interface_key(key: &str) -> String {
+    if is_js_identifier(key) {
+        key.to_string()
+    } else {
+        format!("\"{}\"", js_string_escape(key))
+    }
 }
 
 /// Convert f64 to a JSON number, using integer representation when possible.
@@ -2530,6 +2632,95 @@ mod tests {
         let schema = parse_schema("# @type=string\nFOO\n").unwrap();
         let ts = schema_to_typescript(&schema);
         assert!(ts.contains("throw new Error(`Environment validation failed"));
+    }
+
+    // --- TypeScript codegen safety: dotted keys + escape hardening ---
+
+    #[test]
+    fn typescript_dotted_keys_use_bracket_notation() {
+        let schema = parse_schema("# @type=string\nspring.datasource.url\n").unwrap();
+        let ts = schema_to_typescript(&schema);
+        // Dotted key must use bracket notation in property access, not `source.spring.datasource.url`.
+        assert!(
+            ts.contains("source[\"spring.datasource.url\"]"),
+            "expected bracket notation for dotted key, got:\n{}",
+            ts
+        );
+        assert!(
+            !ts.contains("source.spring.datasource.url"),
+            "must not emit dot-chained access for dotted key, got:\n{}",
+            ts
+        );
+        // Interface property name also quoted.
+        assert!(
+            ts.contains("\"spring.datasource.url\":"),
+            "expected quoted interface key, got:\n{}",
+            ts
+        );
+    }
+
+    #[test]
+    fn typescript_hyphenated_keys_use_bracket_notation() {
+        let schema = parse_schema("# @type=string\nmy-key\n").unwrap();
+        let ts = schema_to_typescript(&schema);
+        assert!(ts.contains("source[\"my-key\"]"), "got:\n{}", ts);
+        assert!(!ts.contains("source.my-key"), "got:\n{}", ts);
+    }
+
+    #[test]
+    fn typescript_plain_keys_still_use_dot_notation() {
+        // Regression for readability — simple identifier keys keep dot notation.
+        let schema = parse_schema("# @type=string\nFOO_BAR\n").unwrap();
+        let ts = schema_to_typescript(&schema);
+        assert!(ts.contains("source.FOO_BAR"), "got:\n{}", ts);
+        assert!(ts.contains("FOO_BAR: string"), "got:\n{}", ts);
+    }
+
+    #[test]
+    fn typescript_description_with_comment_close_is_neutralized() {
+        // `*/` inside a description must not be able to close the JSDoc block.
+        let schema = parse_schema("# @description=a */ b\nFOO\n").unwrap();
+        let ts = schema_to_typescript(&schema);
+        assert!(
+            !ts.contains("a */ b"),
+            "raw `*/` leaked into output and would close the JSDoc comment:\n{}",
+            ts
+        );
+        assert!(ts.contains("a * / b"), "got:\n{}", ts);
+    }
+
+    #[test]
+    fn typescript_pattern_with_backslash_is_safe_in_regexp() {
+        // Pattern `\d+` must reach codegen as `\\d+` inside the JS string literal so
+        // `new RegExp("\\d+")` parses as the intended regex.
+        let schema = parse_schema("# @pattern=\"\\d+\"\nNUMERIC\n").unwrap();
+        let ts = schema_to_typescript(&schema);
+        assert!(ts.contains(r#"new RegExp("\\d+")"#), "got:\n{}", ts);
+    }
+
+    #[test]
+    fn js_string_escape_handles_all_special_chars() {
+        // Direct unit test of the escape helper — easier than building a schema that
+        // contains every special byte (the parser does not accept all of them).
+        assert_eq!(js_string_escape("plain"), "plain");
+        assert_eq!(js_string_escape(r#"with "quote""#), r#"with \"quote\""#);
+        assert_eq!(js_string_escape("with \\back"), "with \\\\back");
+        assert_eq!(js_string_escape("multi\nline"), "multi\\nline");
+        assert_eq!(js_string_escape("tab\there"), "tab\\there");
+        assert_eq!(js_string_escape("cr\rhere"), "cr\\rhere");
+        assert_eq!(js_string_escape("\x01"), "\\u0001");
+    }
+
+    #[test]
+    fn is_js_identifier_classifies_keys_correctly() {
+        assert!(is_js_identifier("FOO"));
+        assert!(is_js_identifier("foo_bar"));
+        assert!(is_js_identifier("_underscore"));
+        assert!(is_js_identifier("$dollar"));
+        assert!(!is_js_identifier("foo.bar"));
+        assert!(!is_js_identifier("foo-bar"));
+        assert!(!is_js_identifier("1starts_with_digit"));
+        assert!(!is_js_identifier(""));
     }
 
     // --- format_lines_by_schema tests ---
