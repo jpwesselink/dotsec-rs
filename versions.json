@@ -4,10 +4,5 @@
     "label": "beta (5.0.0)",
     "path": "/beta/"
   },
-  "prs": [
-    {
-      "label": "#16 fix/symlink-write-protection",
-      "path": "/pr-16/"
-    }
-  ]
+  "prs": []
 }
