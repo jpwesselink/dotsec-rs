@@ -1,6 +1,6 @@
 pub use dotenv;
 use base64::Engine as _;
-use dotenv::{lines_to_entries, Line};
+use dotenv::{lines_to_entries, Line, Schema};
 
 mod configuration;
 pub use configuration::*;
@@ -94,8 +94,54 @@ pub async fn encrypt_lines_to_sec(
     lines: &[Line],
     sec_file: &str,
     encryption_engine: &EncryptionEngine,
+    schema: Option<&Schema>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let entries = lines_to_entries(lines);
+    let mut entries = lines_to_entries(lines);
+
+    // Merge schema-owned directives so the encrypt path sees @encrypt/@plaintext even
+    // when they live in dotsec.schema rather than inline. Inline directives win on conflict.
+    // Also honors a schema-level @default-encrypt (parse_schema attaches file-level
+    // directives to entries; we surface them here as a global default).
+    if let Some(schema) = schema {
+        let schema_default_encrypt: Option<bool> = schema
+            .iter()
+            .flat_map(|(_, e)| e.directives.iter())
+            .find_map(|(name, _)| match name.as_str() {
+                "default-encrypt" => Some(true),
+                "default-plaintext" => Some(false),
+                _ => None,
+            });
+
+        for entry in &mut entries {
+            // Inline @encrypt/@plaintext on the entry win as a pair — if either is set,
+            // skip both from the schema so the user's local override sticks.
+            let inline_encryption_override = entry
+                .directives
+                .iter()
+                .any(|(n, _)| n == "encrypt" || n == "plaintext");
+
+            if let Some(schema_entry) = schema.get(&entry.key) {
+                for (name, value) in &schema_entry.directives {
+                    if name == "default-encrypt" || name == "default-plaintext" {
+                        continue;
+                    }
+                    if (name == "encrypt" || name == "plaintext") && inline_encryption_override {
+                        continue;
+                    }
+                    if !entry.directives.iter().any(|(n, _)| n == name) {
+                        entry.directives.push((name.clone(), value.clone()));
+                    }
+                }
+            }
+            if !inline_encryption_override
+                && !entry.directives.iter().any(|(n, _)| n == "encrypt" || n == "plaintext")
+            {
+                if let Some(true) = schema_default_encrypt {
+                    entry.directives.push(("encrypt".to_string(), None));
+                }
+            }
+        }
+    }
 
     let (dek, wrapped_dek) = match encryption_engine {
         EncryptionEngine::Aws(opts) => {
@@ -1065,7 +1111,7 @@ mod tests {
             key_file: Some(key_file.clone()),
         });
 
-        encrypt_lines_to_sec(&lines, &sec_file, &engine).await.unwrap();
+        encrypt_lines_to_sec(&lines, &sec_file, &engine, None).await.unwrap();
 
         let content = std::fs::read_to_string(&sec_file).unwrap();
         assert!(content.contains("ENC["), "encrypted value should contain ENC[...]");
@@ -1110,7 +1156,7 @@ mod tests {
             key_file: Some(key_file),
         });
 
-        encrypt_lines_to_sec(&lines, &sec_file, &engine).await.unwrap();
+        encrypt_lines_to_sec(&lines, &sec_file, &engine, None).await.unwrap();
 
         let wrong_engine = EncryptionEngine::Local(LocalEncryptionOptions {
             key_file: Some(wrong_key_file),
@@ -1141,7 +1187,7 @@ mod tests {
         let encrypt_engine = EncryptionEngine::Local(LocalEncryptionOptions {
             key_file: Some(key_file.clone()),
         });
-        encrypt_lines_to_sec(&lines, &sec_file, &encrypt_engine).await.unwrap();
+        encrypt_lines_to_sec(&lines, &sec_file, &encrypt_engine, None).await.unwrap();
 
         // Decrypt with key_file: None — must auto-discover <sec>.key.
         let decrypt_engine = EncryptionEngine::Local(LocalEncryptionOptions { key_file: None });
@@ -1150,6 +1196,103 @@ mod tests {
             if let Line::Kv { key, value, .. } = l { if key == "SECRET" { Some(value.clone()) } else { None } } else { None }
         });
         assert_eq!(secret_val.as_deref(), Some("hunter2"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn schema_owned_encrypt_directive_still_encrypts() {
+        // Regression: when @encrypt lives in dotsec.schema (not inline in .sec),
+        // encrypt_lines_to_sec must still encrypt the value. Pre-fix this silently wrote
+        // plaintext, leaking secrets on rewrite paths (format, extract-schema, remove-directives).
+        let dir = std::env::temp_dir().join("dotsec-test-schema-encrypt");
+        let _ = std::fs::create_dir_all(&dir);
+        let sec_file = dir.join("test.sec").to_string_lossy().to_string();
+        let key_file = dir.join("test.sec.key").to_string_lossy().to_string();
+        let (identity, _) = crypto::local::generate_keypair();
+        std::fs::write(&key_file, &identity).unwrap();
+
+        // Build a schema where @encrypt is schema-owned for DB_PASSWORD.
+        let schema = dotenv::parse_schema("# @encrypt\nDB_PASSWORD\n").unwrap();
+
+        // .sec lines with no inline @encrypt directive.
+        let lines = vec![
+            Line::Kv {
+                key: "DB_PASSWORD".into(),
+                value: "secret123".into(),
+                quote_type: QuoteType::Double,
+            },
+            Line::Newline,
+        ];
+
+        let engine = EncryptionEngine::Local(LocalEncryptionOptions { key_file: Some(key_file) });
+        encrypt_lines_to_sec(&lines, &sec_file, &engine, Some(&schema)).await.unwrap();
+
+        let on_disk = std::fs::read_to_string(&sec_file).unwrap();
+        assert!(on_disk.contains("ENC["), "schema-owned @encrypt should still encrypt: {}", on_disk);
+        assert!(!on_disk.contains("secret123"), "plaintext leaked to disk: {}", on_disk);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn schema_default_encrypt_still_encrypts() {
+        // Regression: when @default-encrypt lives in dotsec.schema (file-level), all entries
+        // without explicit @plaintext should still be encrypted.
+        let dir = std::env::temp_dir().join("dotsec-test-schema-default-encrypt");
+        let _ = std::fs::create_dir_all(&dir);
+        let sec_file = dir.join("test.sec").to_string_lossy().to_string();
+        let key_file = dir.join("test.sec.key").to_string_lossy().to_string();
+        let (identity, _) = crypto::local::generate_keypair();
+        std::fs::write(&key_file, &identity).unwrap();
+
+        let schema = dotenv::parse_schema("# @default-encrypt\n\nDB_PASSWORD\n").unwrap();
+
+        let lines = vec![
+            Line::Kv {
+                key: "DB_PASSWORD".into(),
+                value: "secret123".into(),
+                quote_type: QuoteType::Double,
+            },
+            Line::Newline,
+        ];
+
+        let engine = EncryptionEngine::Local(LocalEncryptionOptions { key_file: Some(key_file) });
+        encrypt_lines_to_sec(&lines, &sec_file, &engine, Some(&schema)).await.unwrap();
+
+        let on_disk = std::fs::read_to_string(&sec_file).unwrap();
+        assert!(on_disk.contains("ENC["), "schema @default-encrypt should encrypt: {}", on_disk);
+        assert!(!on_disk.contains("secret123"), "plaintext leaked: {}", on_disk);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn inline_plaintext_overrides_schema_encrypt() {
+        // Inline @plaintext on an entry must win over a schema-owned @encrypt for the same key.
+        let dir = std::env::temp_dir().join("dotsec-test-inline-plaintext-wins");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+        let sec_file = dir.join("test.sec").to_string_lossy().to_string();
+        let key_file = dir.join("test.sec.key").to_string_lossy().to_string();
+        let (identity, _) = crypto::local::generate_keypair();
+        std::fs::write(&key_file, &identity).unwrap();
+
+        let schema = dotenv::parse_schema("# @encrypt\nFOO\n").unwrap();
+
+        let lines = vec![
+            Line::Directive { name: "plaintext".into(), value: None },
+            Line::Newline,
+            Line::Kv { key: "FOO".into(), value: "hello".into(), quote_type: QuoteType::None },
+            Line::Newline,
+        ];
+
+        let engine = EncryptionEngine::Local(LocalEncryptionOptions { key_file: Some(key_file) });
+        encrypt_lines_to_sec(&lines, &sec_file, &engine, Some(&schema)).await.unwrap();
+
+        let on_disk = std::fs::read_to_string(&sec_file).unwrap();
+        assert!(on_disk.contains("FOO=hello"), "inline @plaintext should keep value plain: {}", on_disk);
+        assert!(!on_disk.contains("FOO=ENC["), "inline @plaintext was ignored: {}", on_disk);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

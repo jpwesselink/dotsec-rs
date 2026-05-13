@@ -45,14 +45,22 @@ pub async fn match_args(
             return Ok(());
         }
 
-        // Rewrite the .sec file
+        // Rewrite the .sec file. Load the (required) schema and pass it through so encryption
+        // decisions for entries whose @encrypt directive is schema-owned are preserved.
+        let schema_content = std::fs::read_to_string(schema_path.as_ref().unwrap())?;
+        let schema = dotenv::parse_schema(&schema_content)?;
         let new_content = dotenv::lines_to_string(&stripped_lines);
-        if matches!(default_options.encryption_engine, dotsec::EncryptionEngine::Aws(_)) {
-            let new_lines = dotenv::parse_dotenv(&new_content)?;
-            dotsec::encrypt_lines_to_sec(&new_lines, sec_file, &default_options.encryption_engine)
-                .await?;
-        } else {
+        if matches!(default_options.encryption_engine, dotsec::EncryptionEngine::None) {
             dotsec::write_sec_file(sec_file, &new_content)?;
+        } else {
+            let new_lines = dotenv::parse_dotenv(&new_content)?;
+            dotsec::encrypt_lines_to_sec(
+                &new_lines,
+                sec_file,
+                &default_options.encryption_engine,
+                Some(&schema),
+            )
+            .await?;
         }
 
         println!(

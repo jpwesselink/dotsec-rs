@@ -353,7 +353,7 @@ pub async fn match_args(
             new_lines.push(dotenv::Line::Newline);
         }
 
-        with_progress("Encrypting...", dotsec::encrypt_lines_to_sec(&new_lines, sec_file, encryption_engine)).await?;
+        with_progress("Encrypting...", dotsec::encrypt_lines_to_sec(&new_lines, sec_file, encryption_engine, schema.as_ref())).await?;
     } else {
         // New-only mode: decrypt existing .sec, append new variables
         let mut existing_lines = with_progress("Decrypting...", dotsec::decrypt_sec_to_lines(sec_file, encryption_engine)).await?;
@@ -386,7 +386,7 @@ pub async fn match_args(
             }
         }
 
-        with_progress("Encrypting...", dotsec::encrypt_lines_to_sec(&existing_lines, sec_file, encryption_engine)).await?;
+        with_progress("Encrypting...", dotsec::encrypt_lines_to_sec(&existing_lines, sec_file, encryption_engine, schema.as_ref())).await?;
     }
 
     println!(

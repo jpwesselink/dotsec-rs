@@ -84,15 +84,21 @@ pub async fn match_args(
         schema_output.push_str(&dotenv::schema_to_string(&schema));
         dotsec::write_sec_file(output, &schema_output)?;
 
-        // Rewrite the .sec file without schema directives
+        // Rewrite the .sec file without schema directives. The just-built schema must be passed
+        // to encrypt_lines_to_sec so values whose @encrypt directive just moved into the schema
+        // are still re-encrypted (otherwise they would be silently written as plaintext).
         let new_content = dotenv::lines_to_string(&stripped_lines);
-        // Re-encrypt if the file was encrypted
-        if matches!(default_options.encryption_engine, dotsec::EncryptionEngine::Aws(_)) {
-            let new_lines = dotenv::parse_dotenv(&new_content)?;
-            dotsec::encrypt_lines_to_sec(&new_lines, sec_file, &default_options.encryption_engine)
-                .await?;
-        } else {
+        if matches!(default_options.encryption_engine, dotsec::EncryptionEngine::None) {
             dotsec::write_sec_file(sec_file, &new_content)?;
+        } else {
+            let new_lines = dotenv::parse_dotenv(&new_content)?;
+            dotsec::encrypt_lines_to_sec(
+                &new_lines,
+                sec_file,
+                &default_options.encryption_engine,
+                Some(&schema),
+            )
+            .await?;
         }
 
         let entry_count = schema.iter().filter(|(_, e)| !e.directives.is_empty()).count();
