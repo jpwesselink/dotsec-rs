@@ -79,6 +79,7 @@ pub fn extract_schema_from_lines(lines: &[dotenv::Line]) -> (Vec<dotenv::Line>, 
             }
             dotenv::Line::Kv { key: k, value: v, quote_type: qt } => {
                 let mut schema_directives: Vec<(String, Option<String>)> = Vec::new();
+                let mut pushed_any_directive = false;
 
                 for (orig_line, name, value) in &pending_all {
                     if dotenv::SCHEMA_DIRECTIVES.contains(&name.as_str()) {
@@ -86,28 +87,38 @@ pub fn extract_schema_from_lines(lines: &[dotenv::Line]) -> (Vec<dotenv::Line>, 
                     } else {
                         // env/file-level directive — keep in output
                         output_lines.push(orig_line.clone());
+                        pushed_any_directive = true;
                     }
                 }
 
-                if !schema_directives.is_empty() {
-                    schema_entries.push(dotenv::SchemaEntry {
-                        directives: schema_directives,
-                        key: k.clone(),
-                    });
-                } else {
-                    schema_entries.push(dotenv::SchemaEntry {
-                        directives: vec![],
-                        key: k.clone(),
-                    });
+                // Ensure a Newline separates a flushed directive from the upcoming Kv;
+                // consecutive Line::Directive items serialize on a single comment line, so
+                // without this the Kv concatenates onto that line.
+                if pushed_any_directive
+                    && !matches!(output_lines.last(), Some(dotenv::Line::Newline))
+                {
+                    output_lines.push(dotenv::Line::Newline);
                 }
+
+                schema_entries.push(dotenv::SchemaEntry {
+                    directives: schema_directives,
+                    key: k.clone(),
+                });
 
                 output_lines.push(dotenv::Line::Kv { key: k.clone(), value: v.clone(), quote_type: qt.clone() });
                 pending_all.clear();
             }
             dotenv::Line::Comment { .. } => {
                 // Comments break the directive chain — flush pending as-is
+                let mut pushed_any_directive = false;
                 for (orig_line, _, _) in &pending_all {
                     output_lines.push(orig_line.clone());
+                    pushed_any_directive = true;
+                }
+                if pushed_any_directive
+                    && !matches!(output_lines.last(), Some(dotenv::Line::Newline))
+                {
+                    output_lines.push(dotenv::Line::Newline);
                 }
                 pending_all.clear();
                 output_lines.push(line.clone());

@@ -66,13 +66,19 @@ pub async fn match_args(
             return Ok(());
         }
 
-        // Write back
-        if matches!(default_options.encryption_engine, dotsec::EncryptionEngine::Aws(_)) {
-            let new_lines = dotenv::parse_dotenv(&new_content)?;
-            dotsec::encrypt_lines_to_sec(&new_lines, sec_file, &default_options.encryption_engine)
-                .await?;
-        } else {
+        // Write back. Any non-None engine must re-encrypt so previously @encrypt'd values
+        // do not get written back as plaintext (especially when @encrypt lives in the schema).
+        if matches!(default_options.encryption_engine, dotsec::EncryptionEngine::None) {
             dotsec::write_sec_file(sec_file, &new_content)?;
+        } else {
+            let new_lines = dotenv::parse_dotenv(&new_content)?;
+            dotsec::encrypt_lines_to_sec(
+                &new_lines,
+                sec_file,
+                &default_options.encryption_engine,
+                Some(&schema),
+            )
+            .await?;
         }
 
         println!(

@@ -386,7 +386,7 @@ pub async fn match_args(
             action = "Added";
         }
 
-        with_progress("Encrypting...", dotsec::encrypt_lines_to_sec(&lines, sec_file, encryption_engine)).await?;
+        with_progress("Encrypting...", dotsec::encrypt_lines_to_sec(&lines, sec_file, encryption_engine, schema.as_ref())).await?;
         println!("{} {} {} in {}", "✓".green(), action, key.bold(), sec_file);
     } else {
         // Plaintext — modify raw .sec lines directly, no KMS needed
