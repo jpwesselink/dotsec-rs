@@ -124,6 +124,14 @@ pub async fn run_command(
     for (key, val) in env_vars {
         cmd.env(key, val);
     }
+    // portable-pty does NOT inherit the parent process's cwd by default —
+    // unset, the spawned shell lands in the user's home directory. Pin it
+    // explicitly so `dotsec run -- pwd` reports the directory the user
+    // invoked dotsec from. Failure to read cwd is treated as fatal because
+    // every reasonable command needs one.
+    if let Ok(cwd) = std::env::current_dir() {
+        cmd.cwd(cwd);
+    }
 
     let mut child = pair.slave.spawn_command(cmd)?;
     drop(pair.slave);
