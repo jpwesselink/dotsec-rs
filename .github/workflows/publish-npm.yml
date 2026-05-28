@@ -28,21 +28,34 @@ jobs:
         id: version
         shell: bash
         run: |
-          # Version comes from Cargo.toml (managed by release-plz)
+          # Version comes from Cargo.toml (managed by release-plz). For prerelease
+          # publishes (PR / push-to-main beta) we anticipate the NEXT release by
+          # patch-bumping if the Cargo.toml version is already on npm. Otherwise
+          # (release-prep PRs that have pre-bumped Cargo.toml) use it as-is.
           CARGO_VERSION=$(grep '^version' dotsec/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           SHORT_SHA=$(git rev-parse --short HEAD)
+
+          if npm view "dotsec@${CARGO_VERSION}" version >/dev/null 2>&1; then
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$CARGO_VERSION"
+            PATCH=$((PATCH + 1))
+            PRERELEASE_BASE="${MAJOR}.${MINOR}.${PATCH}"
+            echo "Cargo.toml ($CARGO_VERSION) already published; prereleases will base on ${PRERELEASE_BASE}"
+          else
+            PRERELEASE_BASE="$CARGO_VERSION"
+            echo "Cargo.toml ($CARGO_VERSION) not yet published; prereleases use it as-is"
+          fi
+
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            PR_NUM=${{ github.event.pull_request.number }}
             BRANCH_SLUG=$(echo "${{ github.head_ref }}" | sed 's/[^a-zA-Z0-9.-]/-/g')
             SHORT_SHA=$(echo "${{ github.event.pull_request.head.sha }}" | cut -c1-7)
-            echo "version=${CARGO_VERSION}-${BRANCH_SLUG}.${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+            echo "version=${PRERELEASE_BASE}-${BRANCH_SLUG}.${SHORT_SHA}" >> "$GITHUB_OUTPUT"
             echo "npm-tag=${BRANCH_SLUG}" >> "$GITHUB_OUTPUT"
           elif [ "${{ github.event_name }}" = "release" ]; then
             RELEASE_VERSION=$(echo "${{ github.event.release.tag_name }}" | sed 's/^.*-v//')
             echo "version=${RELEASE_VERSION}" >> "$GITHUB_OUTPUT"
             echo "npm-tag=latest" >> "$GITHUB_OUTPUT"
           elif [ "${{ github.event_name }}" = "push" ]; then
-            echo "version=${CARGO_VERSION}-beta.${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+            echo "version=${PRERELEASE_BASE}-beta.${SHORT_SHA}" >> "$GITHUB_OUTPUT"
             echo "npm-tag=beta" >> "$GITHUB_OUTPUT"
           elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
