@@ -9,6 +9,11 @@
     "label": "beta (5.0.1)",
     "path": "/beta/"
   },
-  "prs": [],
+  "prs": [
+    {
+      "label": "#20 feat/push-only-by-default",
+      "path": "/pr-20/"
+    }
+  ],
   "latest": "/v5.0.1/"
 }
