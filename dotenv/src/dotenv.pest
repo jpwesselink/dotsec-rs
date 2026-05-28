@@ -13,7 +13,8 @@ single_directive   = ${ flag_directive | push_directive | type_directive | forma
                       | deprecated_directive | text_directive }
 
 // --- Flag directives (no value) ---
-// @encrypt, @plaintext, @default-encrypt, @default-plaintext, @optional, @not-empty
+// @encrypt, @plaintext, @default-encrypt, @default-plaintext, @optional, @not-empty,
+// @also-env (opt-in: include @push values in env injection too; breaking change in v6)
 flag_directive     = ${ "@" ~ flag_name }
 flag_name          = @{
     ( "default-encrypt"
@@ -22,6 +23,7 @@ flag_name          = @{
     | "not-empty"
     | "optional"
     | "plaintext"
+    | "also-env"
     ) ~ !(ASCII_ALPHA | "_" | "-")
 }
 

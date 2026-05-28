@@ -1,6 +1,6 @@
 [package]
 name = "dotsec-core"
-version = "5.0.2"
+version = "6.0.0"
 edition = "2021"
 description = "Core library for dotsec — encryption, decryption, interpolation, and redaction"
 license = "MIT"

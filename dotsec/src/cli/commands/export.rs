@@ -33,7 +33,10 @@ pub async fn match_args(
         dotsec::decrypt_sec_to_lines(sec_file, encryption_engine),
     )
     .await?;
-    let output = dotenv::lines_to_string(&lines);
+    // Filter out push-only entries so the exported plaintext matches what `dotsec run` would
+    // inject. See `Entry::injects_into_env` (breaking change in v6.0.0).
+    let env_lines = dotsec::filter_env_injectable_lines(&lines);
+    let output = dotenv::lines_to_string(&env_lines);
 
     if let Some(out_file) = sub.get_one::<String>("output") {
         dotsec::write_sec_file(out_file, &output)?;

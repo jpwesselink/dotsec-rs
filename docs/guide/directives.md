@@ -64,7 +64,8 @@ These go at the top of the `.sec` file (or in `dotsec.schema`) and apply to the 
 |-----------|-------|-------------|
 | `@description` | text | Human-readable description |
 | `@deprecated` | `"message"` (optional) | Mark key as deprecated |
-| `@push` | `aws-ssm(...)`, `aws-secrets-manager(...)` | Push targets |
+| `@push` | `aws-ssm(...)`, `aws-secrets-manager(...)` | Push target. Excludes the key from `dotsec run` env injection and `dotsec export` output by default — pair with `@also-env` to include it in both. |
+| `@also-env` | — | Override for `@push`: re-include the key in env injection and exports |
 
 ### Examples
 
@@ -112,6 +113,31 @@ APP_VERSION="2.1.0"
 # Multiple targets
 # @push=aws-ssm(path="/myapp/prod"), aws-secrets-manager(path="/myapp/prod/db")
 ```
+
+### Push vs env injection
+
+Since **v6.0.0**, `@push=…` values are considered owned by the push target and are excluded from:
+
+- `dotsec run` env injection
+- `dotsec export` plaintext output
+
+This matches the typical pattern of pushing secrets to SSM / Secrets Manager for a runtime service to consume directly (e.g. a Lambda reading from SSM at startup), without also exposing them as local env vars.
+
+If a value needs to be both pushed *and* injected locally — e.g. a `DATABASE_URL` you use during `dotsec run -- npm dev` and also push to staging SSM — add `@also-env`:
+
+```bash
+# Pushed to SSM, NOT in local env (default)
+# @encrypt @push=aws-ssm(path="/prod/stripe-key")
+STRIPE_SECRET_KEY="sk-live-..."
+
+# Pushed to SSM AND available in local env
+# @encrypt @push=aws-ssm(path="/prod/db") @also-env
+DATABASE_URL="postgres://localhost"
+```
+
+`dotsec show` always displays all entries regardless of `@push` / `@also-env` — it's an inspection tool, not an env-injection target.
+
+> **v5 → v6 migration**: in v5 every `@push` value was also injected. To preserve v5 behavior verbatim, add `@also-env` to every `@push`-tagged entry. To adopt v6 semantics, leave them as-is — local env shrinks to "things actually meant for local processes."
 
 ## Schema files
 

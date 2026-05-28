@@ -533,8 +533,14 @@ fn load_existing_dek_local(
 // --- Run helpers ---
 
 /// Extract key-value pairs from lines and resolve `${VAR}` interpolation.
+///
 /// Only double-quoted and unquoted values are interpolated; single-quoted values stay literal.
+///
+/// Entries marked `@push=…` are excluded by default (they're owned by the push target),
+/// unless they also carry `@also-env`. This rule was introduced in v6.0.0. See
+/// `Entry::injects_into_env`.
 pub fn resolve_env_vars(lines: &[Line]) -> Vec<(String, String)> {
+    let entries = lines_to_entries(lines);
     let mut resolved: Vec<(String, String)> = Vec::new();
 
     for line in lines {
@@ -545,6 +551,12 @@ pub fn resolve_env_vars(lines: &[Line]) -> Vec<(String, String)> {
         } = line
         {
             if key == DOTSEC_KEY_NAME || key == DOTSEC_V1_NAME {
+                continue;
+            }
+            // Push-only entries (no `@also-env`) are owned by the push target, not the env.
+            // `lines_to_entries` already merges file-level @default-* defaults.
+            let entry = entries.iter().find(|e| e.key == *key);
+            if entry.is_some_and(|e| !e.injects_into_env()) {
                 continue;
             }
             let final_value = match quote_type {
@@ -616,6 +628,60 @@ fn lookup(name: &str, resolved: &[(String, String)]) -> String {
         }
     }
     std::env::var(name).unwrap_or_default()
+}
+
+/// Drop push-only entries (and their preceding directive block) from a parsed line stream.
+///
+/// Used by `dotsec export` so a `KEY=value` consumed downstream as a `.env` file matches
+/// what `dotsec run` would inject — push-only entries stay out of both. Comments, whitespace,
+/// and non-push entries are preserved verbatim. See `Entry::injects_into_env`.
+pub fn filter_env_injectable_lines(lines: &[Line]) -> Vec<Line> {
+    use std::collections::HashSet;
+
+    let entries = lines_to_entries(lines);
+    let excluded_keys: HashSet<&str> = entries
+        .iter()
+        .filter(|e| !e.injects_into_env())
+        .map(|e| e.key.as_str())
+        .collect();
+
+    if excluded_keys.is_empty() {
+        return lines.to_vec();
+    }
+
+    let mut out: Vec<Line> = Vec::with_capacity(lines.len());
+    let mut pending_directives: Vec<Line> = Vec::new();
+
+    for line in lines {
+        match line {
+            Line::Directive { .. } => {
+                pending_directives.push(line.clone());
+            }
+            Line::Kv { key, .. } => {
+                if excluded_keys.contains(key.as_str()) {
+                    // Drop both the kv and its preceding directive block (and trailing newline).
+                    pending_directives.clear();
+                    if matches!(out.last(), Some(Line::Newline)) {
+                        out.pop();
+                    }
+                } else {
+                    out.append(&mut pending_directives);
+                    out.push(line.clone());
+                }
+            }
+            Line::Comment { .. } => {
+                // Comments terminate directive chains; flush pending.
+                out.append(&mut pending_directives);
+                out.push(line.clone());
+            }
+            _ => out.push(line.clone()),
+        }
+    }
+
+    // Any trailing pending directives without a kv (shouldn't happen in well-formed input,
+    // but preserve them rather than silently drop).
+    out.append(&mut pending_directives);
+    out
 }
 
 /// Collect the values of entries marked `@encrypt` from the resolved env vars.
@@ -777,6 +843,47 @@ mod tests {
             interpolate("${A} then ${UNCLOSED", &resolved),
             "val then ${UNCLOSED"
         );
+    }
+
+    // --- push-only env exclusion (v6 breaking change) ---
+
+    #[test]
+    fn resolve_env_vars_excludes_push_only_entries() {
+        // @push without @also-env: belongs to the push target, not the env.
+        let lines =
+            parse_content("# @push=aws-ssm\nDB_PASSWORD=\"secret\"\n\nFOO=\"bar\"\n").unwrap();
+        let resolved = resolve_env_vars(&lines);
+        assert_eq!(resolved, vec![("FOO".into(), "bar".into())]);
+        assert!(!resolved.iter().any(|(k, _)| k == "DB_PASSWORD"));
+    }
+
+    #[test]
+    fn resolve_env_vars_includes_push_when_also_env() {
+        // @push + @also-env: opt back in to env injection.
+        let lines = parse_content("# @push=aws-ssm @also-env\nDB_PASSWORD=\"secret\"\n").unwrap();
+        let resolved = resolve_env_vars(&lines);
+        assert_eq!(resolved, vec![("DB_PASSWORD".into(), "secret".into())]);
+    }
+
+    #[test]
+    fn filter_env_injectable_lines_drops_push_only_block() {
+        let lines = parse_content(
+            "# @encrypt\n# @push=aws-ssm\nDB_PASSWORD=\"secret\"\n\n# @encrypt\nAPI_KEY=\"k\"\n",
+        )
+        .unwrap();
+        let filtered = filter_env_injectable_lines(&lines);
+        let rendered = dotenv::lines_to_string(&filtered);
+        assert!(!rendered.contains("DB_PASSWORD"));
+        assert!(!rendered.contains("aws-ssm"));
+        assert!(rendered.contains("API_KEY=\"k\""));
+    }
+
+    #[test]
+    fn filter_env_injectable_lines_keeps_push_with_also_env() {
+        let lines = parse_content("# @push=aws-ssm @also-env\nDB_PASSWORD=\"secret\"\n").unwrap();
+        let filtered = filter_env_injectable_lines(&lines);
+        let rendered = dotenv::lines_to_string(&filtered);
+        assert!(rendered.contains("DB_PASSWORD=\"secret\""));
     }
 
     // --- resolve_env_vars ---
