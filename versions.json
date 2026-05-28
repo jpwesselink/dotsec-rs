@@ -13,6 +13,10 @@
     {
       "label": "#20 feat/push-only-by-default",
       "path": "/pr-20/"
+    },
+    {
+      "label": "#21 fix/run-inherits-cwd",
+      "path": "/pr-21/"
     }
   ],
   "latest": "/v5.0.1/"
