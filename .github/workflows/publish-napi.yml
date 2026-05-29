@@ -108,6 +108,19 @@ jobs:
         if: matrix.cross
         run: cargo install cross --locked
 
+      - name: Sync Cargo.toml versions to resolved version
+        shell: bash
+        env:
+          RESOLVED_VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          for f in dotsec/Cargo.toml dotsec-core/Cargo.toml dotsec-napi/Cargo.toml \
+                   dotenv/Cargo.toml aws/Cargo.toml crypto/Cargo.toml; do
+            sed -i.bak "s/^version = \".*\"$/version = \"$RESOLVED_VERSION\"/" "$f"
+            rm "${f}.bak"
+          done
+          sed -i.bak "s|version = \"[^\"]*\" }|version = \"$RESOLVED_VERSION\" }|" dotsec-napi/Cargo.toml
+          rm dotsec-napi/Cargo.toml.bak
+
       - name: Build native module
         shell: bash
         run: |

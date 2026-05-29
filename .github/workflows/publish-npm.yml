@@ -115,6 +115,22 @@ jobs:
         if: matrix.cross
         run: cargo install cross --locked
 
+      - name: Sync Cargo.toml versions to resolved version
+        shell: bash
+        env:
+          RESOLVED_VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          # Cargo.toml versions are read by build.rs / clap as CARGO_PKG_VERSION,
+          # so they must match the prerelease version we're about to publish on npm.
+          for f in dotsec/Cargo.toml dotsec-core/Cargo.toml dotsec-napi/Cargo.toml \
+                   dotenv/Cargo.toml aws/Cargo.toml crypto/Cargo.toml; do
+            sed -i.bak "s/^version = \".*\"$/version = \"$RESOLVED_VERSION\"/" "$f"
+            rm "${f}.bak"
+          done
+          # Inter-crate path-with-version pin must also match.
+          sed -i.bak "s|version = \"[^\"]*\" }|version = \"$RESOLVED_VERSION\" }|" dotsec-napi/Cargo.toml
+          rm dotsec-napi/Cargo.toml.bak
+
       - name: Build binary
         shell: bash
         run: |
