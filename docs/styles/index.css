@@ -64,3 +64,34 @@ html:not(.rp-dark) .version-banner {
   font-weight: 600;
   margin-right: 4px;
 }
+
+/* Top-right "Latest stable: vX" pill */
+.version-pill {
+  position: fixed;
+  top: 12px;
+  right: 16px;
+  z-index: 101;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--rp-c-text-1);
+  background: var(--rp-c-brand-tint);
+  border: 1px solid var(--rp-c-brand);
+  text-decoration: none;
+  line-height: 1.4;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.version-pill:hover {
+  background: var(--rp-c-brand);
+  color: #111;
+  transform: translateY(-1px);
+}
+
+/* On narrow viewports the pill would overlap the nav burger — hide it there. */
+@media (max-width: 640px) {
+  .version-pill {
+    display: none;
+  }
+}
