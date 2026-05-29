@@ -91,11 +91,19 @@ fn open_temp_write(tmp: &std::path::Path) -> std::io::Result<std::fs::File> {
 
 // --- Header ---
 
+/// Major version stamped into new `.sec` file headers — derived from the crate's
+/// compile-time `CARGO_PKG_VERSION` so it tracks the actual release without manual
+/// updates. (`has_header` matches the bare `# dotsec v` prefix so headers stamped
+/// by older majors continue to be recognized.)
+fn header_major() -> &'static str {
+    env!("CARGO_PKG_VERSION").split('.').next().unwrap_or("?")
+}
+
 /// Generate the standard dotsec file header (two comment lines + newlines).
 pub fn generate_header() -> Vec<Line> {
     vec![
         Line::Comment {
-            text: "# dotsec v5 — encrypted environment file".into(),
+            text: format!("# dotsec v{} — encrypted environment file", header_major()),
         },
         Line::Newline,
         Line::Comment {
@@ -746,9 +754,11 @@ mod tests {
     }
 
     #[test]
-    fn generate_header_first_line_contains_version() {
+    fn generate_header_first_line_contains_current_major() {
         let header = generate_header();
-        assert!(matches!(&header[0], Line::Comment { text } if text.contains("dotsec v5")));
+        let expected_major = env!("CARGO_PKG_VERSION").split('.').next().unwrap();
+        let expected = format!("dotsec v{}", expected_major);
+        assert!(matches!(&header[0], Line::Comment { text } if text.contains(&expected)));
     }
 
     #[test]
@@ -763,6 +773,20 @@ mod tests {
     fn has_header_true_when_present() {
         let lines = generate_header();
         assert!(has_header(&lines));
+    }
+
+    #[test]
+    fn has_header_recognizes_older_majors() {
+        // The `# dotsec v` prefix is intentionally version-agnostic so files
+        // stamped by older majors (v5, etc.) keep being recognized after we ship a
+        // newer major.
+        let v5_header = vec![
+            Line::Comment {
+                text: "# dotsec v5 — encrypted environment file".into(),
+            },
+            Line::Newline,
+        ];
+        assert!(has_header(&v5_header));
     }
 
     #[test]
