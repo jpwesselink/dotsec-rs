@@ -1,4 +1,4 @@
-use clap::{arg, command, Arg, ArgAction, Command};
+use clap::{arg, command, Command};
 
 pub fn command() -> Command {
     command!("dotsec")
@@ -10,17 +10,6 @@ pub fn command() -> Command {
              dotsec set PORT 3000                       # add a plaintext variable\n  \
              dotsec run -- node server.js               # run with decrypted env vars injected\n\n\
              Docs: https://jpwesselink.github.io/dotsec-rs",
-        )
-        // Override clap's default `-V` version flag so `-v` (node / cargo / git convention)
-        // prints the version too. `-V` stays as a visible alias for backwards compat.
-        .disable_version_flag(true)
-        .arg(
-            Arg::new("version")
-                .short('v')
-                .visible_short_alias('V')
-                .long("version")
-                .action(ArgAction::Version)
-                .help("Print version"),
         )
         .arg(arg!(-d --debug ... "Turn debugging information on"))
         .arg(
