@@ -10,10 +10,13 @@ dotsec set PORT 3000                              # plaintext variable
 dotsec set                                        # fully interactive
 dotsec set API_KEY sk-live-xxx -y                 # skip prompts, auto-detect directives
 dotsec set PORT 3000 --type number                # set @type directive
-dotsec set DB_URL pg://... --push aws-ssm         # set @push target
+dotsec set RUNTIME_ONLY_VAR <value> --push aws-ssm              # @push only — pushed, never in local env
+dotsec set SHARED_VAR <value> --push aws-ssm --also-env         # @push + @also-env — pushed AND in local env
 ```
 
-Flags: `--encrypt` / `--plaintext` to control encryption, `--type <TYPE>` for the `@type` directive (`string`, `number`, `boolean`, `enum(...)`), `--push <TARGET>` for the `@push` directive (`aws-ssm`, `aws-secrets-manager`), `-y/--yes` to skip directive prompts.
+Flags: `--encrypt` / `--plaintext` to control encryption, `--type <TYPE>` for the `@type` directive (`string`, `number`, `boolean`, `enum(...)`), `--push <TARGET>` for the `@push` directive (`aws-ssm`, `aws-secrets-manager`), `--also-env` to pair with `--push` so the value is also available via `dotsec run` / `dotsec export` (otherwise v6 excludes push-only entries from env), `-y/--yes` to skip directive prompts.
+
+When you go through the interactive prompts (`dotsec set` with no value, or with `--push` and no `-y`), choosing a push target triggers a follow-up "Also inject into local env?" prompt — default no, matching the v6 push-only semantics.
 
 Secret-looking names (containing `KEY`, `SECRET`, `PASSWORD`, `TOKEN`, etc.) use masked input in interactive mode.
 

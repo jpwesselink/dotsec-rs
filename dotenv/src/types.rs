@@ -124,6 +124,7 @@ pub const SCHEMA_DIRECTIVES: &[&str] = &[
     "not-empty",
     "deprecated",
     "description",
+    "also-env",
 ];
 
 /// File-level directives that are schema-owned (defaults).
@@ -546,6 +547,19 @@ impl Entry {
             Some(Some(value)) => parse_push_targets(value).0,
             _ => vec![],
         }
+    }
+
+    /// Whether this entry should be injected into the runtime environment by `dotsec run`
+    /// or written to plaintext exports by `dotsec export`.
+    ///
+    /// Default: yes. Exception: entries tagged `@push=…` are treated as "lives at the push
+    /// target, not in env" by default — opt back in with `@also-env`. This rule kicked in
+    /// at v6.0.0; v5 always injected `@push` values.
+    pub fn injects_into_env(&self) -> bool {
+        if self.has_directive("push") && !self.has_directive("also-env") {
+            return false;
+        }
+        true
     }
 
     /// Parse `@type` directive into a VarType.
