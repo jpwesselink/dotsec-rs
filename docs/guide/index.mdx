@@ -1,3 +1,5 @@
+import { Tabs, Tab } from '@rspress/core/theme';
+
 # Getting Started
 
 dotsec encrypts your `.env` files into `.sec` files. The `.sec` file is committed to git as the single source of truth for your secrets — no more sharing credentials over Slack or managing secret vaults.
@@ -6,27 +8,42 @@ Encryption uses age (X25519 + ChaCha20-Poly1305) by default. AWS KMS is also sup
 
 ## Install
 
-:::tabs
+<Tabs>
+  <Tab label="npm (global)">
+    ```bash
+    npm install -g dotsec
+    ```
+  </Tab>
+  <Tab label="npm (dev dep)">
+    ```bash
+    npm install --save-dev dotsec
+    # or: pnpm add -D dotsec / yarn add -D dotsec
+    ```
 
-@tab npm
+    Wire it into your scripts:
 
-```bash
-npm install -g dotsec
-```
+    ```json
+    {
+      "scripts": {
+        "dev": "dotsec run -- node server.js",
+        "test": "dotsec run -- vitest"
+      }
+    }
+    ```
 
-@tab cargo
-
-```bash
-cargo install dotsec
-```
-
-@tab npx
-
-```bash
-npx dotsec set API_KEY sk-live-xxx
-```
-
-:::
+    See [Setup → Install](/guide/setup#install) for the full pattern.
+  </Tab>
+  <Tab label="cargo">
+    ```bash
+    cargo install dotsec
+    ```
+  </Tab>
+  <Tab label="npx (one-shot)">
+    ```bash
+    npx dotsec set API_KEY sk-live-xxx
+    ```
+  </Tab>
+</Tabs>
 
 ## Quick start
 

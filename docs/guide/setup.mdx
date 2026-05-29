@@ -1,28 +1,55 @@
+import { Tabs, Tab } from '@rspress/core/theme';
+
 # Setup
 
 ## Install
 
-:::tabs
+<Tabs>
+  <Tab label="npm (global)">
+    ```bash
+    npm install -g dotsec
+    ```
 
-@tab npm
+    Installs the `dotsec` binary on `$PATH`. Same shape with `pnpm add -g dotsec` and `yarn global add dotsec`.
+  </Tab>
+  <Tab label="npm (dev dep)">
+    Add `dotsec` to a single project — handy when you don't want a global install or want each project pinned to its own version:
 
-```bash
-npm install -g dotsec
-```
+    ```bash
+    npm install --save-dev dotsec
+    # or
+    pnpm add -D dotsec
+    # or
+    yarn add -D dotsec
+    ```
 
-@tab cargo
+    Then wire it into your `package.json` scripts:
 
-```bash
-cargo install dotsec
-```
+    ```json
+    {
+      "scripts": {
+        "dev": "dotsec run -- node server.js",
+        "test": "dotsec run -- vitest",
+        "build": "dotsec run -- next build"
+      }
+    }
+    ```
 
-@tab npx
+    Each script gets the decrypted env vars injected — no `.env` to source. CI gets `DOTSEC_PRIVATE_KEY` (local provider) or the right IAM role (AWS provider) and everything else works the same.
+  </Tab>
+  <Tab label="cargo">
+    ```bash
+    cargo install dotsec
+    ```
+  </Tab>
+  <Tab label="npx (one-shot)">
+    No install — `npx` pulls and runs the latest:
 
-```bash
-npx dotsec set API_KEY sk-live-xxx
-```
-
-:::
+    ```bash
+    npx dotsec set API_KEY sk-live-xxx
+    ```
+  </Tab>
+</Tabs>
 
 Verify the install:
 
