@@ -17,6 +17,10 @@
     {
       "label": "#20 feat/push-only-by-default",
       "path": "/pr-20/"
+    },
+    {
+      "label": "#22 release-plz-2026-05-29T11-28-03Z",
+      "path": "/pr-22/"
     }
   ],
   "latest": "/v5.0.2/"
