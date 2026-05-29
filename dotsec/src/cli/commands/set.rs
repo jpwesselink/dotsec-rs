@@ -35,6 +35,12 @@ pub fn command() -> Command {
                 .help("Push target (aws-ssm, aws-secrets-manager)"),
         )
         .arg(
+            Arg::new("also-env")
+                .long("also-env")
+                .action(clap::ArgAction::SetTrue)
+                .help("With --push: also inject into local env (default in v6 is push-only)"),
+        )
+        .arg(
             Arg::new("yes")
                 .short('y')
                 .long("yes")
@@ -246,6 +252,7 @@ pub async fn match_args(
     let has_plaintext_flag = sub.get_flag("plaintext");
     let type_arg = sub.get_one::<String>("type");
     let push_arg = sub.get_one::<String>("push");
+    let also_env_flag = sub.get_flag("also-env");
 
     if key_in_schema {
         // Key already in schema — no directive prompts needed, just update value
@@ -314,6 +321,12 @@ pub async fn match_args(
                     name: "push".to_string(),
                     value: Some(p.clone()),
                 });
+                if also_env_flag {
+                    new_directives.push(dotenv::Line::Directive {
+                        name: "also-env".to_string(),
+                        value: None,
+                    });
+                }
             }
         }
 
@@ -425,6 +438,12 @@ pub async fn match_args(
                     name: "push".to_string(),
                     value: Some(p.clone()),
                 });
+                if also_env_flag {
+                    new_directives.push(dotenv::Line::Directive {
+                        name: "also-env".to_string(),
+                        value: None,
+                    });
+                }
             }
         }
     }

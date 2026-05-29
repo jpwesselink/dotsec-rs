@@ -482,6 +482,25 @@ pub fn prompt_variable_directives(
         _ => {} // none
     }
 
+    // If a push target was set, ask whether the value should also be available in the
+    // local env. Default no — v6 push-only semantics. Carry over `@also-env` from source.
+    let pushed = matches!(push, "aws-ssm" | "aws-secrets-manager" | "both");
+    if pushed {
+        let source_has_also_env = source_directives
+            .map(|d| d.iter().any(|(n, _)| n == "also-env"))
+            .unwrap_or(false);
+        let also_env = Confirm::new("  Also inject into local env (dotsec run / export)?")
+            .with_default(source_has_also_env)
+            .with_help_message("@push values stay out of env by default; @also-env opts in")
+            .prompt()?;
+        if also_env {
+            directives.push(dotenv::Line::Directive {
+                name: "also-env".to_string(),
+                value: None,
+            });
+        }
+    }
+
     Ok(directives)
 }
 
