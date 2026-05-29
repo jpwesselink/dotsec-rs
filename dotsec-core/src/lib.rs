@@ -91,19 +91,29 @@ fn open_temp_write(tmp: &std::path::Path) -> std::io::Result<std::fs::File> {
 
 // --- Header ---
 
-/// Major version stamped into new `.sec` file headers — derived from the crate's
-/// compile-time `CARGO_PKG_VERSION` so it tracks the actual release without manual
-/// updates. (`has_header` matches the bare `# dotsec v` prefix so headers stamped
-/// by older majors continue to be recognized.)
-fn header_major() -> &'static str {
-    env!("CARGO_PKG_VERSION").split('.').next().unwrap_or("?")
+/// Version stamped into new `.sec` file headers — major.minor.patch derived from the
+/// crate's compile-time `CARGO_PKG_VERSION`. Prerelease and build-metadata suffixes
+/// are intentionally stripped so prereleases of the same line (eg
+/// `6.0.1-fix-foo.SHA`) stamp the same `6.0.1` and headers don't churn in git on
+/// every PR install. (`has_header` matches the bare `# dotsec v` prefix so headers
+/// stamped by older majors continue to be recognized.)
+fn header_version() -> &'static str {
+    let v = env!("CARGO_PKG_VERSION");
+    // Split on '-' or '+' (semver prerelease / build separators) and take the head.
+    match v.find(|c: char| c == '-' || c == '+') {
+        Some(idx) => &v[..idx],
+        None => v,
+    }
 }
 
 /// Generate the standard dotsec file header (two comment lines + newlines).
 pub fn generate_header() -> Vec<Line> {
     vec![
         Line::Comment {
-            text: format!("# dotsec v{} — encrypted environment file", header_major()),
+            text: format!(
+                "# dotsec v{} — encrypted environment file",
+                header_version()
+            ),
         },
         Line::Newline,
         Line::Comment {
@@ -754,10 +764,15 @@ mod tests {
     }
 
     #[test]
-    fn generate_header_first_line_contains_current_major() {
+    fn generate_header_first_line_contains_current_version() {
         let header = generate_header();
-        let expected_major = env!("CARGO_PKG_VERSION").split('.').next().unwrap();
-        let expected = format!("dotsec v{}", expected_major);
+        // Same stripping rule as the impl: drop anything after '-' or '+'.
+        let raw = env!("CARGO_PKG_VERSION");
+        let expected_version = match raw.find(|c: char| c == '-' || c == '+') {
+            Some(i) => &raw[..i],
+            None => raw,
+        };
+        let expected = format!("dotsec v{}", expected_version);
         assert!(matches!(&header[0], Line::Comment { text } if text.contains(&expected)));
     }
 
