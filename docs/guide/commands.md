@@ -10,8 +10,8 @@ dotsec set PORT 3000                              # plaintext variable
 dotsec set                                        # fully interactive
 dotsec set API_KEY sk-live-xxx -y                 # skip prompts, auto-detect directives
 dotsec set PORT 3000 --type number                # set @type directive
-dotsec set STRIPE_KEY sk-live-... --push aws-ssm        # @push only — Lambda reads from SSM, never in local env
-dotsec set DATABASE_URL pg://... --push aws-ssm --also-env   # pushed AND injected locally (npm dev, etc.)
+dotsec set RUNTIME_ONLY_VAR <value> --push aws-ssm              # @push only — pushed, never in local env
+dotsec set SHARED_VAR <value> --push aws-ssm --also-env         # @push + @also-env — pushed AND in local env
 ```
 
 Flags: `--encrypt` / `--plaintext` to control encryption, `--type <TYPE>` for the `@type` directive (`string`, `number`, `boolean`, `enum(...)`), `--push <TARGET>` for the `@push` directive (`aws-ssm`, `aws-secrets-manager`), `--also-env` to pair with `--push` so the value is also available via `dotsec run` / `dotsec export` (otherwise v6 excludes push-only entries from env), `-y/--yes` to skip directive prompts.
