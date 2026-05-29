@@ -94,6 +94,39 @@ fn create_output(
 
 // --- Run ---
 
+/// Mask any prefix of `buf` that matches a non-empty suffix of one of the known secrets.
+///
+/// The PTY redaction loop holds back the last `max_secret_len` bytes after each emit so a
+/// chunk-spanning secret can be detected on the next iteration. When a secret happens to
+/// straddle a chunk boundary, its head is emitted as asterisks in iteration N and the tail
+/// sits at the start of iteration N+1's buffer as raw bytes. The full secret is no longer
+/// present in the buffer at that point so `redact` can't find it. This helper closes the
+/// hole by masking the longest secret-suffix that appears at the start of the buffer.
+///
+/// Trade-off: may over-mask if non-secret output coincidentally begins with bytes that
+/// match a secret suffix. For typical (long, random-looking) secret values the collision
+/// rate is negligible.
+fn mask_secret_suffix_at_start(buf: &mut String, secrets: &[String]) {
+    let mut best_match_len = 0;
+    for secret in secrets {
+        let max_len = secret.len().min(buf.len());
+        for len in (1..=max_len).rev() {
+            if len <= best_match_len {
+                break;
+            }
+            let suffix = &secret.as_bytes()[secret.len() - len..];
+            if buf.as_bytes().starts_with(suffix) {
+                best_match_len = len;
+                break;
+            }
+        }
+    }
+    if best_match_len > 0 {
+        let mask: String = "*".repeat(best_match_len);
+        buf.replace_range(..best_match_len, &mask);
+    }
+}
+
 /// Spawn a child process in a PTY with env vars injected.
 /// Redacts secret values from output. Colors and interactive features work
 /// because the child sees a real terminal.
@@ -186,13 +219,10 @@ pub async fn run_command(
         let mut remainder = Vec::new();
         let mut buf = [0u8; 4096];
 
-        // Maximum length of any secret — used as overlap window to catch
-        // secrets that straddle read-chunk boundaries.
+        // Maximum length of any secret — kept in `remainder` as an overlap window
+        // so secrets that straddle a chunk boundary can still be redacted by the
+        // next iteration's pass.
         let max_secret_len = secrets_clone.iter().map(|s| s.len()).max().unwrap_or(0);
-
-        // Tracks how many bytes at the front of `remainder` were already
-        // written to stdout (the overlap from the previous iteration).
-        let mut already_written: usize = 0;
 
         loop {
             match reader.read(&mut buf) {
@@ -200,41 +230,33 @@ pub async fn run_command(
                 Ok(n) => {
                     remainder.extend_from_slice(&buf[..n]);
 
-                    // Process all complete lines
-                    let mut lines_end: usize = 0;
-                    {
-                        let mut search_from = 0;
-                        while let Some(pos) =
-                            remainder[search_from..].iter().position(|&b| b == b'\n')
-                        {
-                            lines_end = search_from + pos + 1;
-                            search_from = lines_end;
-                        }
-                    }
+                    // Locate the byte just past the last complete line in the buffer.
+                    let lines_end = match remainder.iter().rposition(|&b| b == b'\n') {
+                        Some(pos) => pos + 1,
+                        None => 0,
+                    };
 
                     if lines_end > 0 {
-                        // Redact the full block including overlap from
-                        // previous iteration, so secrets spanning the
-                        // boundary are caught.
                         let block = String::from_utf8_lossy(&remainder[..lines_end]);
-                        let redacted = redact(&block, &secrets_clone);
-
-                        // Redaction replaces secrets with same-length masks,
-                        // so byte positions are stable. Only emit the portion
-                        // after what was already written.
+                        let mut redacted = redact(&block, &secrets_clone);
+                        // If the previous iteration emitted the head of a chunk-spanning
+                        // secret as asterisks, this iteration's `redacted` starts with the
+                        // tail of that secret as raw bytes (the full secret isn't present
+                        // in the overlap-only context, so `redact` can't see it). Mask any
+                        // leading suffix-of-a-secret to plug that hole.
+                        mask_secret_suffix_at_start(&mut redacted, &secrets_clone);
                         let redacted_bytes = redacted.as_bytes();
-                        let skip = already_written.min(redacted_bytes.len());
+
+                        // Hold back the last `keep` bytes — they may be the start of a
+                        // secret whose tail arrives in the next chunk. They stay in
+                        // `remainder` and get a second redaction pass before being emitted.
                         let keep = max_secret_len.min(lines_end);
                         let emit_end = redacted_bytes.len().saturating_sub(keep);
-                        if emit_end > skip {
-                            let _ = stdout.write_all(&redacted_bytes[skip..emit_end]);
-                        }
+                        let _ = stdout.write_all(&redacted_bytes[..emit_end]);
+                        let _ = stdout.flush();
 
-                        let drain_up_to = lines_end - keep;
-                        remainder.drain(..drain_up_to);
-                        already_written = keep;
+                        remainder.drain(..emit_end);
                     }
-                    let _ = stdout.flush();
                 }
                 Err(e) => {
                     eprintln!("warning: PTY read error: {}", e);
@@ -242,13 +264,12 @@ pub async fn run_command(
                 }
             }
         }
-        // Flush remaining partial line (including any overlap)
+        // PTY closed — flush any held-back overlap plus the trailing partial line.
         if !remainder.is_empty() {
-            let line = String::from_utf8_lossy(&remainder);
-            let redacted = redact(&line, &secrets_clone);
-            let redacted_bytes = redacted.as_bytes();
-            let skip = already_written.min(redacted_bytes.len());
-            let _ = stdout.write_all(&redacted_bytes[skip..]);
+            let tail = String::from_utf8_lossy(&remainder);
+            let mut redacted = redact(&tail, &secrets_clone);
+            mask_secret_suffix_at_start(&mut redacted, &secrets_clone);
+            let _ = stdout.write_all(redacted.as_bytes());
             let _ = stdout.flush();
         }
     });
