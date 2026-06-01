@@ -42,11 +42,19 @@ const PANEL_BG: Color = Color {
     g: 154,
     b: 50,
 };
-/// Quick-start line that replaces the redundant "(c) ..." credit slot —
-/// the MIT block below already carries the copyright. Kept to one line so
-/// the panel doesn't grow; full guidance is `dotsec --help`.
-const QUICK_START: &str =
-    "Quick start:  dotsec set API_KEY sk-...  ·  dotsec run -- node app  ·  dotsec --help";
+/// Quick-start commands shown above the MIT license block. Two flavours:
+/// the local provider (zero config) and AWS KMS (for teams already on AWS).
+/// Empty strings render as blank rows for vertical breathing room.
+const QUICK_START_LINES: &[&str] = &[
+    "Quick start (local — zero config):",
+    "  dotsec set API_KEY sk-live-...        # encrypt + commit",
+    "  dotsec run -- node server.js          # decrypt → inject env",
+    "",
+    "Quick start (AWS KMS):",
+    "  dotsec init                           # pick aws, set key + region",
+    "  dotsec set API_KEY sk-live-... --push aws-ssm",
+    "  dotsec push                           # mirror @push entries to SSM",
+];
 const QUICK_START_FG: Color = Color { r: 40, g: 30, b: 8 };
 const LICENSE_FG: Color = Color { r: 40, g: 30, b: 8 };
 const PAD_X: usize = 4;
@@ -206,14 +214,19 @@ impl DotsecPoster {
             LICENSE_TEXT.lines().map(|l| l.chars().collect()).collect();
         let license_w = license_lines.iter().map(|l| l.len()).max().unwrap_or(0);
         let license_h = license_lines.len();
-        let credit_w = QUICK_START.chars().count();
+        let quick_start_w = QUICK_START_LINES
+            .iter()
+            .map(|l| l.chars().count())
+            .max()
+            .unwrap_or(0);
+        let quick_start_h = QUICK_START_LINES.len();
 
-        let content_w = logo_w.max(credit_w).max(license_w);
+        let content_w = logo_w.max(quick_start_w).max(license_w);
         let panel_w = content_w + 2 * PAD_X;
         let panel_h = PAD_TOP
             + logo_h
             + GAP_LOGO_QUICK_START
-            + 1
+            + quick_start_h
             + GAP_QUICK_START_LICENSE
             + license_h
             + PAD_BOTTOM;
@@ -223,7 +236,7 @@ impl DotsecPoster {
         let quick_start_x = PAD_X;
         let quick_start_y = logo_y + logo_h + GAP_LOGO_QUICK_START;
         let license_x = PAD_X;
-        let license_y = quick_start_y + 1 + GAP_QUICK_START_LICENSE;
+        let license_y = quick_start_y + quick_start_h + GAP_QUICK_START_LICENSE;
 
         let palette =
             gradient(&["#000000", "#000000", "#806014", "#000000", "#000000"]).palette(128);
@@ -335,15 +348,20 @@ impl Effect for DotsecPoster {
             }
         }
 
-        // Quick-start line — fades in as the logo scramble fades out, so it
-        // resolves to readable text right when the logo settles.
+        // Quick-start block — each line on its own row. Fades in as the logo
+        // scramble fades out, so it resolves to readable text right when the
+        // logo settles. Empty lines (used for vertical spacing) render as
+        // panel background.
         let qs_alpha = (1.0 - scramble).clamp(0.0, 1.0);
         let qs_color = Color::lerp_rgb(PANEL_BG, QUICK_START_FG, qs_alpha);
-        for (i, ch) in QUICK_START.chars().enumerate() {
-            let Some((bx, by)) = to_buf(self.quick_start_x + i, self.quick_start_y) else {
-                continue;
-            };
-            buf.set(bx, by, Cell::with_bg(ch, qs_color, PANEL_BG));
+        for (row, line) in QUICK_START_LINES.iter().enumerate() {
+            for (i, ch) in line.chars().enumerate() {
+                let Some((bx, by)) = to_buf(self.quick_start_x + i, self.quick_start_y + row)
+                else {
+                    continue;
+                };
+                buf.set(bx, by, Cell::with_bg(ch, qs_color, PANEL_BG));
+            }
         }
 
         // License typewriter — starts after type_start.
