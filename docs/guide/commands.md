@@ -14,7 +14,7 @@ dotsec set RUNTIME_ONLY_VAR <value> --push aws-ssm              # @push only —
 dotsec set SHARED_VAR <value> --push aws-ssm --also-env         # @push + @also-env — pushed AND in local env
 ```
 
-Flags: `--encrypt` / `--plaintext` to control encryption, `--type <TYPE>` for the `@type` directive (`string`, `number`, `boolean`, `enum(...)`), `--push <TARGET>` for the `@push` directive (`aws-ssm`, `aws-secrets-manager`), `--also-env` to pair with `--push` so the value is also available via `dotsec run` / `dotsec export` (otherwise v6 excludes push-only entries from env), `-y/--yes` to skip directive prompts.
+Flags: `--encrypt` / `--plaintext` to control encryption, `--type <TYPE>` for the `@type` directive (`string`, `number`, `boolean`, `enum(...)`), `--push <TARGET>` for the `@push` directive (`aws-ssm`, `aws-secrets-manager`), `--also-env` to pair with `--push` so the value is also available via `dotsec run` / `dotsec export` (otherwise v6 excludes push-only entries from env), `-y/--yes` to skip directive prompts, `--no-gitignore` to skip the first-run auto-add of `*.key` to `.gitignore` (see [Setup](/guide/setup#sec-key-is-auto-gitignored)).
 
 When you go through the interactive prompts (`dotsec set` with no value, or with `--push` and no `-y`), choosing a push target triggers a follow-up "Also inject into local env?" prompt — default no, matching the v6 push-only semantics.
 
@@ -33,10 +33,13 @@ When a `dotsec.schema` file exists:
 Interactive setup for an existing project with a specific encryption provider:
 
 ```bash
-dotsec init    # prompts for provider (local or aws), config, and defaults
+dotsec init                    # prompts for provider (local or aws), config, and defaults
+dotsec init --no-gitignore     # skip auto-adding *.key to .gitignore
 ```
 
 For most projects, `dotsec set` on a new file handles this automatically. Use `init` when you need AWS KMS or want explicit control over the config.
+
+Flags: `--no-gitignore` (same semantics as on `dotsec set` — skip auto-`.gitignore` of the generated keypair file; see [Setup](/guide/setup#sec-key-is-auto-gitignored)).
 
 ## `dotsec import`
 
@@ -50,7 +53,7 @@ dotsec import -y               # auto-accept with heuristic type detection
 
 If `.sec` already exists, offers: import new variables only, overwrite all, or cancel. Source `.env` directives pre-populate the prompts as defaults.
 
-The `-y` flag skips per-variable prompts only. Config prompts (provider, key, region) still appear if `.sec` doesn't exist yet.
+The `-y` flag skips per-variable prompts. If `.sec` doesn't exist yet, config (provider, key, region) is taken from the source `.env`'s directives when present, else defaults are used silently — `-y` never falls back to interactive prompts.
 
 ## `dotsec export`
 
@@ -133,11 +136,12 @@ Reports: missing keys, extra keys, directive mismatches, ordering differences, a
 
 ## `dotsec extract-schema`
 
-Extract per-key directives from a `.sec` file into a `dotsec.schema` file. This is the migration path from a single `.sec` file to a multi-environment setup.
+Extract per-key directives from a `.sec` file into a `dotsec.schema` file. This is the migration path from a single `.sec` file to a multi-environment setup. Also available as `dotsec eject` (alias).
 
 ```bash
 dotsec extract-schema                    # creates dotsec.schema, strips directives from .sec
 dotsec extract-schema --output my.schema # custom output path
+dotsec eject                             # same as `dotsec extract-schema`
 ```
 
 What it does:
@@ -236,13 +240,9 @@ Zero runtime dependencies — the generated code is the validator.
 
 JSON Schema output maps all directive types: `@type` → JSON Schema types, `@format` → formats, `@pattern` → pattern, `@min`/`@max` → minimum/maximum, `@optional` → omitted from required, `@deprecated` → deprecated flag.
 
-## `dotsec license`
+## No subcommand
 
-Show the dotsec license:
-
-```bash
-dotsec license
-```
+Running `dotsec` with no subcommand renders a brand poster: the `.sec` wordmark, quick-start commands for both the local and AWS providers, and the full MIT license text. There is no separate `dotsec license` subcommand — the poster is the license screen.
 
 ## Global options
 

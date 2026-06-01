@@ -37,11 +37,6 @@ import { Tabs, Tab } from '@rspress/core/theme';
 
     Each script gets the decrypted env vars injected — no `.env` to source. CI gets `DOTSEC_PRIVATE_KEY` (local provider) or the right IAM role (AWS provider) and everything else works the same.
   </Tab>
-  <Tab label="cargo">
-    ```bash
-    cargo install dotsec
-    ```
-  </Tab>
   <Tab label="npx (one-shot)">
     No install — `npx` pulls and runs the latest:
 
@@ -50,6 +45,8 @@ import { Tabs, Tab } from '@rspress/core/theme';
     ```
   </Tab>
 </Tabs>
+
+> Distribution is npm-only. The obvious crate names on crates.io (`dotsec`, `crypto`, `dotenv`, `aws`) are owned by unrelated projects, so `cargo install` isn't available. The npm package ships a native per-platform binary.
 
 Verify the install:
 

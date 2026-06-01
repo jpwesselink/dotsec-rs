@@ -8,9 +8,9 @@ dotsec encrypts your secrets into a `.sec` file — committed alongside your cod
 
 ```bash
 npm install -g dotsec
-# or
-cargo install dotsec
 ```
+
+Distribution is npm-only (the obvious crate names on crates.io are owned by unrelated projects, so dotsec ships as a binary inside the npm package). See [setup](https://jpwesselink.github.io/dotsec-rs/v6.0.0/guide/setup) for `npx` and dev-dependency install patterns.
 
 ## Quick start
 
@@ -98,8 +98,7 @@ aws/               AWS KMS encryption (internal)
 |---------|---------|---------|
 | `latest` | Release PR merge | `npm install dotsec` |
 | `beta` | Every commit on `main` | `npm install dotsec@beta` |
-| `pr-N` | Every PR commit | `npm install dotsec@pr-42` |
-| crates.io | Release PR merge | `cargo install dotsec` |
+| `<branch-slug>` | Every PR commit | `npm install dotsec@<branch-slug>` |
 
 ---
 

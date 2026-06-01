@@ -33,17 +33,14 @@ Encryption uses age (X25519 + ChaCha20-Poly1305) by default. AWS KMS is also sup
 
     See [Setup → Install](/guide/setup#install) for the full pattern.
   </Tab>
-  <Tab label="cargo">
-    ```bash
-    cargo install dotsec
-    ```
-  </Tab>
   <Tab label="npx (one-shot)">
     ```bash
     npx dotsec set API_KEY sk-live-xxx
     ```
   </Tab>
 </Tabs>
+
+> Distribution is npm-only. The obvious crate names on crates.io (`dotsec`, `crypto`, `dotenv`, `aws`) are owned by unrelated projects, so `cargo install` isn't available. The `dotsec` npm package bundles a per-platform native binary.
 
 ## Quick start
 
@@ -232,10 +229,13 @@ for err in &errors {
 
 ## Channels
 
-| Channel | npm | Cargo |
-|---------|-----|-------|
-| Stable | `npm install dotsec` | `cargo install dotsec` |
-| Beta | `npm install dotsec@beta` | — |
+| Channel | When it updates | Install |
+|---------|-----------------|---------|
+| `latest` | Each release | `npm install -g dotsec` |
+| `beta` | Every commit on `main` | `npm install -g dotsec@beta` |
+| `<branch-slug>` | Every PR commit | `npm install -g dotsec@<branch-slug>` |
+
+All distribution is npm-only — see the note in [Install](#install) above.
 
 ## Project structure
 
