@@ -100,7 +100,7 @@ fn open_temp_write(tmp: &std::path::Path) -> std::io::Result<std::fs::File> {
 fn header_version() -> &'static str {
     let v = env!("CARGO_PKG_VERSION");
     // Split on '-' or '+' (semver prerelease / build separators) and take the head.
-    match v.find(|c: char| c == '-' || c == '+') {
+    match v.find(['-', '+']) {
         Some(idx) => &v[..idx],
         None => v,
     }
@@ -768,7 +768,7 @@ mod tests {
         let header = generate_header();
         // Same stripping rule as the impl: drop anything after '-' or '+'.
         let raw = env!("CARGO_PKG_VERSION");
-        let expected_version = match raw.find(|c: char| c == '-' || c == '+') {
+        let expected_version = match raw.find(['-', '+']) {
             Some(i) => &raw[..i],
             None => raw,
         };

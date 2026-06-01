@@ -5,10 +5,12 @@ use std::future::Future;
 /// Run an async operation with a dark_n_stormy glow animation as progress indicator.
 /// When done, the label fades to the terminal's foreground color.
 pub async fn with_progress<T>(label: &str, fut: impl Future<Output = T>) -> T {
-    let anim = chromakopia::animate::glow(chromakopia::presets::dark_n_stormy(), label, 1.0);
+    use chromakopia::animate::Glow;
+    let palette = chromakopia::presets::dark_n_stormy().palette(256);
+    let anim = Glow::on(label).palette(palette).spawn();
     let result = fut.await;
-    anim.fade_to_foreground(std::time::Duration::from_millis(400))
-        .await;
+    anim.fade_out_to(chromakopia::fg_color(), 0.4);
+    anim.wait().await;
     result
 }
 

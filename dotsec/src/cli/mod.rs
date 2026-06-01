@@ -1,52 +1,26 @@
 use self::commands::{
-    create_command, diff, eject, export, format, header, import, init, license, migrate, push,
+    create_command, diff, eject, export, format, header, import, init, migrate, push,
     remove_directives, rotate_key, run, schema, set, show, validate,
 };
 use crate::default_options::DefaultOptions;
 use dotsec::EncryptionEngine;
 use log::debug;
 use std::error::Error;
-use std::time::Duration;
 
 pub mod commands;
 pub mod helpers;
-
-const BANNER: &str = r#"       __      __
-  ____/ /___  / /_________  _____
- / __  / __ \/ __/ ___/ _ \/ ___/
-/ /_/ / /_/ / /_(__  )  __/ /__
-\__,_/\____/\__/____/\___/\___/"#;
-
-async fn show_banner() {
-    use chromakopia::{animate, presets};
-
-    // Print ASCII art banner with static dark_n_stormy gradient
-    println!("{}", presets::dark_n_stormy().multiline(BANNER));
-    println!();
-
-    // Animate tagline with mist glow below
-    animate::Sequence::new("  Your .env, encrypted and version-controlled.")
-        .glow(presets::mist(), Duration::from_secs(3))
-        .fade_to_foreground(Duration::from_millis(500))
-        .run(1.0)
-        .await;
-
-    println!();
-    println!("  Run `dotsec --help` for usage.");
-    println!();
-}
+mod poster;
 
 pub async fn parse_args() -> Result<(), Box<dyn Error>> {
     let command = create_command();
     let matches = command.get_matches();
 
-    // No subcommand — show animated banner
+    // No subcommand — render the brand poster (logo, quick start, license).
     if matches.subcommand_name().is_none() {
-        show_banner().await;
+        poster::show().await;
         return Ok(());
     }
 
-    let is_license = matches.subcommand_matches("license").is_some();
     let is_init = matches.subcommand_matches("init").is_some();
     let is_import = matches.subcommand_matches("import").is_some();
     let is_migrate = matches.subcommand_matches("migrate").is_some();
@@ -84,7 +58,6 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
         || is_schema
         || is_run_env
         || is_set
-        || is_license
     {
         debug!(
             "{} does not exist yet or not needed, using defaults",
@@ -119,7 +92,6 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
     header::match_args(&matches, &default_options).await?;
     remove_directives::match_args(&matches, &default_options).await?;
     schema::match_args(&matches, &default_options).await?;
-    license::match_args(&matches, &default_options).await?;
 
     Ok(())
 }
