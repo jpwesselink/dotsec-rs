@@ -69,7 +69,26 @@ This creates:
 - `.sec` — your encrypted secrets file (commit this)
 - `.sec.key` — your age private key (never commit this)
 
-`.sec.key` is auto-added to `.gitignore` the first time `dotsec set` or `dotsec init` generates a keypair: if no `.gitignore` exists in a git repo, one is created with `*.key`; if it already exists without that pattern, `*.key` is appended. Pass `--no-gitignore` to opt out (you take responsibility for excluding the file then). Nothing happens outside a git repo.
+### `.sec.key` is auto-`.gitignore`d
+
+The first time `dotsec set` or `dotsec init` generates a keypair, it makes sure `.sec.key` is excluded from git. The exact action depends on what it finds in the directory:
+
+| Existing state | What dotsec does |
+|---|---|
+| `.gitignore` exists, no `*.key` rule | **Appends** `*.key` to the file (preserving every existing rule) |
+| `.gitignore` missing, inside a git repo | **Creates** `.gitignore` with `# Added by dotsec` + `*.key` |
+| `.gitignore` already excludes `*.key` (or `.sec.key` / `**/*.key`) | Silent no-op — nothing to do |
+| Not in a git repo | Skip with an info note — creating a `.gitignore` here would be presumptuous |
+| `--no-gitignore` passed on `set` / `init` | Skip with an explicit reminder that exclusion is now your responsibility |
+
+The pattern is `*.key` (not just `.sec.key`) because once you start using multiple environments — `prod.sec.key`, `staging.sec.key`, `local.sec.key` — a narrower rule would silently leak the ones it doesn't match.
+
+```bash
+dotsec set API_KEY sk-live-xxx                 # auto-adds *.key
+dotsec set API_KEY sk-live-xxx --no-gitignore  # opt out, no .gitignore touched
+```
+
+If anything fails (read-only filesystem, permission issues), dotsec logs a warning and keeps going — committing the key file is ultimately your call.
 
 ## Team sharing
 
