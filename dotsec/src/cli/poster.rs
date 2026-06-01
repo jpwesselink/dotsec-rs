@@ -47,12 +47,12 @@ const PANEL_BG: Color = Color {
 /// Empty strings render as blank rows for vertical breathing room.
 const QUICK_START_LINES: &[&str] = &[
     "Quick start (local — zero config):",
-    "  dotsec set API_KEY sk-live-...",
+    "  dotsec set <KEY> <VALUE>",
     "  dotsec run -- node server.js",
     "",
     "Quick start (AWS KMS):",
     "  dotsec init",
-    "  dotsec set API_KEY sk-live-... --push aws-ssm",
+    "  dotsec set <KEY> <VALUE> --push aws-ssm",
     "  dotsec push",
 ];
 const QUICK_START_FG: Color = Color { r: 40, g: 30, b: 8 };

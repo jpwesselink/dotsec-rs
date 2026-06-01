@@ -1,20 +1,28 @@
-use clap::Command;
+use clap::{Arg, ArgAction, Command};
 use colored::Colorize;
 
 use crate::cli::helpers;
 use crate::default_options::DefaultOptions;
 
 pub fn command() -> Command {
-    Command::new("init").about("Initialize a .sec file with encryption config")
+    Command::new("init")
+        .about("Initialize a .sec file with encryption config")
+        .arg(
+            Arg::new("no-gitignore")
+                .long("no-gitignore")
+                .action(ArgAction::SetTrue)
+                .help("Skip auto-adding *.key to .gitignore"),
+        )
 }
 
 pub async fn match_args(
     matches: &clap::ArgMatches,
     default_options: &DefaultOptions<'_>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if matches.subcommand_matches("init").is_none() {
-        return Ok(());
-    }
+    let sub = match matches.subcommand_matches("init") {
+        Some(m) => m,
+        None => return Ok(()),
+    };
 
     let sec_file = default_options.sec_file;
 
@@ -84,20 +92,10 @@ pub async fn match_args(
             let (identity, _) = crypto::local::generate_keypair();
             dotsec::write_sec_file(&key_file, &format!("{}\n", identity))?;
             println!("{} Created {}", "✓".green(), key_file);
-
-            let gitignore_path = std::path::Path::new(sec_file)
-                .parent()
-                .unwrap_or(std::path::Path::new("."))
-                .join(".gitignore");
-            let has_key_pattern = std::fs::read_to_string(&gitignore_path)
-                .map(|c| c.lines().any(|l| l.trim() == "*.key" || l.contains(".key")))
-                .unwrap_or(false);
-            if !has_key_pattern {
-                eprintln!(
-                    "{} Add *.key to .gitignore to avoid committing private keys",
-                    "⚠".yellow().bold()
-                );
-            }
+            helpers::ensure_keyfile_gitignored(
+                std::path::Path::new(&key_file),
+                sub.get_flag("no-gitignore"),
+            );
         }
     }
 

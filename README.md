@@ -20,7 +20,7 @@ dotsec set PORT 3000                       # plaintext variable
 dotsec run -- node server.js               # inject decrypted vars into your process
 ```
 
-That's it. `.sec` goes into git. `.sec.key` stays out — add `*.key` to `.gitignore` yourself; dotsec warns if you forget.
+That's it. `.sec` goes into git. `.sec.key` stays out — `dotsec set`/`init` auto-adds `*.key` to `.gitignore` on first run (`--no-gitignore` to skip).
 
 No AWS account. No config file. No setup step.
 

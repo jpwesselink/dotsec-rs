@@ -1,6 +1,133 @@
 use colored::Colorize;
 use inquire::{Confirm, Select, Text};
 use std::future::Future;
+use std::path::{Path, PathBuf};
+
+/// Whether `start` (or any ancestor) contains a `.git` directory or file.
+fn in_git_repo(start: &Path) -> bool {
+    // Walk up from `start` looking for a `.git` entry. `.git` is usually a directory
+    // but can be a file in worktrees / submodules — both count as "inside a repo".
+    let mut cur: PathBuf = if start.as_os_str().is_empty() {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    } else {
+        start.to_path_buf()
+    };
+    if cur.is_relative() {
+        if let Ok(cwd) = std::env::current_dir() {
+            cur = cwd.join(cur);
+        }
+    }
+    loop {
+        if cur.join(".git").exists() {
+            return true;
+        }
+        if !cur.pop() {
+            return false;
+        }
+    }
+}
+
+/// Ensure the `.gitignore` near `key_file` excludes `*.key`. Creates `.gitignore` if
+/// missing (only when we're inside a git repo). Appends `*.key` if existing but
+/// missing the pattern. No-op when already covered, when `skip` is true, or when
+/// the path is outside a git repo (creating one there would be presumptuous).
+///
+/// Prints a one-line status. Failures are reported but never fatal — committing the
+/// key file is the user's call.
+pub fn ensure_keyfile_gitignored(key_file: &Path, skip: bool) {
+    if skip {
+        eprintln!(
+            "{} Skipping .gitignore update (--no-gitignore). Make sure {} is excluded.",
+            "ℹ".blue(),
+            key_file.display()
+        );
+        return;
+    }
+
+    let dir = key_file
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let gitignore_path = dir.join(".gitignore");
+
+    // Already excluded?
+    let existing = std::fs::read_to_string(&gitignore_path).ok();
+    if let Some(ref c) = existing {
+        let already = c.lines().any(|l| {
+            let t = l.trim();
+            t == "*.key" || t == ".sec.key" || t == "**/*.key"
+        });
+        if already {
+            return;
+        }
+    }
+
+    match existing {
+        Some(content) => {
+            // Append `*.key` to the existing file.
+            use std::io::Write;
+            let mut file = match std::fs::OpenOptions::new()
+                .append(true)
+                .open(&gitignore_path)
+            {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!(
+                        "{} Couldn't update {}: {}. Add `*.key` manually.",
+                        "⚠".yellow().bold(),
+                        gitignore_path.display(),
+                        e
+                    );
+                    return;
+                }
+            };
+            let mut to_write = String::new();
+            if !content.ends_with('\n') {
+                to_write.push('\n');
+            }
+            to_write.push_str("*.key\n");
+            if let Err(e) = file.write_all(to_write.as_bytes()) {
+                eprintln!(
+                    "{} Couldn't write to {}: {}. Add `*.key` manually.",
+                    "⚠".yellow().bold(),
+                    gitignore_path.display(),
+                    e
+                );
+                return;
+            }
+            eprintln!(
+                "{} Added `*.key` to {}",
+                "✓".green(),
+                gitignore_path.display()
+            );
+        }
+        None => {
+            // No .gitignore yet — only create one if we're actually inside a git repo.
+            if !in_git_repo(dir) {
+                eprintln!(
+                    "{} No .gitignore found and not in a git repo — skipping. Make sure {} is excluded if you commit later.",
+                    "ℹ".blue(),
+                    key_file.display()
+                );
+                return;
+            }
+            if let Err(e) = std::fs::write(&gitignore_path, "# Added by dotsec\n*.key\n") {
+                eprintln!(
+                    "{} Couldn't create {}: {}. Add `*.key` manually.",
+                    "⚠".yellow().bold(),
+                    gitignore_path.display(),
+                    e
+                );
+                return;
+            }
+            eprintln!(
+                "{} Created {} excluding `*.key`",
+                "✓".green(),
+                gitignore_path.display()
+            );
+        }
+    }
+}
 
 /// Run an async operation with a dark_n_stormy glow animation as progress indicator.
 /// When done, the label fades to the terminal's foreground color.

@@ -47,6 +47,12 @@ pub fn command() -> Command {
                 .action(clap::ArgAction::SetTrue)
                 .help("Accept auto-detected type and encryption (skip directive prompts)"),
         )
+        .arg(
+            Arg::new("no-gitignore")
+                .long("no-gitignore")
+                .action(clap::ArgAction::SetTrue)
+                .help("Skip auto-adding *.key to .gitignore on first-run keypair generation"),
+        )
 }
 
 pub async fn match_args(
@@ -86,20 +92,10 @@ pub async fn match_args(
             let (identity, _) = crypto::local::generate_keypair();
             dotsec::write_sec_file(&key_file, &format!("{}\n", identity))?;
             eprintln!("{} Created {}", "✓".green(), key_file);
-
-            let gitignore_path = std::path::Path::new(sec_file)
-                .parent()
-                .unwrap_or(std::path::Path::new("."))
-                .join(".gitignore");
-            let has_key_pattern = std::fs::read_to_string(&gitignore_path)
-                .map(|c| c.lines().any(|l| l.trim() == "*.key" || l.contains(".key")))
-                .unwrap_or(false);
-            if !has_key_pattern {
-                eprintln!(
-                    "{} Add *.key to .gitignore to avoid committing private keys",
-                    "⚠".yellow().bold()
-                );
-            }
+            helpers::ensure_keyfile_gitignored(
+                std::path::Path::new(&key_file),
+                sub.get_flag("no-gitignore"),
+            );
         }
 
         // Write initial .sec with header + local provider config
