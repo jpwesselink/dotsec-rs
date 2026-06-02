@@ -46,22 +46,27 @@ const PANEL_BG: Color = Color {
 /// the local provider (zero config) and AWS KMS (for teams already on AWS).
 /// Empty strings render as blank rows for vertical breathing room.
 const QUICK_START_LINES: &[&str] = &[
-    "Quick start (local — zero config):",
+    "Quick start with age (X25519 + ChaCha20-Poly1305, key file on disk):",
     "  dotsec set <KEY> <VALUE>",
     "  dotsec run -- node server.js",
     "",
-    "Quick start (AWS KMS):",
-    "  dotsec init",
-    "  dotsec set <KEY> <VALUE> --push aws-ssm",
-    "  dotsec push",
+    "Quick start with AWS KMS (IAM-controlled, CloudTrail-audited):",
+    "  dotsec init                # one-time: pick a KMS key + region",
+    "  dotsec set <KEY> <VALUE>",
+    "  dotsec run -- node server.js",
 ];
 const QUICK_START_FG: Color = Color { r: 40, g: 30, b: 8 };
 const LICENSE_FG: Color = Color { r: 40, g: 30, b: 8 };
+/// One-liner under the wordmark. The whole pitch in seven characters.
+const TAGLINE: &str = ".env without the .env";
+const TAGLINE_FG: Color = Color { r: 40, g: 30, b: 8 };
 const PAD_X: usize = 4;
 const PAD_TOP: usize = 2;
 const PAD_BOTTOM: usize = 2;
-/// Blank rows between logo and quick-start line.
-const GAP_LOGO_QUICK_START: usize = 1;
+/// Blank rows between logo and tagline.
+const GAP_LOGO_TAGLINE: usize = 1;
+/// Blank rows between tagline and quick-start.
+const GAP_TAGLINE_QUICK_START: usize = 1;
 /// Blank rows between quick-start and license.
 const GAP_QUICK_START_LICENSE: usize = 2;
 
@@ -181,11 +186,14 @@ struct DotsecPoster {
     logo_art: Vec<Vec<char>>,
     logo_w: usize,
     logo_h: usize,
+    tagline_chars: Vec<char>,
     license_lines: Vec<Vec<char>>,
     panel_w: usize,
     panel_h: usize,
     logo_x: usize,
     logo_y: usize,
+    tagline_x: usize,
+    tagline_y: usize,
     quick_start_x: usize,
     quick_start_y: usize,
     license_x: usize,
@@ -214,6 +222,8 @@ impl DotsecPoster {
             LICENSE_TEXT.lines().map(|l| l.chars().collect()).collect();
         let license_w = license_lines.iter().map(|l| l.len()).max().unwrap_or(0);
         let license_h = license_lines.len();
+        let tagline_chars: Vec<char> = TAGLINE.chars().collect();
+        let tagline_w = tagline_chars.len();
         let quick_start_w = QUICK_START_LINES
             .iter()
             .map(|l| l.chars().count())
@@ -221,20 +231,27 @@ impl DotsecPoster {
             .unwrap_or(0);
         let quick_start_h = QUICK_START_LINES.len();
 
-        let content_w = logo_w.max(quick_start_w).max(license_w);
+        let content_w = logo_w.max(tagline_w).max(quick_start_w).max(license_w);
         let panel_w = content_w + 2 * PAD_X;
         let panel_h = PAD_TOP
             + logo_h
-            + GAP_LOGO_QUICK_START
+            + GAP_LOGO_TAGLINE
+            + 1 // tagline is one line
+            + GAP_TAGLINE_QUICK_START
             + quick_start_h
             + GAP_QUICK_START_LICENSE
             + license_h
             + PAD_BOTTOM;
 
-        let logo_x = PAD_X;
+        // Center the logo + tagline within the content width. The
+        // quick-start and license blocks stay left-aligned (they read better
+        // that way).
+        let logo_x = PAD_X + content_w.saturating_sub(logo_w) / 2;
         let logo_y = PAD_TOP;
+        let tagline_y = logo_y + logo_h + GAP_LOGO_TAGLINE;
+        let tagline_x = PAD_X + content_w.saturating_sub(tagline_w) / 2;
         let quick_start_x = PAD_X;
-        let quick_start_y = logo_y + logo_h + GAP_LOGO_QUICK_START;
+        let quick_start_y = tagline_y + 1 + GAP_TAGLINE_QUICK_START;
         let license_x = PAD_X;
         let license_y = quick_start_y + quick_start_h + GAP_QUICK_START_LICENSE;
 
@@ -246,11 +263,14 @@ impl DotsecPoster {
             logo_art,
             logo_w,
             logo_h,
+            tagline_chars,
             license_lines,
             panel_w,
             panel_h,
             logo_x,
             logo_y,
+            tagline_x,
+            tagline_y,
             quick_start_x,
             quick_start_y,
             license_x,
@@ -348,12 +368,19 @@ impl Effect for DotsecPoster {
             }
         }
 
-        // Quick-start block — each line on its own row. Fades in as the logo
-        // scramble fades out, so it resolves to readable text right when the
-        // logo settles. Empty lines (used for vertical spacing) render as
-        // panel background.
+        // Tagline + Quick-start block — fade in as the logo scramble settles.
         let qs_alpha = (1.0 - scramble).clamp(0.0, 1.0);
         let qs_color = Color::lerp_rgb(PANEL_BG, QUICK_START_FG, qs_alpha);
+        let tagline_color = Color::lerp_rgb(PANEL_BG, TAGLINE_FG, qs_alpha);
+
+        // Tagline — single line, centered under the wordmark.
+        for (i, &ch) in self.tagline_chars.iter().enumerate() {
+            let Some((bx, by)) = to_buf(self.tagline_x + i, self.tagline_y) else {
+                continue;
+            };
+            buf.set(bx, by, Cell::with_bg(ch, tagline_color, PANEL_BG));
+        }
+
         for (row, line) in QUICK_START_LINES.iter().enumerate() {
             for (i, ch) in line.chars().enumerate() {
                 let Some((bx, by)) = to_buf(self.quick_start_x + i, self.quick_start_y + row)

@@ -30,7 +30,7 @@ pub async fn match_args(
 
     let lines = with_progress(
         "Decrypting...",
-        dotsec::decrypt_sec_to_lines(sec_file, encryption_engine),
+        dotsec::decrypt_sec_to_lines(sec_file, encryption_engine, &default_options.schema_hash),
     )
     .await?;
     // Filter out push-only entries so the exported plaintext matches what `dotsec run` would

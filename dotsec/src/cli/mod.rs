@@ -1,5 +1,5 @@
 use self::commands::{
-    create_command, diff, eject, export, format, header, import, init, migrate, push,
+    create_command, diff, eject, encrypt, export, format, header, import, init, migrate, push,
     remove_directives, rotate_key, run, schema, set, show, validate,
 };
 use crate::default_options::DefaultOptions;
@@ -43,6 +43,21 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
     let schema_path = dotenv::schema::discover_schema(sec_file, explicit_schema)?;
     debug!("schema_path: {:?}", schema_path);
 
+    // Hash the schema's *canonical* form for v3 file-MAC binding. We canonicalize
+    // before hashing so cosmetic edits (adding `@description`, reordering
+    // directives within an entry, reformatting whitespace) leave teammates'
+    // MACs valid. Only semantic changes — `@type`, `@encrypt`, `@push`,
+    // validation constraints, key add/remove — invalidate them.
+    // Missing schema ⇒ hash of empty bytes, a stable sentinel.
+    let schema_hash = match &schema_path {
+        Some(path) => {
+            let content = std::fs::read_to_string(path)?;
+            let schema = dotenv::parse_schema(&content)?;
+            crypto::mac::schema_hash(Some(&dotenv::schema_to_canonical_bytes(&schema)))
+        }
+        None => crypto::mac::schema_hash(None),
+    };
+
     // Read config from .sec file directives (if it exists)
     let encryption_engine = if std::path::Path::new(sec_file).exists() {
         let content = std::fs::read_to_string(sec_file)?;
@@ -74,10 +89,12 @@ pub async fn parse_args() -> Result<(), Box<dyn Error>> {
         encryption_engine,
         sec_file,
         schema_path,
+        schema_hash,
     };
 
     init::match_args(&matches, &default_options).await?;
     set::match_args(&matches, &default_options).await?;
+    encrypt::match_args(&matches, &default_options).await?;
     import::match_args(&matches, &default_options).await?;
     export::match_args(&matches, &default_options).await?;
     show::match_args(&matches, &default_options).await?;

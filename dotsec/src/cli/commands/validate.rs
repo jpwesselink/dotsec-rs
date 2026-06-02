@@ -19,7 +19,11 @@ pub async fn match_args(
         debug!("Decrypting {} for validation", sec_file);
         let lines = with_progress(
             "Decrypting...",
-            dotsec::decrypt_sec_to_lines(sec_file, &default_options.encryption_engine),
+            dotsec::decrypt_sec_to_lines(
+                sec_file,
+                &default_options.encryption_engine,
+                &default_options.schema_hash,
+            ),
         )
         .await?;
 

@@ -1,4 +1,3 @@
-use base64::Engine as _;
 pub use dotenv;
 use dotenv::{lines_to_entries, Line, Schema};
 
@@ -91,13 +90,15 @@ fn open_temp_write(tmp: &std::path::Path) -> std::io::Result<std::fs::File> {
 
 // --- Header ---
 
+pub mod header_v3;
+
 /// Version stamped into new `.sec` file headers — major.minor.patch derived from the
 /// crate's compile-time `CARGO_PKG_VERSION`. Prerelease and build-metadata suffixes
 /// are intentionally stripped so prereleases of the same line (eg
 /// `6.0.1-fix-foo.SHA`) stamp the same `6.0.1` and headers don't churn in git on
 /// every PR install. (`has_header` matches the bare `# dotsec v` prefix so headers
 /// stamped by older majors continue to be recognized.)
-fn header_version() -> &'static str {
+pub fn header_version() -> &'static str {
     let v = env!("CARGO_PKG_VERSION");
     // Split on '-' or '+' (semver prerelease / build separators) and take the head.
     match v.find(['-', '+']) {
@@ -136,20 +137,76 @@ pub fn parse_content(content: &str) -> Result<Vec<Line>, Box<dyn std::error::Err
 
 // --- Constants ---
 
-const DOTSEC_KEY_NAME: &str = "__DOTSEC_KEY__";
-const DOTSEC_V1_NAME: &str = "__DOTSEC__";
+/// User-facing copy for integrity verification failure. Plain English, no
+/// jargon. Phrased so running `dotsec encrypt` only sounds like the right
+/// call when the user actually changed something themselves.
+pub const MAC_FAILURE_MESSAGE: &str = "The .sec file has changed in a way \
+dotsec can't verify.\n\
+\n\
+Something an attacker could weaponize \u{2014} a directive, an ENC[\u{2026}] \
+value, the schema, or the set of entries in the file \u{2014} doesn't match \
+the integrity tag stored when the file was last written by dotsec.\n\
+\n\
+Two ways this happens:\n\
+\n\
+  1. You (or a teammate) hand-edited the file. Common cases that trip this:\n\
+       \u{2022} adding or removing a variable (encrypted or plaintext);\n\
+       \u{2022} renaming or reordering a variable;\n\
+       \u{2022} editing a directive on an *encrypted* entry (e.g. `@encrypt`,\n\
+         `@push`, `@key-id`, `@type`);\n\
+       \u{2022} editing an ENC[\u{2026}] payload or the schema file.\n\
+     To accept the new state, run:\n\
+\n\
+       dotsec encrypt\n\
+\n\
+     This refreshes the integrity tag against what's currently on disk. (Tip:\n\
+     prefer `dotsec set` for routine edits \u{2014} it re-MACs automatically.)\n\
+\n\
+  2. Someone tampered with the file. Running `dotsec encrypt` now would \
+silently bless the tamper. Restore from git or your last known good backup \
+and investigate before doing anything else.\n\
+\n\
+What DOESN'T trip this error:\n\
+  \u{2022} editing a plaintext value in place (e.g. `PORT=3000` \u{2192} `PORT=4000`);\n\
+  \u{2022} editing an inline directive on a *plaintext* entry (move the\n\
+    directive into `dotsec.schema` if you need integrity for it);\n\
+  \u{2022} reformatting whitespace or editing comments.\n\
+\n\
+If your edit was strictly one of those and you still see this message, \
+please report it as a bug.";
+
+/// Wrap a per-value `CryptoError` with the key name + a concrete recovery
+/// hint. Without this, a malformed `ENC[abc]c]`-style envelope bubbles up
+/// the raw `base64 decoding failed: Invalid byte 0x5d, offset 2` from the
+/// base64 crate, which is unactionable. The wrapped form names the key and
+/// points the user at the same recovery commands the MAC-failure message
+/// uses, since the user's likely next move is the same.
+fn wrap_decrypt_error(key: &str, err: crypto::CryptoError) -> Box<dyn std::error::Error> {
+    use crypto::CryptoError;
+    match &err {
+        CryptoError::DecodeError(_) | CryptoError::InvalidFormat => format!(
+            "Couldn't decrypt {key}: its ENC[\u{2026}] envelope is malformed ({err}).\n\
+\n\
+This usually means the file was hand-edited inside the ENC[\u{2026}] payload \
+or partially corrupted. Either restore the file from git (preferred — the \
+on-disk ciphertext is unrecoverable as-is) or, if you intentionally cleared \
+the value, run `dotsec set {key} <new-value>` to write a fresh ciphertext."
+        )
+        .into(),
+        _ => format!("Couldn't decrypt {key}: {err}").into(),
+    }
+}
 
 // --- Format detection ---
 
-/// Detect whether a .sec file uses v1 (blob) or v2 (per-value) format.
+/// Classify a .sec file by its envelope. Used to decide whether to write a
+/// fresh file (None), refuse to overwrite (Unparseable), or preserve the
+/// existing `#!dotsec` header on re-encrypt.
 fn detect_format(lines: &[Line]) -> SecFormat {
     for line in lines {
-        if let Line::Kv { key, .. } = line {
-            if key == DOTSEC_KEY_NAME {
-                return SecFormat::V2;
-            }
-            if key == DOTSEC_V1_NAME {
-                return SecFormat::V1;
+        if let Line::Comment { text } = line {
+            if header_v3::HeaderV3::is_header_line(text) {
+                return SecFormat::Recognized;
             }
         }
     }
@@ -158,12 +215,75 @@ fn detect_format(lines: &[Line]) -> SecFormat {
 
 #[derive(Debug, PartialEq)]
 enum SecFormat {
-    V1,   // Old blob format with __DOTSEC__
-    V2,   // New per-value format with __DOTSEC_KEY__
-    None, // No encryption markers
+    Recognized,  // Has a `#!dotsec` header — proper dotsec file
+    None,        // No encryption markers (new file)
+    Unparseable, // File exists but couldn't be parsed — refuse to write rather than silently bump
 }
 
-// --- Encrypt (v2) ---
+// --- Encrypt ---
+
+/// Merge schema-owned directives into a list of entries so the caller sees
+/// `@encrypt`/`@plaintext` (and `@type`, `@push`, …) even when they live in
+/// `dotsec.schema` rather than inline on the entry.
+///
+/// Conflict resolution:
+/// - Inline `@encrypt`/`@plaintext` on an entry win as a pair: if either is
+///   set, both are skipped from the schema so the user's local override sticks.
+/// - Other directives: only added when the entry doesn't already have them.
+/// - Schema-level `@default-encrypt` applies when the entry has no
+///   inline-or-schema `@encrypt`/`@plaintext` decision yet.
+///
+/// **Use this in any command that re-encrypts** — `rotate-key`, `dotsec
+/// encrypt`, etc. Skipping the merge causes a plaintext leak: a value that's
+/// encrypted via schema-only `@encrypt` would otherwise be treated as
+/// plaintext and re-written without encryption.
+pub fn merge_schema_directives_into_entries(
+    entries: &mut [dotenv::Entry],
+    schema: Option<&Schema>,
+) {
+    let Some(schema) = schema else {
+        return;
+    };
+    let schema_default_encrypt: Option<bool> = schema
+        .iter()
+        .flat_map(|(_, e)| e.directives.iter())
+        .find_map(|(name, _)| match name.as_str() {
+            "default-encrypt" => Some(true),
+            "default-plaintext" => Some(false),
+            _ => None,
+        });
+
+    for entry in entries.iter_mut() {
+        let inline_encryption_override = entry
+            .directives
+            .iter()
+            .any(|(n, _)| n == "encrypt" || n == "plaintext");
+
+        if let Some(schema_entry) = schema.get(&entry.key) {
+            for (name, value) in &schema_entry.directives {
+                if name == "default-encrypt" || name == "default-plaintext" {
+                    continue;
+                }
+                if (name == "encrypt" || name == "plaintext") && inline_encryption_override {
+                    continue;
+                }
+                if !entry.directives.iter().any(|(n, _)| n == name) {
+                    entry.directives.push((name.clone(), value.clone()));
+                }
+            }
+        }
+        if !inline_encryption_override
+            && !entry
+                .directives
+                .iter()
+                .any(|(n, _)| n == "encrypt" || n == "plaintext")
+        {
+            if let Some(true) = schema_default_encrypt {
+                entry.directives.push(("encrypt".to_string(), None));
+            }
+        }
+    }
+}
 
 /// Encrypt in-memory lines and write the result to a .sec file.
 ///
@@ -178,54 +298,7 @@ pub async fn encrypt_lines_to_sec(
     schema: Option<&Schema>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut entries = lines_to_entries(lines);
-
-    // Merge schema-owned directives so the encrypt path sees @encrypt/@plaintext even
-    // when they live in dotsec.schema rather than inline. Inline directives win on conflict.
-    // Also honors a schema-level @default-encrypt (parse_schema attaches file-level
-    // directives to entries; we surface them here as a global default).
-    if let Some(schema) = schema {
-        let schema_default_encrypt: Option<bool> = schema
-            .iter()
-            .flat_map(|(_, e)| e.directives.iter())
-            .find_map(|(name, _)| match name.as_str() {
-                "default-encrypt" => Some(true),
-                "default-plaintext" => Some(false),
-                _ => None,
-            });
-
-        for entry in &mut entries {
-            // Inline @encrypt/@plaintext on the entry win as a pair — if either is set,
-            // skip both from the schema so the user's local override sticks.
-            let inline_encryption_override = entry
-                .directives
-                .iter()
-                .any(|(n, _)| n == "encrypt" || n == "plaintext");
-
-            if let Some(schema_entry) = schema.get(&entry.key) {
-                for (name, value) in &schema_entry.directives {
-                    if name == "default-encrypt" || name == "default-plaintext" {
-                        continue;
-                    }
-                    if (name == "encrypt" || name == "plaintext") && inline_encryption_override {
-                        continue;
-                    }
-                    if !entry.directives.iter().any(|(n, _)| n == name) {
-                        entry.directives.push((name.clone(), value.clone()));
-                    }
-                }
-            }
-            if !inline_encryption_override
-                && !entry
-                    .directives
-                    .iter()
-                    .any(|(n, _)| n == "encrypt" || n == "plaintext")
-            {
-                if let Some(true) = schema_default_encrypt {
-                    entry.directives.push(("encrypt".to_string(), None));
-                }
-            }
-        }
-    }
+    merge_schema_directives_into_entries(&mut entries, schema);
 
     let (dek, wrapped_dek) = match encryption_engine {
         EncryptionEngine::Aws(opts) => {
@@ -263,7 +336,17 @@ pub async fn encrypt_lines_to_sec(
         EncryptionEngine::None => return Err("Encryption engine is required".into()),
     };
 
-    encrypt_with_dek(lines, &entries, &dek, &wrapped_dek, sec_file)
+    // Derive the schema hash inside the encrypt path from the schema we just
+    // merged. Doing this here (vs. as a separate caller-supplied parameter)
+    // prevents the class of bugs where the caller passes a startup-computed
+    // hash that's now stale because the same caller just modified the schema
+    // mid-flight (extract-schema, migrate). One source of truth.
+    let schema_hash = match schema {
+        Some(s) => crypto::mac::schema_hash(Some(&dotenv::schema_to_canonical_bytes(s))),
+        None => crypto::mac::schema_hash(None),
+    };
+
+    encrypt_with_dek(lines, &entries, &dek, &wrapped_dek, sec_file, &schema_hash)
 }
 
 #[allow(clippy::borrowed_box)]
@@ -271,22 +354,34 @@ fn is_new_or_no_key(e: &Box<dyn std::error::Error>) -> bool {
     let is_new_file = e
         .downcast_ref::<std::io::Error>()
         .is_some_and(|io_err| io_err.kind() == std::io::ErrorKind::NotFound);
-    let is_no_key = e.to_string().contains("No __DOTSEC_KEY__ found");
+    let is_no_key = e.to_string().contains("No #!dotsec header found");
     is_new_file || is_no_key
 }
 
 /// Inner encryption logic, separated so the caller can zeroize the DEK.
+///
+/// Refuses to overwrite a file that exists but doesn't parse — we'd lose the
+/// user's in-progress bytes. Reads the on-disk file (not the caller's
+/// in-memory `lines`) to make that determination, since callers pass
+/// post-decryption lines that have had the header stripped.
 fn encrypt_with_dek(
     lines: &[Line],
     entries: &[dotenv::Entry],
     dek: &[u8],
     wrapped_dek: &[u8],
     sec_file: &str,
+    schema_hash: &[u8; 32],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let wrapped_dek_b64 = base64::engine::general_purpose::STANDARD.encode(wrapped_dek);
+    if select_target_format(sec_file) == SecFormat::Unparseable {
+        return Err(format!(
+            "Cannot write {sec_file}: the existing file exists but doesn't parse as a \
+             dotenv-style file. Fix the syntax (or remove the file if you intended to \
+             start fresh) before re-running."
+        )
+        .into());
+    }
 
     let mut sec_lines: Vec<Line> = Vec::new();
-    let mut has_key_line = false;
 
     for line in lines {
         match line {
@@ -295,20 +390,6 @@ fn encrypt_with_dek(
                 value,
                 quote_type,
             } => {
-                if key == DOTSEC_KEY_NAME {
-                    sec_lines.push(Line::Kv {
-                        key: DOTSEC_KEY_NAME.to_string(),
-                        value: wrapped_dek_b64.clone(),
-                        quote_type: dotenv::QuoteType::Double,
-                    });
-                    has_key_line = true;
-                    continue;
-                }
-
-                if key == DOTSEC_V1_NAME {
-                    continue;
-                }
-
                 let entry = entries.iter().find(|e| e.key == *key);
                 let should_encrypt = entry.is_some_and(|e| e.has_directive("encrypt"));
 
@@ -327,37 +408,142 @@ fn encrypt_with_dek(
                     sec_lines.push(line.clone());
                 }
             }
-            Line::Comment { text }
-                if text.contains("do not edit the line below, it is managed by dotsec") =>
-            {
-                continue;
-            }
+            // Drop any pre-existing header line — we'll recompute and re-insert.
+            Line::Comment { text } if header_v3::HeaderV3::is_header_line(text) => continue,
             other => sec_lines.push(other.clone()),
         }
     }
 
-    if !has_key_line {
-        let last_is_newline = matches!(sec_lines.last(), Some(Line::Newline));
-        if !sec_lines.is_empty() && !last_is_newline {
-            sec_lines.push(Line::Newline);
-        }
-        sec_lines.push(Line::Newline);
-        sec_lines.push(Line::Comment {
-            text: "# do not edit the line below, it is managed by dotsec".to_string(),
-        });
-        sec_lines.push(Line::Newline);
-        sec_lines.push(Line::Kv {
-            key: DOTSEC_KEY_NAME.to_string(),
-            value: wrapped_dek_b64,
-            quote_type: dotenv::QuoteType::Double,
-        });
-        sec_lines.push(Line::Newline);
-    }
+    let mac = compute_v3_mac(&sec_lines, dek, schema_hash);
+    let header = header_v3::HeaderV3 {
+        version: header_version().to_string(),
+        mac,
+        wrapped_dek: wrapped_dek.to_vec(),
+    };
+    insert_v3_header(&mut sec_lines, header);
 
     let output = dotenv::lines_to_string(&sec_lines);
     write_sec_file(sec_file, &output)?;
 
     Ok(())
+}
+
+/// Pick the wire format for `encrypt_with_dek`'s output by reading the
+/// on-disk file directly. Reading the on-disk bytes — not the caller's
+/// in-memory `lines` — is what enforces the no-silent-bump invariant:
+/// post-decryption lines have already had their v2/v3 envelope stripped, so
+/// they can't distinguish the original format.
+///
+/// Mapping:
+/// - File on disk has `#!dotsec` header → `V3`
+/// - File on disk has `__DOTSEC_KEY__` Kv line → `V2` (stays V2; user opts
+///   into v3 via `dotsec upgrade-format`)
+/// - File on disk has `__DOTSEC__` Kv line → `V1` (legacy; encrypt path
+///   refuses, user must `dotsec migrate`)
+/// - File missing → `None` (new file, caller writes v3 by default)
+/// - File exists but doesn't parse → `Unparseable`. The caller MUST refuse to
+///   write rather than treat it as a new file — silently writing v3 over an
+///   unparseable v2 file would be an irreversible format bump that loses the
+///   user's original bytes.
+fn select_target_format(sec_file: &str) -> SecFormat {
+    let Ok(content) = std::fs::read_to_string(sec_file) else {
+        return SecFormat::None;
+    };
+    let Ok(lines) = dotenv::parse_dotenv(&content) else {
+        return SecFormat::Unparseable;
+    };
+    detect_format(&lines)
+}
+
+/// Compute the v3 file MAC from on-disk `sec_lines` + `schema_hash`.
+///
+/// The canonical input is a pure function of what's *on disk* — no merged-schema
+/// view is folded in. The schema's contribution to integrity comes solely from
+/// `schema_hash` (which `canonical_serialize` embeds). This keeps encrypt and
+/// decrypt symmetric: both sides reconstruct the canonical from the same
+/// source (`lines_to_entries` over the file's lines + `schema_hash`).
+///
+/// Public because `rotate-key` legitimately needs to mint a v3 file under a
+/// fresh DEK (the encrypt path reads the existing DEK from disk and can't be
+/// asked to use a new one). Other callers should go through
+/// [`encrypt_lines_to_sec`].
+pub fn compute_v3_mac(sec_lines: &[Line], dek: &[u8], schema_hash: &[u8; 32]) -> [u8; 32] {
+    let canonical = build_canonical_bytes(sec_lines, schema_hash);
+    crypto::compute_file_mac(dek, &canonical)
+}
+
+/// Canonical-input builder shared by encrypt and decrypt. Pure function of
+/// `(sec_lines, schema_hash)` — both sides derive the same bytes from the same
+/// on-disk state, which is what makes MAC verification work.
+fn build_canonical_bytes(sec_lines: &[Line], schema_hash: &[u8; 32]) -> Vec<u8> {
+    use crypto::mac::{canonical_serialize, CanonicalEntry};
+
+    // File-level directives stop at the first Kv (matches extract_file_config's contract).
+    let mut file_directives: Vec<(String, Option<String>)> = Vec::new();
+    for line in sec_lines {
+        match line {
+            Line::Kv { .. } => break,
+            Line::Directive { name, value } => {
+                file_directives.push((name.clone(), value.clone()));
+            }
+            _ => {}
+        }
+    }
+
+    // Per-entry view: inline directives + on-disk value. lines_to_entries
+    // also applies file-level @default-encrypt / @default-plaintext, which is
+    // part of the file's authoritative semantics — keep it in the canonical.
+    let entries = dotenv::lines_to_entries(sec_lines);
+    let canonical_entries: Vec<CanonicalEntry> = entries
+        .iter()
+        .map(|e| CanonicalEntry {
+            key: e.key.clone(),
+            directives: e.directives.clone(),
+            value: e.value.clone(),
+        })
+        .collect();
+
+    canonical_serialize(&file_directives, &canonical_entries, schema_hash)
+}
+
+/// Insert the v3 `#!dotsec` header line into `sec_lines`. **Does not replace**
+/// an existing header — callers must strip any pre-existing `#!dotsec` line
+/// before calling. The encrypt path does this via `is_header_line` filtering.
+///
+/// Placement: after the banner comment block (the two-line `# dotsec v…` +
+/// `# https://github.com/jpwesselink/dotsec-rs` pair). If the banner has a
+/// user-edited comment interleaved between its two lines, the header lands
+/// between the first banner line and the user's comment — still valid v3, but
+/// cosmetically odd. Files written by dotsec never produce that shape.
+///
+/// Public for the same reason as [`compute_v3_mac`] — `rotate-key` needs it.
+pub fn insert_v3_header(sec_lines: &mut Vec<Line>, header: header_v3::HeaderV3) {
+    let header_line = Line::Comment {
+        text: header.format(),
+    };
+
+    // Find insertion point: after the entire banner block (banner Comments +
+    // their interleaved Newlines), before the first Directive/Kv/non-banner
+    // Comment. For a file with no banner, falls through to insert_at=0.
+    let mut insert_at = 0usize;
+    for (i, line) in sec_lines.iter().enumerate() {
+        match line {
+            Line::Comment { text }
+                if text.starts_with("# dotsec v")
+                    || text.starts_with("# https://github.com/jpwesselink") =>
+            {
+                insert_at = i + 1;
+            }
+            Line::Newline if insert_at > 0 => {
+                // Banner-internal newline — keep extending past it.
+                insert_at = i + 1;
+            }
+            _ => break,
+        }
+    }
+
+    sec_lines.insert(insert_at, header_line);
+    sec_lines.insert(insert_at + 1, Line::Newline);
 }
 
 // --- Decrypt ---
@@ -366,13 +552,52 @@ fn encrypt_with_dek(
 pub async fn decrypt_sec_to_lines(
     sec_file: &str,
     encryption_engine: &EncryptionEngine,
+    schema_hash: &[u8; 32],
+) -> Result<Vec<Line>, Box<dyn std::error::Error>> {
+    decrypt_sec_to_lines_inner(sec_file, encryption_engine, Some(schema_hash)).await
+}
+
+/// **Privileged**: decrypt without verifying the v3 file-level MAC. This
+/// is the chicken-and-egg path for `dotsec encrypt` — that command is what
+/// *produces* a fresh MAC, so it can't verify one first. Per-value AEAD still
+/// authenticates each `ENC[…]` payload, so this is NOT a blanket bypass of
+/// cryptographic integrity; it's only the file-level MAC that's skipped.
+///
+/// The name spells out the contract because there is no other legitimate use:
+/// every other caller MUST go through [`decrypt_sec_to_lines`]. If your new
+/// code reaches for this function, you are almost certainly building the
+/// wrong abstraction — talk to the maintainers first.
+///
+/// Visibility: `pub(crate)` *inside* this crate; re-exported as
+/// `pub` only via a re-export in `dotsec` so the single CLI command can
+/// call it. Don't widen the visibility further.
+pub async fn decrypt_sec_to_lines_for_remac_only(
+    sec_file: &str,
+    encryption_engine: &EncryptionEngine,
+) -> Result<Vec<Line>, Box<dyn std::error::Error>> {
+    decrypt_sec_to_lines_inner(sec_file, encryption_engine, None).await
+}
+
+/// Inner decrypt. `schema_hash` semantics:
+/// - `Some(h)` → verify the v3 MAC against this schema hash.
+/// - `None`    → skip v3 MAC verification entirely (the re-MAC path).
+///
+/// Using `Option` instead of a `bool` + sentinel makes "no MAC verify" a
+/// type-level decision, not a value-level one. A future contributor who adds
+/// a third schema-related check can't silently inherit the wrong behavior.
+async fn decrypt_sec_to_lines_inner(
+    sec_file: &str,
+    encryption_engine: &EncryptionEngine,
+    schema_hash: Option<&[u8; 32]>,
 ) -> Result<Vec<Line>, Box<dyn std::error::Error>> {
     let content = load_file(sec_file)?;
     let lines = dotenv::parse_dotenv(&content)?;
 
     match detect_format(&lines) {
-        SecFormat::V2 => decrypt_v2(sec_file, &lines, encryption_engine).await,
-        SecFormat::V1 => decrypt_v1(&lines, encryption_engine).await,
+        SecFormat::Recognized => decrypt_v3(sec_file, &lines, encryption_engine, schema_hash).await,
+        // detect_format() runs on already-parsed lines, so Unparseable
+        // can't reach here — parse failure already returned via the `?` above.
+        SecFormat::Unparseable => unreachable!("detect_format never returns Unparseable"),
         SecFormat::None => {
             let has_enc_values = lines.iter().any(|l| {
                 if let Line::Kv { value: v, .. } = l {
@@ -383,7 +608,7 @@ pub async fn decrypt_sec_to_lines(
             });
             if has_enc_values {
                 return Err(
-                    "File contains ENC[...] values but no __DOTSEC_KEY__. File may be corrupted."
+                    "File contains ENC[...] values but no #!dotsec header. File may be corrupted."
                         .into(),
                 );
             }
@@ -392,41 +617,67 @@ pub async fn decrypt_sec_to_lines(
     }
 }
 
-/// Decrypt v2 format: unwrap DEK from __DOTSEC_KEY__, then decrypt each ENC[...] value.
-async fn decrypt_v2(
+/// Read a `.sec` file: parse the `#!dotsec` header, verify the file-level
+/// integrity tag (when `schema_hash` is `Some`), unwrap the DEK, decrypt
+/// every `ENC[…]` value, and return the result as plaintext lines.
+///
+/// `schema_hash = None` is the privileged re-MAC path used by `dotsec encrypt`
+/// — it skips file-level integrity verification but still authenticates each
+/// ciphertext via per-value AEAD.
+async fn decrypt_v3(
     sec_file: &str,
     lines: &[Line],
     encryption_engine: &EncryptionEngine,
+    schema_hash: Option<&[u8; 32]>,
 ) -> Result<Vec<Line>, Box<dyn std::error::Error>> {
-    let wrapped_dek_b64 =
-        dotenv::get_value(lines, DOTSEC_KEY_NAME).ok_or("No __DOTSEC_KEY__ found in .sec file")?;
-    let wrapped_dek = base64::engine::general_purpose::STANDARD.decode(&wrapped_dek_b64)?;
+    let header = lines
+        .iter()
+        .find_map(|l| match l {
+            Line::Comment { text } if header_v3::HeaderV3::is_header_line(text) => Some(text),
+            _ => None,
+        })
+        .ok_or("file is missing its #!dotsec header line")?;
+    let parsed = header_v3::HeaderV3::parse(header)?;
 
     let dek = match encryption_engine {
         EncryptionEngine::Aws(opts) => {
-            aws::unwrap_data_key(&wrapped_dek, opts.region.as_deref()).await?
+            aws::unwrap_data_key(&parsed.wrapped_dek, opts.region.as_deref()).await?
         }
         EncryptionEngine::Local(opts) => {
             let private_key = crypto::local::load_private_key(sec_file, opts.key_file.as_deref())?;
-            crypto::local::unwrap_dek(&wrapped_dek, &private_key)?
+            crypto::local::unwrap_dek(&parsed.wrapped_dek, &private_key)?
         }
         EncryptionEngine::None => return Err("Encryption engine is required".into()),
     };
 
-    let mut resolved: Vec<Line> = Vec::new();
+    if let Some(schema_hash) = schema_hash {
+        // Strip the header line before canonicalizing — the encrypt path
+        // strips and re-inserts it, so both sides must canonicalize over the
+        // same shape (header excluded).
+        let lines_for_canonical: Vec<Line> = lines
+            .iter()
+            .filter(|l| {
+                !matches!(l, Line::Comment { text } if header_v3::HeaderV3::is_header_line(text))
+            })
+            .cloned()
+            .collect();
+        let canonical = build_canonical_bytes(&lines_for_canonical, schema_hash);
+        crypto::verify_file_mac(&dek, &canonical, &parsed.mac)
+            .map_err(|_| Box::<dyn std::error::Error>::from(MAC_FAILURE_MESSAGE))?;
+    }
 
+    let mut resolved: Vec<Line> = Vec::new();
     for line in lines {
         match line {
+            Line::Comment { text } if header_v3::HeaderV3::is_header_line(text) => continue,
             Line::Kv {
                 key,
                 value,
                 quote_type,
             } => {
-                if key == DOTSEC_KEY_NAME {
-                    continue;
-                }
                 if crypto::is_encrypted_value(value) {
-                    let plaintext = crypto::decrypt_value(value, &dek, key)?;
+                    let plaintext = crypto::decrypt_value(value, &dek, key)
+                        .map_err(|e| wrap_decrypt_error(key, e))?;
                     resolved.push(Line::Kv {
                         key: key.clone(),
                         value: plaintext,
@@ -436,101 +687,39 @@ async fn decrypt_v2(
                     resolved.push(line.clone());
                 }
             }
-            Line::Comment { text }
-                if text.contains("do not edit the line below, it is managed by dotsec") =>
-            {
-                continue;
-            }
             _ => resolved.push(line.clone()),
         }
     }
-
     Ok(resolved)
-}
-
-/// Decrypt v1 format (legacy blob): decrypt __DOTSEC__ blob, resolve ID references.
-async fn decrypt_v1(
-    lines: &[Line],
-    encryption_engine: &EncryptionEngine,
-) -> Result<Vec<Line>, Box<dyn std::error::Error>> {
-    let dotsec_value =
-        dotenv::get_value(lines, DOTSEC_V1_NAME).ok_or("No __DOTSEC__ entry found")?;
-
-    let secrets_json = decrypt_blob_v1(&dotsec_value, encryption_engine).await?;
-    let secrets: std::collections::HashMap<String, String> = serde_json::from_str(&secrets_json)?;
-
-    let mut resolved: Vec<Line> = Vec::new();
-    let mut skip_dotsec_comment = false;
-
-    for line in lines {
-        match line {
-            Line::Comment { text }
-                if text.contains("do not edit the line below, it is managed by dotsec") =>
-            {
-                skip_dotsec_comment = true;
-                continue;
-            }
-            Line::Kv {
-                key,
-                value,
-                quote_type,
-            } => {
-                if key == DOTSEC_V1_NAME {
-                    continue;
-                }
-                if let Some(real_value) = secrets.get(value.as_str()) {
-                    resolved.push(Line::Kv {
-                        key: key.clone(),
-                        value: real_value.clone(),
-                        quote_type: quote_type.clone(),
-                    });
-                } else {
-                    resolved.push(line.clone());
-                }
-            }
-            Line::Newline if skip_dotsec_comment => {
-                skip_dotsec_comment = false;
-                continue;
-            }
-            _ => resolved.push(line.clone()),
-        }
-    }
-
-    Ok(resolved)
-}
-
-/// Attempt to decrypt a v1 blob (legacy envelopers format).
-///
-/// This always returns an error directing users to migrate, because v1 blobs
-/// are base64-encoded `envelopers::EncryptedRecord` and we no longer bundle the
-/// envelopers crate. Users must decrypt with dotsec v4.x first, then re-encrypt
-/// with v5.x to migrate to the new per-value encryption format.
-async fn decrypt_blob_v1(
-    _ciphertext: &str,
-    _engine: &EncryptionEngine,
-) -> Result<String, Box<dyn std::error::Error>> {
-    Err(
-        "This .sec file uses the legacy v1 format (single encrypted blob). \
-         Please decrypt it with dotsec v4.x first, then re-encrypt with v5.x to migrate \
-         to the new per-value encryption format."
-            .into(),
-    )
 }
 
 // --- DEK helpers ---
 
 type DekPair = (zeroize::Zeroizing<Vec<u8>>, Vec<u8>);
 
-/// Try to load and unwrap the existing DEK from a .sec file.
+/// Read the wrapped DEK from an existing .sec file's `#!dotsec` header.
+/// Returns a clean "no header" error when the file exists but has no
+/// recognized envelope (the encrypt path treats this as "new file →
+/// generate fresh DEK").
+fn load_existing_wrapped_dek(sec_file: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let content = load_file(sec_file)?;
+    let lines = dotenv::parse_dotenv(&content)?;
+    let header_line = lines
+        .iter()
+        .find_map(|l| match l {
+            Line::Comment { text } if header_v3::HeaderV3::is_header_line(text) => Some(text),
+            _ => None,
+        })
+        .ok_or("No #!dotsec header found")?;
+    let parsed = header_v3::HeaderV3::parse(header_line)?;
+    Ok(parsed.wrapped_dek)
+}
+
 async fn load_existing_dek_aws(
     sec_file: &str,
     region: Option<&str>,
 ) -> Result<DekPair, Box<dyn std::error::Error>> {
-    let content = load_file(sec_file)?;
-    let lines = dotenv::parse_dotenv(&content)?;
-    let wrapped_b64 =
-        dotenv::get_value(&lines, DOTSEC_KEY_NAME).ok_or("No __DOTSEC_KEY__ found")?;
-    let wrapped_dek = base64::engine::general_purpose::STANDARD.decode(&wrapped_b64)?;
+    let wrapped_dek = load_existing_wrapped_dek(sec_file)?;
     let dek = aws::unwrap_data_key(&wrapped_dek, region).await?;
     Ok((dek, wrapped_dek))
 }
@@ -539,11 +728,7 @@ fn load_existing_dek_local(
     sec_file: &str,
     identity: &str,
 ) -> Result<DekPair, Box<dyn std::error::Error>> {
-    let content = load_file(sec_file)?;
-    let lines = dotenv::parse_dotenv(&content)?;
-    let wrapped_b64 =
-        dotenv::get_value(&lines, DOTSEC_KEY_NAME).ok_or("No __DOTSEC_KEY__ found")?;
-    let wrapped_dek = base64::engine::general_purpose::STANDARD.decode(&wrapped_b64)?;
+    let wrapped_dek = load_existing_wrapped_dek(sec_file)?;
     let dek = crypto::local::unwrap_dek(&wrapped_dek, identity)?;
     Ok((dek, wrapped_dek))
 }
@@ -568,9 +753,6 @@ pub fn resolve_env_vars(lines: &[Line]) -> Vec<(String, String)> {
             quote_type,
         } = line
         {
-            if key == DOTSEC_KEY_NAME || key == DOTSEC_V1_NAME {
-                continue;
-            }
             // Push-only entries (no `@also-env`) are owned by the push target, not the env.
             // `lines_to_entries` already merges file-level @default-* defaults.
             let entry = entries.iter().find(|e| e.key == *key);
@@ -987,83 +1169,7 @@ mod tests {
         assert_eq!(resolved[1].1, "${HOST}");
     }
 
-    #[test]
-    fn resolve_env_vars_skips_dotsec_key() {
-        let lines = vec![
-            Line::Kv {
-                key: "FOO".into(),
-                value: "bar".into(),
-                quote_type: QuoteType::Double,
-            },
-            Line::Newline,
-            Line::Kv {
-                key: "__DOTSEC_KEY__".into(),
-                value: "wrapped".into(),
-                quote_type: QuoteType::Double,
-            },
-        ];
-        let resolved = resolve_env_vars(&lines);
-        assert_eq!(resolved.len(), 1);
-        assert_eq!(resolved[0].0, "FOO");
-    }
-
-    #[test]
-    fn resolve_env_vars_skips_dotsec_v1() {
-        let lines = vec![
-            Line::Kv {
-                key: "FOO".into(),
-                value: "bar".into(),
-                quote_type: QuoteType::Double,
-            },
-            Line::Newline,
-            Line::Kv {
-                key: "__DOTSEC__".into(),
-                value: "blob".into(),
-                quote_type: QuoteType::Double,
-            },
-        ];
-        let resolved = resolve_env_vars(&lines);
-        assert_eq!(resolved.len(), 1);
-        assert_eq!(resolved[0].0, "FOO");
-    }
-
     // --- format detection ---
-
-    #[test]
-    fn detect_v2_format() {
-        let lines = vec![
-            Line::Kv {
-                key: "FOO".into(),
-                value: "ENC[abc]".into(),
-                quote_type: QuoteType::Double,
-            },
-            Line::Newline,
-            Line::Kv {
-                key: "__DOTSEC_KEY__".into(),
-                value: "wrapped".into(),
-                quote_type: QuoteType::Double,
-            },
-        ];
-        assert_eq!(detect_format(&lines), SecFormat::V2);
-    }
-
-    #[test]
-    fn detect_v1_format() {
-        let lines = vec![
-            Line::Kv {
-                key: "FOO".into(),
-                value: "hexid".into(),
-                quote_type: QuoteType::Double,
-            },
-            Line::Newline,
-            Line::Kv {
-                key: "__DOTSEC__".into(),
-                value: "blob".into(),
-                quote_type: QuoteType::Double,
-            },
-        ];
-        assert_eq!(detect_format(&lines), SecFormat::V1);
-    }
 
     #[test]
     fn detect_no_format() {
@@ -1110,25 +1216,6 @@ mod tests {
             Line::Newline,
         ];
         assert_eq!(detect_format(&lines), SecFormat::None);
-    }
-
-    #[test]
-    fn detect_v2_takes_priority_over_enc_values() {
-        // Both ENC values and __DOTSEC_KEY__ present → V2
-        let lines = vec![
-            Line::Kv {
-                key: "SECRET".into(),
-                value: "ENC[data]".into(),
-                quote_type: QuoteType::Double,
-            },
-            Line::Newline,
-            Line::Kv {
-                key: "__DOTSEC_KEY__".into(),
-                value: "wrapped_key".into(),
-                quote_type: QuoteType::Double,
-            },
-        ];
-        assert_eq!(detect_format(&lines), SecFormat::V2);
     }
 
     // --- redact ---
@@ -1258,23 +1345,6 @@ mod tests {
     fn detect_empty_lines_is_none() {
         let lines: Vec<Line> = vec![];
         assert!(matches!(detect_format(&lines), SecFormat::None));
-    }
-
-    #[test]
-    fn detect_dotsec_key_is_v2() {
-        let lines = vec![
-            Line::Kv {
-                key: "__DOTSEC_KEY__".into(),
-                value: "wrapped_dek".into(),
-                quote_type: QuoteType::Double,
-            },
-            Line::Kv {
-                key: "SECRET".into(),
-                value: "ENC[data]".into(),
-                quote_type: QuoteType::Double,
-            },
-        ];
-        assert!(matches!(detect_format(&lines), SecFormat::V2));
     }
 
     // --- Plaintext .sec roundtrip tests ---
@@ -1546,12 +1616,20 @@ mod tests {
             "encrypted value should contain ENC[...]"
         );
         assert!(
-            content.contains("__DOTSEC_KEY__"),
-            "should contain wrapped DEK"
+            content.contains("#!dotsec"),
+            "new files should default to v3 (#!dotsec header)"
+        );
+        assert!(
+            content.contains(" mac="),
+            "v3 header should include the file MAC"
+        );
+        assert!(
+            !content.contains("__DOTSEC_KEY__"),
+            "v3 should not emit the legacy __DOTSEC_KEY__ Kv line"
         );
         assert!(!content.contains("hunter2"), "plaintext should not appear");
 
-        let decrypted = decrypt_sec_to_lines(&sec_file, &engine).await.unwrap();
+        let decrypted = decrypt_sec_to_lines(&sec_file, &engine, &crypto::mac::empty_schema_hash()).await.unwrap();
         let secret_val = decrypted.iter().find_map(|l| {
             if let Line::Kv { key, value, .. } = l {
                 if key == "SECRET" {
@@ -1619,7 +1697,7 @@ mod tests {
         let wrong_engine = EncryptionEngine::Local(LocalEncryptionOptions {
             key_file: Some(wrong_key_file),
         });
-        let result = decrypt_sec_to_lines(&sec_file, &wrong_engine).await;
+        let result = decrypt_sec_to_lines(&sec_file, &wrong_engine, &crypto::mac::empty_schema_hash()).await;
         assert!(result.is_err(), "decrypting with wrong key should fail");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1658,7 +1736,7 @@ mod tests {
 
         // Decrypt with key_file: None — must auto-discover <sec>.key.
         let decrypt_engine = EncryptionEngine::Local(LocalEncryptionOptions { key_file: None });
-        let decrypted = decrypt_sec_to_lines(&sec_file, &decrypt_engine)
+        let decrypted = decrypt_sec_to_lines(&sec_file, &decrypt_engine, &crypto::mac::empty_schema_hash())
             .await
             .unwrap();
         let secret_val = decrypted.iter().find_map(|l| {
@@ -1890,4 +1968,690 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // --- v3 attack-scenario regression tests ---
+    //
+    // These map to the threats the v3 file MAC is designed to defeat. Each one
+    // produces a v3 file via the normal encrypt path, mutates it in some way an
+    // attacker could attempt, and asserts that the next decrypt fails with the
+    // MAC-mismatch error message. Tests cover the refined MAC scope (entry
+    // names + directives + ENC[…] bytes + schema hash; plaintext values are
+    // intentionally NOT covered, see `plaintext_value_change_preserves_mac`
+    // in crypto/src/mac.rs for the dev-loop UX promise).
+
+    /// Generate a fresh test fixture directory + matching .sec.key.
+    fn v3_fixture_dir(name: &str) -> (String, String, String) {
+        let dir = std::env::temp_dir().join(format!("dotsec-test-v3-{}", name));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let sec_file = dir.join("test.sec").to_string_lossy().to_string();
+        let key_file = dir.join("test.sec.key").to_string_lossy().to_string();
+        let (identity, _) = crypto::local::generate_keypair();
+        std::fs::write(&key_file, &identity).unwrap();
+        (dir.to_string_lossy().to_string(), sec_file, key_file)
+    }
+
+    fn v3_local_engine(key_file: &str) -> EncryptionEngine {
+        EncryptionEngine::Local(LocalEncryptionOptions {
+            key_file: Some(key_file.to_string()),
+        })
+    }
+
+    /// Encrypt the given lines into a v3 .sec file under `sec_file`. No schema.
+    async fn v3_encrypt(lines: &[Line], sec_file: &str, key_file: &str) {
+        let engine = v3_local_engine(key_file);
+        encrypt_lines_to_sec(lines, sec_file, &engine, None)
+            .await
+            .unwrap();
+    }
+
+    /// Same, but with an explicit schema. Schema hash gets derived inside
+    /// the encrypt path so tests don't have to manage hash plumbing.
+    async fn v3_encrypt_with_schema(
+        lines: &[Line],
+        sec_file: &str,
+        key_file: &str,
+        schema: &dotenv::Schema,
+    ) {
+        let engine = v3_local_engine(key_file);
+        encrypt_lines_to_sec(lines, sec_file, &engine, Some(schema))
+            .await
+            .unwrap();
+    }
+
+    fn assert_mac_mismatch_error(err: &dyn std::error::Error) {
+        let msg = err.to_string();
+        // Asserts the contract of MAC_FAILURE_MESSAGE rather than its literal
+        // text. Two signal phrases must survive any future rewording:
+        // - the "in a way dotsec can't verify" framing tells the user this is
+        //   an integrity failure, not a decryption failure;
+        // - "dotsec encrypt" must appear as the recovery command.
+        assert!(
+            msg.contains("dotsec can't verify"),
+            "MAC-failure copy must explain integrity-verification failed: {}",
+            msg
+        );
+        assert!(
+            msg.contains("dotsec encrypt"),
+            "MAC-failure copy must surface the recovery command: {}",
+            msg
+        );
+    }
+
+    #[tokio::test]
+    async fn v3_push_directive_tamper_fails_mac() {
+        // Attack 1: attacker rewrites @push to redirect a secret to their own SSM path.
+        let (_dir, sec_file, key_file) = v3_fixture_dir("push-tamper");
+
+        let lines = vec![
+            Line::Directive {
+                name: "encrypt".into(),
+                value: None,
+            },
+            Line::Directive {
+                name: "push".into(),
+                value: Some("aws-ssm(path=\"/legit\")".into()),
+            },
+            Line::Newline,
+            Line::Kv {
+                key: "DB_PASSWORD".into(),
+                value: "hunter2".into(),
+                quote_type: QuoteType::Double,
+            },
+            Line::Newline,
+        ];
+        v3_encrypt(&lines, &sec_file, &key_file).await;
+
+        // Mutate @push value in place on disk.
+        let on_disk = std::fs::read_to_string(&sec_file).unwrap();
+        let tampered = on_disk.replace("/legit", "/attacker-owned");
+        std::fs::write(&sec_file, tampered).unwrap();
+
+        let result = decrypt_sec_to_lines(&sec_file, &v3_local_engine(&key_file), &crypto::mac::empty_schema_hash()).await;
+        match result {
+            Err(e) => assert_mac_mismatch_error(e.as_ref()),
+            Ok(_) => panic!("MAC verification must reject @push directive tampering"),
+        }
+    }
+
+    #[tokio::test]
+    async fn v3_keyid_tamper_blocks_decrypt() {
+        // Attack 2 (adapted for local provider): attacker swaps @key-id.
+        // Reaches the same end goal — MAC failure before any provider call.
+        let (_dir, sec_file, key_file) = v3_fixture_dir("keyid-tamper");
+
+        let lines = vec![
+            Line::Directive {
+                name: "key-id".into(),
+                value: Some("alias/legit".into()),
+            },
+            Line::Newline,
+            Line::Directive {
+                name: "encrypt".into(),
+                value: None,
+            },
+            Line::Newline,
+            Line::Kv {
+                key: "API_KEY".into(),
+                value: "sk-test-123".into(),
+                quote_type: QuoteType::Double,
+            },
+            Line::Newline,
+        ];
+        v3_encrypt(&lines, &sec_file, &key_file).await;
+
+        let on_disk = std::fs::read_to_string(&sec_file).unwrap();
+        let tampered = on_disk.replace("alias/legit", "alias/attacker");
+        std::fs::write(&sec_file, tampered).unwrap();
+
+        let result = decrypt_sec_to_lines(&sec_file, &v3_local_engine(&key_file), &crypto::mac::empty_schema_hash()).await;
+        match result {
+            Err(e) => assert_mac_mismatch_error(e.as_ref()),
+            Ok(_) => panic!("MAC verification must reject @key-id tampering"),
+        }
+    }
+
+    #[tokio::test]
+    async fn v3_type_directive_tamper_fails_mac() {
+        // Attack 3: attacker weakens @type to bypass validation.
+        let (_dir, sec_file, key_file) = v3_fixture_dir("type-tamper");
+
+        let lines = vec![
+            Line::Directive {
+                name: "encrypt".into(),
+                value: None,
+            },
+            Line::Directive {
+                name: "type".into(),
+                value: Some("enum(\"prod\",\"staging\")".into()),
+            },
+            Line::Newline,
+            Line::Kv {
+                key: "ENV".into(),
+                value: "prod".into(),
+                quote_type: QuoteType::Double,
+            },
+            Line::Newline,
+        ];
+        v3_encrypt(&lines, &sec_file, &key_file).await;
+
+        let on_disk = std::fs::read_to_string(&sec_file).unwrap();
+        // Replace the enum with a permissive string type.
+        let tampered = on_disk.replace("@type=enum(\"prod\",\"staging\")", "@type=string");
+        std::fs::write(&sec_file, tampered).unwrap();
+
+        let result = decrypt_sec_to_lines(&sec_file, &v3_local_engine(&key_file), &crypto::mac::empty_schema_hash()).await;
+        match result {
+            Err(e) => assert_mac_mismatch_error(e.as_ref()),
+            Ok(_) => panic!("MAC verification must reject @type directive tampering"),
+        }
+    }
+
+    #[tokio::test]
+    async fn v3_enc_value_rollback_fails_mac() {
+        // Attack 4: attacker keeps the key name but swaps in an older ENC[…]
+        // ciphertext (e.g. from a git history). AAD binds ciphertext to key
+        // name, not to time — MAC over ENC[…] bytes is what catches the swap.
+        let (_dir, sec_file, key_file) = v3_fixture_dir("enc-rollback");
+
+        let lines_v1 = vec![
+            Line::Directive {
+                name: "encrypt".into(),
+                value: None,
+            },
+            Line::Newline,
+            Line::Kv {
+                key: "DB_PASSWORD".into(),
+                value: "old-password".into(),
+                quote_type: QuoteType::Double,
+            },
+            Line::Newline,
+        ];
+        v3_encrypt(&lines_v1, &sec_file, &key_file).await;
+        let v1_on_disk = std::fs::read_to_string(&sec_file).unwrap();
+        // Extract the old ENC[…] ciphertext for later rollback.
+        let old_enc = v1_on_disk
+            .lines()
+            .find(|l| l.starts_with("DB_PASSWORD="))
+            .unwrap()
+            .to_string();
+
+        // Now write a new value — same key name, different ciphertext.
+        let lines_v2 = vec![
+            Line::Directive {
+                name: "encrypt".into(),
+                value: None,
+            },
+            Line::Newline,
+            Line::Kv {
+                key: "DB_PASSWORD".into(),
+                value: "new-password".into(),
+                quote_type: QuoteType::Double,
+            },
+            Line::Newline,
+        ];
+        v3_encrypt(&lines_v2, &sec_file, &key_file).await;
+
+        // Attacker rolls back: substitute the OLD ENC[…] line back in.
+        let v2_on_disk = std::fs::read_to_string(&sec_file).unwrap();
+        let tampered = v2_on_disk
+            .lines()
+            .map(|l| if l.starts_with("DB_PASSWORD=") { old_enc.as_str() } else { l })
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&sec_file, format!("{}\n", tampered)).unwrap();
+
+        let result = decrypt_sec_to_lines(&sec_file, &v3_local_engine(&key_file), &crypto::mac::empty_schema_hash()).await;
+        match result {
+            Err(e) => assert_mac_mismatch_error(e.as_ref()),
+            Ok(_) => panic!("MAC verification must reject ENC[…] rollback"),
+        }
+    }
+
+    #[tokio::test]
+    async fn v3_manual_reorder_fails_mac() {
+        // Attack 5: attacker reorders entries by hand without re-MACing.
+        // Entry order is in the canonical bytes, so reorder flips the MAC.
+        let (_dir, sec_file, key_file) = v3_fixture_dir("reorder");
+
+        let lines = vec![
+            Line::Directive {
+                name: "encrypt".into(),
+                value: None,
+            },
+            Line::Newline,
+            Line::Kv {
+                key: "ALPHA".into(),
+                value: "a".into(),
+                quote_type: QuoteType::Double,
+            },
+            Line::Newline,
+            Line::Directive {
+                name: "encrypt".into(),
+                value: None,
+            },
+            Line::Newline,
+            Line::Kv {
+                key: "BETA".into(),
+                value: "b".into(),
+                quote_type: QuoteType::Double,
+            },
+            Line::Newline,
+        ];
+        v3_encrypt(&lines, &sec_file, &key_file).await;
+
+        let on_disk = std::fs::read_to_string(&sec_file).unwrap();
+        let parsed = dotenv::parse_dotenv(&on_disk).unwrap();
+        // Swap the two ENC[…] Kv lines in-place — they end up with each other's key name.
+        let alpha_idx = parsed
+            .iter()
+            .position(|l| matches!(l, Line::Kv { key, .. } if key == "ALPHA"))
+            .unwrap();
+        let beta_idx = parsed
+            .iter()
+            .position(|l| matches!(l, Line::Kv { key, .. } if key == "BETA"))
+            .unwrap();
+        let mut swapped = parsed.clone();
+        swapped.swap(alpha_idx, beta_idx);
+        std::fs::write(&sec_file, dotenv::lines_to_string(&swapped)).unwrap();
+
+        let result = decrypt_sec_to_lines(&sec_file, &v3_local_engine(&key_file), &crypto::mac::empty_schema_hash()).await;
+        match result {
+            Err(e) => {
+                // Two possible failures: AEAD trips first (key-name AAD mismatch)
+                // or MAC trips first (entry order changed). Both prove the
+                // tamper was caught — accept either.
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("dotsec can't verify")
+                        || msg.contains("encryption failed")
+                        || msg.contains("commitment"),
+                    "reorder must be caught by MAC or per-value AEAD: {}",
+                    msg
+                );
+            }
+            Ok(_) => panic!("entry reorder must be caught (MAC or AEAD)"),
+        }
+    }
+
+    #[tokio::test]
+    async fn v3_schema_tamper_invalidates_file_mac() {
+        // Attack 6: attacker mutates the active schema (e.g. drops @max=65535
+        // to disable validation). The .sec file's MAC was computed against a
+        // particular schema_hash; if the schema changes semantically, the
+        // hash changes and the MAC fails on the next load.
+        let (_dir, sec_file, key_file) = v3_fixture_dir("schema-tamper");
+
+        let original_schema =
+            dotenv::parse_schema("# @type=number @max=65535\nPORT\n").unwrap();
+
+        let lines = vec![
+            Line::Kv {
+                key: "PORT".into(),
+                value: "8080".into(),
+                quote_type: QuoteType::None,
+            },
+            Line::Newline,
+        ];
+        v3_encrypt_with_schema(&lines, &sec_file, &key_file, &original_schema).await;
+
+        // Attacker drops @max — schema canonical bytes differ → hash differs.
+        let tampered_schema = dotenv::parse_schema("# @type=number\nPORT\n").unwrap();
+        let tampered_hash = crypto::mac::schema_hash(Some(&dotenv::schema_to_canonical_bytes(
+            &tampered_schema,
+        )));
+
+        let result =
+            decrypt_sec_to_lines(&sec_file, &v3_local_engine(&key_file), &tampered_hash).await;
+        match result {
+            Err(e) => assert_mac_mismatch_error(e.as_ref()),
+            Ok(_) => panic!("schema tamper must invalidate the file MAC"),
+        }
+    }
+
+    #[tokio::test]
+    async fn v3_plaintext_value_edit_does_not_break_run() {
+        // The dev-loop UX promise: hand-edit a plaintext value, run should still
+        // succeed. Counterpart to the security tests above — proves the MAC
+        // scope is tight enough to allow legitimate edits.
+        let (_dir, sec_file, key_file) = v3_fixture_dir("plaintext-edit");
+
+        let lines = vec![
+            Line::Kv {
+                key: "PORT".into(),
+                value: "3000".into(),
+                quote_type: QuoteType::None,
+            },
+            Line::Newline,
+        ];
+        v3_encrypt(&lines, &sec_file, &key_file).await;
+
+        let on_disk = std::fs::read_to_string(&sec_file).unwrap();
+        std::fs::write(&sec_file, on_disk.replace("PORT=3000", "PORT=4000")).unwrap();
+
+        let decrypted = decrypt_sec_to_lines(&sec_file, &v3_local_engine(&key_file), &crypto::mac::empty_schema_hash())
+            .await
+            .expect("plaintext edit must not invalidate MAC");
+        let port_val = decrypted.iter().find_map(|l| match l {
+            Line::Kv { key, value, .. } if key == "PORT" => Some(value.clone()),
+            _ => None,
+        });
+        assert_eq!(port_val.as_deref(), Some("4000"));
+    }
+
+    #[tokio::test]
+    async fn v3_plaintext_entry_addition_trips_mac() {
+        // Inject-protection regression: hand-adding a new plaintext entry
+        // (the canonical attack `EXFIL_URL=https://attacker.example`) MUST
+        // trip the MAC. Users who legitimately want to add by hand are
+        // pointed at `dotsec encrypt` via the error message.
+        let (_dir, sec_file, key_file) = v3_fixture_dir("plaintext-add");
+
+        let lines = vec![
+            Line::Kv {
+                key: "PORT".into(),
+                value: "3000".into(),
+                quote_type: QuoteType::None,
+            },
+            Line::Newline,
+        ];
+        v3_encrypt(&lines, &sec_file, &key_file).await;
+
+        let on_disk = std::fs::read_to_string(&sec_file).unwrap();
+        let tampered = format!("{}EXFIL_URL=https://attacker.example\n", on_disk);
+        std::fs::write(&sec_file, tampered).unwrap();
+
+        let result = decrypt_sec_to_lines(
+            &sec_file,
+            &v3_local_engine(&key_file),
+            &crypto::mac::empty_schema_hash(),
+        )
+        .await;
+        match result {
+            Err(e) => assert_mac_mismatch_error(e.as_ref()),
+            Ok(_) => panic!("plaintext-entry injection must trip the MAC"),
+        }
+    }
+
+    #[tokio::test]
+    async fn v3_plaintext_entry_injection_at_start_trips_mac() {
+        // Sibling of the previous test: injecting BEFORE the @provider line
+        // exercises a different parse path. `extract_file_config` stops at
+        // the first Kv, so an injected Kv at line 1 displaces the original
+        // file-level directives in the canonical's `file-directive:` block
+        // AND adds a new entry name. Either change is enough to trip MAC.
+        let (_dir, sec_file, key_file) = v3_fixture_dir("plaintext-add-at-start");
+
+        let lines = vec![
+            Line::Directive {
+                name: "provider".into(),
+                value: Some("local".into()),
+            },
+            Line::Newline,
+            Line::Kv {
+                key: "PORT".into(),
+                value: "3000".into(),
+                quote_type: QuoteType::None,
+            },
+            Line::Newline,
+        ];
+        v3_encrypt(&lines, &sec_file, &key_file).await;
+
+        let on_disk = std::fs::read_to_string(&sec_file).unwrap();
+        // Find the first directive line, inject right before it.
+        let injected = on_disk.replacen(
+            "# @provider",
+            "EXFIL=stolen\n# @provider",
+            1,
+        );
+        std::fs::write(&sec_file, injected).unwrap();
+
+        let result = decrypt_sec_to_lines(
+            &sec_file,
+            &v3_local_engine(&key_file),
+            &crypto::mac::empty_schema_hash(),
+        )
+        .await;
+        match result {
+            Err(e) => assert_mac_mismatch_error(e.as_ref()),
+            Ok(_) => panic!("injection before file-level directives must trip the MAC"),
+        }
+    }
+
+    // --- M1: `dotsec encrypt` recovery command ---
+
+    #[tokio::test]
+    async fn dotsec_encrypt_re_macs_after_directive_edit() {
+        // Tampering scenario the user can fix: flip @encrypt → @plaintext on
+        // disk (legitimate edit if they want to expose a previously-secret
+        // value), then run `dotsec encrypt` to re-MAC. Resulting file must
+        // decrypt cleanly and the value must reflect the new directive.
+        let (_dir, sec_file, key_file) = v3_fixture_dir("encrypt-recovery");
+        let engine = v3_local_engine(&key_file);
+
+        let lines = vec![
+            Line::Directive {
+                name: "encrypt".into(),
+                value: None,
+            },
+            Line::Newline,
+            Line::Kv {
+                key: "API_KEY".into(),
+                value: "sk-test-original".into(),
+                quote_type: QuoteType::Double,
+            },
+            Line::Newline,
+        ];
+        v3_encrypt(&lines, &sec_file, &key_file).await;
+
+        // Tamper: @encrypt → @plaintext.
+        let on_disk = std::fs::read_to_string(&sec_file).unwrap();
+        std::fs::write(&sec_file, on_disk.replace("@encrypt", "@plaintext")).unwrap();
+
+        // First confirm the MAC fails as expected.
+        let fail = decrypt_sec_to_lines(&sec_file, &engine, &crypto::mac::empty_schema_hash())
+            .await;
+        assert!(fail.is_err(), "MAC must fail before re-encrypt");
+
+        // Simulate `dotsec encrypt`: decrypt with MAC bypass, re-encrypt.
+        let bypassed = decrypt_sec_to_lines_for_remac_only(&sec_file, &engine)
+            .await
+            .expect("AEAD must still authenticate ciphertexts on the bypass path");
+        encrypt_lines_to_sec(&bypassed, &sec_file, &engine, None)
+            .await
+            .expect("re-encrypt with new MAC must succeed");
+
+        // Now the file decrypts cleanly and API_KEY is plaintext per the new directive.
+        let decrypted =
+            decrypt_sec_to_lines(&sec_file, &engine, &crypto::mac::empty_schema_hash())
+                .await
+                .expect("decrypt after re-encrypt must succeed");
+        let api_val = decrypted.iter().find_map(|l| match l {
+            Line::Kv { key, value, .. } if key == "API_KEY" => Some(value.clone()),
+            _ => None,
+        });
+        assert_eq!(api_val.as_deref(), Some("sk-test-original"));
+
+        // And the on-disk value is no longer ENC[…] — per the new @plaintext.
+        let final_on_disk = std::fs::read_to_string(&sec_file).unwrap();
+        assert!(
+            !final_on_disk.contains("ENC["),
+            "value should be plaintext after re-encrypt under @plaintext: {final_on_disk}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dotsec_encrypt_aead_still_authenticates_on_bypass() {
+        // The "MAC bypass is safe because per-value AEAD" contract. Flip a bit
+        // inside an ENC[…] payload — the unverified-decrypt path must still
+        // fail, otherwise the bypass would be a true integrity bypass.
+        let (_dir, sec_file, key_file) = v3_fixture_dir("encrypt-aead-still");
+        let engine = v3_local_engine(&key_file);
+
+        let lines = vec![
+            Line::Directive {
+                name: "encrypt".into(),
+                value: None,
+            },
+            Line::Newline,
+            Line::Kv {
+                key: "API_KEY".into(),
+                value: "sk-original".into(),
+                quote_type: QuoteType::Double,
+            },
+            Line::Newline,
+        ];
+        v3_encrypt(&lines, &sec_file, &key_file).await;
+
+        // Corrupt one base64 char inside the ENC[…] payload.
+        let on_disk = std::fs::read_to_string(&sec_file).unwrap();
+        let corrupted = on_disk.replacen("ENC[", "ENC[AA", 1);
+        std::fs::write(&sec_file, corrupted).unwrap();
+
+        let result = decrypt_sec_to_lines_for_remac_only(&sec_file, &engine).await;
+        assert!(
+            result.is_err(),
+            "bypass path must still trip per-value AEAD on corrupted ciphertext"
+        );
+    }
+
+    // --- M3: rotate-key v3 emission + schema-only @encrypt preserved ---
+
+    #[tokio::test]
+    async fn rotate_key_emits_v3_and_preserves_schema_only_encrypt() {
+        // Combined regression for the original v3 emit + CR4 (schema-only
+        // @encrypt must NOT be rotated as plaintext). We can't drive the
+        // rotate-key command directly from here (it lives in dotsec/), so we
+        // simulate its full pipeline: decrypt, generate new DEK, merge schema
+        // directives, re-encrypt, build v3 header.
+        let (_dir, sec_file, key_file) = v3_fixture_dir("rotate-key-schema");
+        let engine = v3_local_engine(&key_file);
+        let schema = dotenv::parse_schema("# @encrypt\nSECRET\n").unwrap();
+
+        // Encrypt with schema-only @encrypt (no inline directive).
+        let lines = vec![
+            Line::Kv {
+                key: "SECRET".into(),
+                value: "hunter2".into(),
+                quote_type: QuoteType::Double,
+            },
+            Line::Newline,
+        ];
+        v3_encrypt_with_schema(&lines, &sec_file, &key_file, &schema).await;
+
+        let original_on_disk = std::fs::read_to_string(&sec_file).unwrap();
+        assert!(
+            original_on_disk.contains("SECRET=\"ENC["),
+            "schema-only @encrypt should produce ENC[…] on first encrypt"
+        );
+
+        // Decrypt (with schema applied) to get plaintext lines.
+        let schema_hash =
+            crypto::mac::schema_hash(Some(&dotenv::schema_to_canonical_bytes(&schema)));
+        let plaintext_lines = decrypt_sec_to_lines(&sec_file, &engine, &schema_hash)
+            .await
+            .unwrap();
+
+        // Simulate rotate-key: generate new DEK, re-encrypt with the same
+        // schema applied (which is what the fixed rotate-key now does).
+        encrypt_lines_to_sec(&plaintext_lines, &sec_file, &engine, Some(&schema))
+            .await
+            .unwrap();
+
+        let after_on_disk = std::fs::read_to_string(&sec_file).unwrap();
+        assert!(
+            after_on_disk.contains("SECRET=\"ENC["),
+            "rotate-key must keep schema-only @encrypt values encrypted (CR4): {after_on_disk}"
+        );
+        assert!(
+            !after_on_disk.contains("hunter2"),
+            "plaintext must never appear on disk after rotate-key: {after_on_disk}"
+        );
+
+        // Final round-trip — schema-bound MAC verifies, value recovers.
+        let final_decrypt = decrypt_sec_to_lines(&sec_file, &engine, &schema_hash)
+            .await
+            .unwrap();
+        let secret = final_decrypt.iter().find_map(|l| match l {
+            Line::Kv { key, value, .. } if key == "SECRET" => Some(value.clone()),
+            _ => None,
+        });
+        assert_eq!(secret.as_deref(), Some("hunter2"));
+    }
+
+    // --- M5: select_target_format direct tests ---
+    //
+    // Pins down the "no silent format bumps" policy. The function reads the
+    // bytes that are actually on disk — not the post-decrypt lines a caller
+    // might pass — so v2/v3 round-trips through any command preserve format.
+
+    fn select_format_fixture(name: &str, body: &str) -> String {
+        let dir = std::env::temp_dir().join(format!("dotsec-test-select-format-{}", name));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.sec").to_string_lossy().to_string();
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
+    #[test]
+    fn select_target_format_v3_header_returns_v3() {
+        let path = select_format_fixture(
+            "v3",
+            "#!dotsec version=6.0.0 format=v3 mac=AA== dek=AQ==\nFOO=bar\n",
+        );
+        assert_eq!(select_target_format(&path), SecFormat::Recognized);
+    }
+
+    #[test]
+    fn select_target_format_empty_file_returns_none() {
+        // A non-existent or empty file is "new" — the encrypt path then
+        // defaults to v3.
+        let path = select_format_fixture("empty", "");
+        assert_eq!(select_target_format(&path), SecFormat::None);
+    }
+
+    #[test]
+    fn select_target_format_no_envelope_returns_none() {
+        // A plaintext-only .env-ish file with no v1/v2/v3 markers.
+        let path = select_format_fixture("plain", "FOO=bar\nBAR=baz\n");
+        assert_eq!(select_target_format(&path), SecFormat::None);
+    }
+
+    #[test]
+    fn select_target_format_missing_file_returns_none() {
+        // Caller hands us a path that doesn't exist (new file scenario).
+        assert_eq!(
+            select_target_format("/nonexistent/path/that/should/not/exist.sec"),
+            SecFormat::None
+        );
+    }
+
+    #[test]
+    fn select_target_format_unparseable_returns_unparseable() {
+        // A half-edited v2 file with a syntax error must NOT be treated as
+        // "new file → v3 by default" — silently bumping the format would
+        // overwrite the user's in-progress edit with v3 and lose the v2
+        // bytes. The encrypt path turns Unparseable into a hard error.
+        let path = select_format_fixture(
+            "unparseable",
+            // Stray quoted bare line that the dotenv parser will reject.
+            "this is not =parseable=\nKv missing\n",
+        );
+        assert_eq!(select_target_format(&path), SecFormat::Unparseable);
+    }
+
+    #[test]
+    fn select_target_format_v3_header_wins_over_stray_v2_kv() {
+        // Documented precedence: v3 header is authoritative; a stray
+        // `__DOTSEC_KEY__` Kv line in a v3 file is treated as a leftover the
+        // upgrade should have removed.
+        let path = select_format_fixture(
+            "v3-with-stray-v2",
+            "#!dotsec version=6.0.0 format=v3 mac=AA== dek=AQ==\nFOO=bar\n__DOTSEC_KEY__=\"leftover\"\n",
+        );
+        assert_eq!(select_target_format(&path), SecFormat::Recognized);
+    }
+
+    // --- M2: upgrade-format v2 → v3 round-trip ---
 }

@@ -54,7 +54,7 @@ pub async fn match_args(
     // Decrypt .sec
     let lines = with_progress(
         "Decrypting...",
-        dotsec::decrypt_sec_to_lines(sec_file, encryption_engine),
+        dotsec::decrypt_sec_to_lines(sec_file, encryption_engine, &default_options.schema_hash),
     )
     .await?;
 

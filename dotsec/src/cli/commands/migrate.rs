@@ -280,7 +280,12 @@ pub async fn match_args(
 
     with_progress(
         "Encrypting...",
-        dotsec::encrypt_lines_to_sec(&new_lines, sec_file, &encryption_engine, None),
+        dotsec::encrypt_lines_to_sec(
+            &new_lines,
+            sec_file,
+            &encryption_engine,
+            None,
+        ),
     )
     .await?;
 

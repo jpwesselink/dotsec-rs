@@ -10,6 +10,7 @@ use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
 pub mod local;
+pub mod mac;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -23,6 +24,31 @@ pub enum CryptoError {
     InvalidFormat,
     #[error("key commitment verification failed")]
     KeyCommitmentFailed,
+    /// File MAC verification failed — directives, values, or schema were
+    /// tampered with between encryption and decryption.
+    #[error("file MAC verification failed: directives or values modified after encryption")]
+    MacMismatch,
+}
+
+/// Compute the v3 file-level MAC: HMAC-SHA256(dek, canonical_bytes).
+///
+/// `canonical_bytes` is the output of `crypto::mac::canonical_serialize`. The
+/// 32-byte output is stored verbatim (base64-encoded) in `#!dotsec mac=...`.
+pub fn compute_file_mac(dek: &[u8], canonical: &[u8]) -> [u8; 32] {
+    let mut hmac =
+        <HmacSha256 as Mac>::new_from_slice(dek).expect("HMAC accepts any key length");
+    hmac.update(canonical);
+    hmac.finalize().into_bytes().into()
+}
+
+/// Constant-time MAC check. Returns `Err(CryptoError::MacMismatch)` on any
+/// discrepancy — length mismatch or differing bytes.
+pub fn verify_file_mac(dek: &[u8], canonical: &[u8], mac: &[u8]) -> Result<(), CryptoError> {
+    let expected = compute_file_mac(dek, canonical);
+    if expected.len() != mac.len() || expected.ct_eq(mac).unwrap_u8() != 1 {
+        return Err(CryptoError::MacMismatch);
+    }
+    Ok(())
 }
 
 /// Compute a 32-byte key commitment: HMAC-SHA256(key=DEK, msg="dotsec-key-commit").
@@ -153,4 +179,85 @@ pub fn generate_dek() -> Zeroizing<Vec<u8>> {
     let mut dek = vec![0u8; 32];
     OsRng.fill_bytes(&mut dek);
     Zeroizing::new(dek)
+}
+
+#[cfg(test)]
+mod file_mac_tests {
+    use super::mac::{canonical_serialize, CanonicalEntry};
+    use super::*;
+
+    fn fixture() -> (Vec<u8>, Vec<u8>) {
+        let dek = vec![0x42; 32];
+        let canonical = canonical_serialize(
+            &[("provider".into(), Some("local".into()))],
+            &[CanonicalEntry {
+                key: "FOO".into(),
+                directives: vec![("encrypt".into(), None)],
+                value: "ENC[abc]".into(),
+            }],
+            &[0u8; 32],
+        );
+        (dek, canonical)
+    }
+
+    #[test]
+    fn roundtrip_compute_then_verify() {
+        let (dek, canonical) = fixture();
+        let mac = compute_file_mac(&dek, &canonical);
+        verify_file_mac(&dek, &canonical, &mac).expect("verify must accept matching MAC");
+    }
+
+    #[test]
+    fn verify_rejects_tampered_canonical_bytes() {
+        let (dek, canonical) = fixture();
+        let mac = compute_file_mac(&dek, &canonical);
+        let mut tampered = canonical.clone();
+        let mid = tampered.len() / 2;
+        tampered[mid] ^= 0x01;
+        let err = verify_file_mac(&dek, &tampered, &mac);
+        assert!(matches!(err, Err(CryptoError::MacMismatch)));
+    }
+
+    #[test]
+    fn verify_rejects_wrong_dek() {
+        let (dek, canonical) = fixture();
+        let mac = compute_file_mac(&dek, &canonical);
+        let wrong_dek = vec![0x99; 32];
+        let err = verify_file_mac(&wrong_dek, &canonical, &mac);
+        assert!(matches!(err, Err(CryptoError::MacMismatch)));
+    }
+
+    #[test]
+    fn verify_rejects_truncated_mac() {
+        let (dek, canonical) = fixture();
+        let mac = compute_file_mac(&dek, &canonical);
+        let err = verify_file_mac(&dek, &canonical, &mac[..16]);
+        assert!(matches!(err, Err(CryptoError::MacMismatch)));
+    }
+
+    #[test]
+    fn compute_is_deterministic() {
+        let (dek, canonical) = fixture();
+        let a = compute_file_mac(&dek, &canonical);
+        let b = compute_file_mac(&dek, &canonical);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn different_canonicals_produce_different_macs() {
+        let (dek, canonical_a) = fixture();
+        let canonical_b = canonical_serialize(
+            &[("provider".into(), Some("local".into()))],
+            &[CanonicalEntry {
+                key: "FOO".into(),
+                directives: vec![("encrypt".into(), None)],
+                // Different value — the MAC must reflect that.
+                value: "ENC[xyz]".into(),
+            }],
+            &[0u8; 32],
+        );
+        let a = compute_file_mac(&dek, &canonical_a);
+        let b = compute_file_mac(&dek, &canonical_b);
+        assert_ne!(a, b);
+    }
 }

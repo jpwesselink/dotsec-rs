@@ -1,4 +1,3 @@
-use base64::Engine as _;
 use clap::Command;
 use colored::Colorize;
 
@@ -23,7 +22,7 @@ pub async fn match_args(
     // Decrypt all values with the old DEK
     let lines = with_progress(
         "Decrypting with old key...",
-        dotsec::decrypt_sec_to_lines(sec_file, encryption_engine),
+        dotsec::decrypt_sec_to_lines(sec_file, encryption_engine, &default_options.schema_hash),
     )
     .await?;
 
@@ -42,12 +41,24 @@ pub async fn match_args(
         }
         dotsec::EncryptionEngine::None => return Err("Encryption engine is required".into()),
     };
-    let new_wrapped_b64 = base64::engine::general_purpose::STANDARD.encode(&new_wrapped_dek);
 
-    // Re-encrypt: build new lines with the new DEK
-    let entries = dotenv::lines_to_entries(&lines);
+    // Load + merge schema directives onto entries — without this, a value
+    // encrypted via schema-only `@encrypt` would be treated as plaintext and
+    // rotated as raw plaintext under the new DEK, with a MAC that vouches for
+    // the leak. The merge gives schema-only @encrypt entries the same
+    // treatment as inline-@encrypt entries.
+    let schema = if let Some(path) = &default_options.schema_path {
+        let content = std::fs::read_to_string(path)?;
+        Some(dotenv::parse_schema(&content)?)
+    } else {
+        None
+    };
+    let mut entries = dotenv::lines_to_entries(&lines);
+    dotsec::merge_schema_directives_into_entries(&mut entries, schema.as_ref());
+
+    // Re-encrypt every @encrypt entry (now including schema-merged ones)
+    // under the new DEK.
     let mut sec_lines: Vec<dotenv::Line> = Vec::new();
-
     for line in &lines {
         match line {
             dotenv::Line::Kv {
@@ -57,7 +68,6 @@ pub async fn match_args(
             } => {
                 let entry = entries.iter().find(|e| e.key == *key);
                 let should_encrypt = entry.is_some_and(|e| e.has_directive("encrypt"));
-
                 if should_encrypt {
                     let encrypted = crypto::encrypt_value(value, &new_dek, key)?;
                     sec_lines.push(dotenv::Line::Kv {
@@ -73,24 +83,21 @@ pub async fn match_args(
         }
     }
 
-    // new_dek auto-zeroizes when dropped
+    // Build v3 header: MAC over the final canonical bytes under the new DEK,
+    // bound to the same schema hash the encrypt path would derive.
+    let schema_hash = match schema.as_ref() {
+        Some(s) => crypto::mac::schema_hash(Some(&dotenv::schema_to_canonical_bytes(s))),
+        None => crypto::mac::empty_schema_hash(),
+    };
+    let mac = dotsec::compute_v3_mac(&sec_lines, &new_dek, &schema_hash);
+    let header = dotsec::header_v3::HeaderV3 {
+        version: dotsec::header_version().to_string(),
+        mac,
+        wrapped_dek: new_wrapped_dek.to_vec(),
+    };
+    dotsec::insert_v3_header(&mut sec_lines, header);
 
-    // Append new __DOTSEC_KEY__
-    let last_is_newline = matches!(sec_lines.last(), Some(dotenv::Line::Newline));
-    if !sec_lines.is_empty() && !last_is_newline {
-        sec_lines.push(dotenv::Line::Newline);
-    }
-    sec_lines.push(dotenv::Line::Newline);
-    sec_lines.push(dotenv::Line::Comment {
-        text: "# do not edit the line below, it is managed by dotsec".to_string(),
-    });
-    sec_lines.push(dotenv::Line::Newline);
-    sec_lines.push(dotenv::Line::Kv {
-        key: "__DOTSEC_KEY__".to_string(),
-        value: new_wrapped_b64,
-        quote_type: dotenv::QuoteType::Double,
-    });
-    sec_lines.push(dotenv::Line::Newline);
+    // new_dek auto-zeroizes when dropped here.
 
     let output = dotenv::lines_to_string(&sec_lines);
     dotsec::write_sec_file(sec_file, &output)?;

@@ -21,6 +21,8 @@ pub enum DataStoreError {
     SsmError(String),
     #[error("Secrets Manager error: {0}")]
     SecretsManagerError(String),
+    #[error("file MAC verification failed: directives or values modified after encryption")]
+    MacMismatch,
 }
 
 impl From<CryptoError> for DataStoreError {
@@ -30,6 +32,7 @@ impl From<CryptoError> for DataStoreError {
             CryptoError::DecodeError(e) => DataStoreError::DecodeError(e),
             CryptoError::InvalidFormat => DataStoreError::InvalidFormat,
             CryptoError::KeyCommitmentFailed => DataStoreError::KeyCommitmentFailed,
+            CryptoError::MacMismatch => DataStoreError::MacMismatch,
         }
     }
 }

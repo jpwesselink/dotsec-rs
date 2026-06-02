@@ -14,8 +14,9 @@ pub async fn show(
     encryption_engine: &EncryptionEngine,
     output_format: &OutputFormat,
     reveal: bool,
+    schema_hash: &[u8; 32],
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let lines = decrypt_sec_to_lines(sec_file, encryption_engine).await?;
+    let lines = decrypt_sec_to_lines(sec_file, encryption_engine, schema_hash).await?;
     if reveal {
         create_output(&lines, output_format)
     } else {

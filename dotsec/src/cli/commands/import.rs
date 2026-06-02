@@ -20,6 +20,15 @@ pub fn command() -> Command {
                 .action(ArgAction::SetTrue)
                 .help("Accept all variables with auto-detected types (skip per-variable prompts)"),
         )
+        .arg(
+            Arg::new("no-gitignore")
+                .long("no-gitignore")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "Skip auto-adding *.key to .gitignore when creating a new keypair \
+                     (parity with `dotsec set --no-gitignore` and `dotsec init --no-gitignore`)",
+                ),
+        )
 }
 
 pub async fn match_args(
@@ -174,6 +183,23 @@ pub async fn match_args(
         resolved_engine = dotsec::EncryptionEngine::try_from(effective_config.clone())?;
         &resolved_engine
     };
+
+    // First-run keypair bootstrap for the local provider. Without this, an
+    // `import` against a fresh directory dies inside `encrypt_lines_to_sec`
+    // because `crypto::local::load_private_key` can't find the key file.
+    // `dotsec set` does the same bootstrap when creating a new .sec; mirror
+    // it here so `import` behaves identically as an on-ramp.
+    //
+    // Honor a custom key_file path from the engine (e.g. `@key-id=...` mapped
+    // through `EncryptionEngine::try_from(FileConfig)`), falling back to the
+    // sibling `<sec_file>.key` default.
+    if let dotsec::EncryptionEngine::Local(opts) = encryption_engine {
+        let key_file = opts
+            .key_file
+            .clone()
+            .unwrap_or_else(|| format!("{}.key", sec_file));
+        helpers::bootstrap_keypair(&key_file, sub.get_flag("no-gitignore"))?;
+    }
 
     // Filter entries to import
     let import_entries: Vec<&dotenv::Entry> = entries
@@ -410,14 +436,19 @@ pub async fn match_args(
 
         with_progress(
             "Encrypting...",
-            dotsec::encrypt_lines_to_sec(&new_lines, sec_file, encryption_engine, schema.as_ref()),
+            dotsec::encrypt_lines_to_sec(
+                &new_lines,
+                sec_file,
+                encryption_engine,
+                schema.as_ref(),
+            ),
         )
         .await?;
     } else {
         // New-only mode: decrypt existing .sec, append new variables
         let mut existing_lines = with_progress(
             "Decrypting...",
-            dotsec::decrypt_sec_to_lines(sec_file, encryption_engine),
+            dotsec::decrypt_sec_to_lines(sec_file, encryption_engine, &default_options.schema_hash),
         )
         .await?;
 

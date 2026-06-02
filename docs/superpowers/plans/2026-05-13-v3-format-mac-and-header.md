@@ -1,5 +1,13 @@
 # V3 Wire Format: File-Level MAC + Structured Header Block (F1 + F6)
 
+> **Status:** Implemented on `feat/v3-format-mac-header`. Two refinements landed mid-implementation — read those before treating this doc as the source of truth.
+>
+> **Refinement 1 — MAC scope tightened.** The plan below describes including `plain:<value>` in the canonical bytes. That broke the dev loop (hand-editing a plaintext `PORT=3000` → `PORT=4000` would invalidate the MAC). The shipped implementation drops plaintext values from canonical bytes; entry names and `ENC[…]` ciphertexts are still covered. See `docs/guide/encryption.md` § File-level MAC for the final scope.
+>
+> **Refinement 2 — Schema hash canonicalized.** The plan below hashes raw schema file bytes. That made cosmetic edits (`@description`, reordering) invalidate every teammate's MACs. The shipped implementation hashes a canonical form via `dotenv::schema_to_canonical_bytes` (sorted directives, descriptions/whitespace stripped). Only semantic schema changes (`@type`, `@encrypt`, `@push`, `@max`, …) flip the hash.
+>
+> **Refinement 3 — `dotsec encrypt` is required, not deferred.** The plan listed `dotsec re-mac` as "defer unless users ask." The MAC-mismatch error path needs an obvious recovery command, so `dotsec encrypt` shipped as part of the v3 work.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Source:** Findings F1 (file-level MAC over directives) and F6 (structured header block) from the 2026-05-12 external security review of PR #13. F1 is the S1 (critical) finding; F6 pairs naturally so we bump the wire format only once.

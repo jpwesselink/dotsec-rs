@@ -32,6 +32,7 @@ log = { workspace = true }
 signal-hook = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+tempfile = "3.20"
 tokio = { workspace = true }
 zeroize = "1.8"
 chromakopia = "=0.2.0-pr-7.a68a872"
