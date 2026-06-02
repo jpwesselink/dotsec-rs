@@ -41,7 +41,6 @@ pub fn bootstrap_keypair(
     skip_gitignore: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
 
     if std::path::Path::new(key_file).exists() {
         return Ok(());
@@ -51,14 +50,17 @@ pub fn bootstrap_keypair(
 
     // O_CREAT | O_EXCL: atomic "create only if absent". A racing process
     // already wrote a keypair → we get AlreadyExists and bail without
-    // clobbering it. Mode 0600 so the secret isn't world-readable even on
-    // shared systems.
-    let mut file = match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(key_file)
+    // clobbering it. On Unix we additionally set mode 0600 so the secret
+    // isn't world-readable; on Windows, NTFS inherits the parent directory's
+    // ACL — there's no `mode()` to set, and dotsec doesn't paper over that.
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
     {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = match opts.open(key_file) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             // Lost the race; whoever wrote the file first wins.
@@ -1003,9 +1005,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The age identity is a private key — must not be world-readable.
+    /// Unix-only: Windows doesn't have POSIX mode bits, and `OpenOptionsExt`
+    /// doesn't compile there.
+    #[cfg(unix)]
     #[test]
     fn bootstrap_keypair_writes_0600_perms() {
-        // The age identity is a private key — must not be world-readable.
         use std::os::unix::fs::PermissionsExt;
         let (dir, key_file) = bootstrap_fixture("perms");
         bootstrap_keypair(&key_file, true).unwrap();
