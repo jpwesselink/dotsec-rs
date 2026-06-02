@@ -25,6 +25,10 @@
     {
       "label": "#23 feat/v3-format-mac-header",
       "path": "/pr-23/"
+    },
+    {
+      "label": "#24 feat/kms-encryption-context",
+      "path": "/pr-24/"
     }
   ],
   "latest": "/v6.0.0/"
