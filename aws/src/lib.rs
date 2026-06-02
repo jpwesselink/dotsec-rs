@@ -129,6 +129,17 @@ pub type EncryptionContext = Vec<(String, String)>;
 /// Generate a new AES-256 data encryption key via KMS, binding the given
 /// `EncryptionContext`. The wrapped DEK can only be unwrapped later with
 /// the same context.
+///
+/// **Coverage note:** this function and its `unwrap_data_key` twin are
+/// only exercised end-to-end via manual smoke against a real AWS account.
+/// Mocking KMS via `aws-smithy-mocks(-experimental)` would close the loop
+/// but the crate pulls in a transitive `aws-smithy-runtime` revision that
+/// conflicts with the rest of our dep graph. The contract these functions
+/// promise — that the EncryptionContext is exactly what
+/// `dotsec_core::kms_encryption_context()` returns and that it's passed
+/// symmetrically to both calls — is pinned by the
+/// `kms_encryption_context_pins_format_v3` unit test in `dotsec-core`.
+/// LocalStack-driven integration tests are a reasonable follow-up.
 pub async fn generate_data_key(
     key_id: &str,
     region: Option<&str>,
