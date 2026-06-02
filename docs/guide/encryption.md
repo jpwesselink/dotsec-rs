@@ -37,7 +37,7 @@ On decryption, load the private key (from `DOTSEC_PRIVATE_KEY` env var or `.sec.
 # dotsec v6.0.0 — encrypted environment file
 # https://github.com/jpwesselink/dotsec-rs
 
-#!dotsec version=6.0.0 format=v3 mac=base64-32-bytes... dek=base64-age-wrapped-dek...
+# @dotsec(format=v3, mac=base64-32-bytes..., dek=base64-age-wrapped-dek...)
 # @provider=local @default-encrypt
 
 # @encrypt
@@ -47,7 +47,7 @@ DATABASE_URL=ENC[base64...]
 NODE_ENV="production"
 ```
 
-The first non-banner line is the **`#!dotsec` header**: a single "shebang" comment carrying a format tag, the file-level integrity tag, and the wrapped DEK. The dotenv parser treats it as a regular comment, so editors and other tools see a normal `.sec` file — only dotsec interprets the `#!dotsec` prefix specially.
+The first non-banner line is the **`@dotsec(...)` directive**: a single file-level directive carrying the format tag, the file-level integrity tag, and the wrapped DEK. It uses the same `@name` syntax as every other directive in `.sec`, so there's no second mini-grammar to learn — but its three params are paren-grouped to signal "this whole blob belongs together, don't edit by hand."
 
 ### Key file
 
@@ -90,7 +90,7 @@ See [Setup → AWS KMS](/guide/setup#aws-kms-setup) for configuration steps.
 ### What the `.sec` file looks like
 
 ```bash
-#!dotsec version=6.0.0 format=v3 mac=base64-32-bytes... dek=base64-kms-wrapped-dek...
+# @dotsec(format=v3, mac=base64-32-bytes..., dek=base64-kms-wrapped-dek...)
 # @provider=aws @key-id=alias/dotsec @region=us-east-1 @default-encrypt
 
 DATABASE_URL=ENC[base64...]
@@ -111,7 +111,7 @@ base64(32-byte-commitment || 12-byte-nonce || ciphertext || 16-byte-auth-tag)
 
 ## File-level integrity tag
 
-In addition to per-value AEAD (which authenticates each `ENC[...]` against its key name), the `#!dotsec` header carries a **file-level integrity tag**: HMAC-SHA256 of the DEK over a canonical serialization of the file.
+In addition to per-value AEAD (which authenticates each `ENC[...]` against its key name), the `@dotsec(...)` directive carries a **file-level integrity tag**: HMAC-SHA256 of the DEK over a canonical serialization of the file.
 
 ### What the MAC covers
 
@@ -184,7 +184,7 @@ Because each value is encrypted independently, two developers can change differe
   DB_PASSWORD=ENC[unchanged...]
 ```
 
-Only the lines that were actually modified show up in the diff. The wrapped DEK in the `#!dotsec` header stays the same as long as the key isn't rotated; the `mac=` field updates on every write to reflect the new file state.
+Only the lines that were actually modified show up in the diff. The wrapped DEK in the `@dotsec(...)` directive stays the same as long as the key isn't rotated; the `mac=` field updates on every write to reflect the new file state.
 
 ## Key rotation
 
@@ -194,7 +194,7 @@ Rotate the DEK without changing any plaintext values:
 dotsec rotate-key
 ```
 
-This decrypts all values with the old DEK, generates a new DEK (local: new random DEK wrapped with the same age key; KMS: new data key from KMS), and re-encrypts everything. The `dek=` and `mac=` fields in the `#!dotsec` header are both refreshed.
+This decrypts all values with the old DEK, generates a new DEK (local: new random DEK wrapped with the same age key; KMS: new data key from KMS), and re-encrypts everything. The `dek=` and `mac=` fields in the `@dotsec(...)` directive are both refreshed.
 
 Use this periodically or after a suspected key compromise. For a full key compromise (private key leaked), generate a new keypair first:
 

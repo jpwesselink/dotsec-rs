@@ -201,21 +201,18 @@ the value, run `dotsec set {key} <new-value>` to write a fresh ciphertext."
 
 /// Classify a .sec file by its envelope. Used to decide whether to write a
 /// fresh file (None), refuse to overwrite (Unparseable), or preserve the
-/// existing `#!dotsec` header on re-encrypt.
+/// existing `@dotsec(...)` directive on re-encrypt.
 fn detect_format(lines: &[Line]) -> SecFormat {
-    for line in lines {
-        if let Line::Comment { text } = line {
-            if header_v3::HeaderV3::is_header_line(text) {
-                return SecFormat::Recognized;
-            }
-        }
+    if header_v3::HeaderV3::is_present(lines) {
+        SecFormat::Recognized
+    } else {
+        SecFormat::None
     }
-    SecFormat::None
 }
 
 #[derive(Debug, PartialEq)]
 enum SecFormat {
-    Recognized,  // Has a `#!dotsec` header — proper dotsec file
+    Recognized,  // Has an `@dotsec(...)` directive — proper dotsec file
     None,        // No encryption markers (new file)
     Unparseable, // File exists but couldn't be parsed — refuse to write rather than silently bump
 }
@@ -354,7 +351,7 @@ fn is_new_or_no_key(e: &Box<dyn std::error::Error>) -> bool {
     let is_new_file = e
         .downcast_ref::<std::io::Error>()
         .is_some_and(|io_err| io_err.kind() == std::io::ErrorKind::NotFound);
-    let is_no_key = e.to_string().contains("No #!dotsec header found");
+    let is_no_key = e.to_string().contains("No @dotsec(...) directive found");
     is_new_file || is_no_key
 }
 
@@ -408,15 +405,15 @@ fn encrypt_with_dek(
                     sec_lines.push(line.clone());
                 }
             }
-            // Drop any pre-existing header line — we'll recompute and re-insert.
-            Line::Comment { text } if header_v3::HeaderV3::is_header_line(text) => continue,
+            // Drop any pre-existing @dotsec(...) directive — we'll recompute
+            // and re-insert below. Other directives flow through unchanged.
+            Line::Directive { name, .. } if name == header_v3::HEADER_DIRECTIVE_NAME => continue,
             other => sec_lines.push(other.clone()),
         }
     }
 
     let mac = compute_v3_mac(&sec_lines, dek, schema_hash);
     let header = header_v3::HeaderV3 {
-        version: header_version().to_string(),
         mac,
         wrapped_dek: wrapped_dek.to_vec(),
     };
@@ -435,7 +432,7 @@ fn encrypt_with_dek(
 /// they can't distinguish the original format.
 ///
 /// Mapping:
-/// - File on disk has `#!dotsec` header → `V3`
+/// - File on disk has `@dotsec(...)` directive → `Recognized`
 /// - File on disk has `__DOTSEC_KEY__` Kv line → `V2` (stays V2; user opts
 ///   into v3 via `dotsec upgrade-format`)
 /// - File on disk has `__DOTSEC__` Kv line → `V1` (legacy; encrypt path
@@ -479,11 +476,14 @@ fn build_canonical_bytes(sec_lines: &[Line], schema_hash: &[u8; 32]) -> Vec<u8> 
     use crypto::mac::{canonical_serialize, CanonicalEntry};
 
     // File-level directives stop at the first Kv (matches extract_file_config's contract).
+    // The `@dotsec(...)` directive carries the integrity tag itself — it must
+    // be excluded from the canonical input, otherwise the MAC would have to
+    // include itself.
     let mut file_directives: Vec<(String, Option<String>)> = Vec::new();
     for line in sec_lines {
         match line {
             Line::Kv { .. } => break,
-            Line::Directive { name, value } => {
+            Line::Directive { name, value } if name != header_v3::HEADER_DIRECTIVE_NAME => {
                 file_directives.push((name.clone(), value.clone()));
             }
             _ => {}
@@ -506,21 +506,20 @@ fn build_canonical_bytes(sec_lines: &[Line], schema_hash: &[u8; 32]) -> Vec<u8> 
     canonical_serialize(&file_directives, &canonical_entries, schema_hash)
 }
 
-/// Insert the v3 `#!dotsec` header line into `sec_lines`. **Does not replace**
-/// an existing header — callers must strip any pre-existing `#!dotsec` line
-/// before calling. The encrypt path does this via `is_header_line` filtering.
+/// Insert the `@dotsec(...)` directive into `sec_lines`. **Does not replace**
+/// an existing directive — callers must strip any pre-existing one before
+/// calling. The encrypt path does this via the `Line::Directive { name: "dotsec", .. }`
+/// filter.
 ///
 /// Placement: after the banner comment block (the two-line `# dotsec v…` +
 /// `# https://github.com/jpwesselink/dotsec-rs` pair). If the banner has a
 /// user-edited comment interleaved between its two lines, the header lands
-/// between the first banner line and the user's comment — still valid v3, but
+/// between the first banner line and the user's comment — still valid, but
 /// cosmetically odd. Files written by dotsec never produce that shape.
 ///
 /// Public for the same reason as [`compute_v3_mac`] — `rotate-key` needs it.
 pub fn insert_v3_header(sec_lines: &mut Vec<Line>, header: header_v3::HeaderV3) {
-    let header_line = Line::Comment {
-        text: header.format(),
-    };
+    let header_line = header.to_directive_line();
 
     // Find insertion point: after the entire banner block (banner Comments +
     // their interleaved Newlines), before the first Directive/Kv/non-banner
@@ -608,7 +607,7 @@ async fn decrypt_sec_to_lines_inner(
             });
             if has_enc_values {
                 return Err(
-                    "File contains ENC[...] values but no #!dotsec header. File may be corrupted."
+                    "File contains ENC[...] values but no @dotsec(...) directive. File may be corrupted."
                         .into(),
                 );
             }
@@ -617,7 +616,7 @@ async fn decrypt_sec_to_lines_inner(
     }
 }
 
-/// Read a `.sec` file: parse the `#!dotsec` header, verify the file-level
+/// Read a `.sec` file: parse the `@dotsec(...)` directive, verify the file-level
 /// integrity tag (when `schema_hash` is `Some`), unwrap the DEK, decrypt
 /// every `ENC[…]` value, and return the result as plaintext lines.
 ///
@@ -630,14 +629,8 @@ async fn decrypt_v3(
     encryption_engine: &EncryptionEngine,
     schema_hash: Option<&[u8; 32]>,
 ) -> Result<Vec<Line>, Box<dyn std::error::Error>> {
-    let header = lines
-        .iter()
-        .find_map(|l| match l {
-            Line::Comment { text } if header_v3::HeaderV3::is_header_line(text) => Some(text),
-            _ => None,
-        })
-        .ok_or("file is missing its #!dotsec header line")?;
-    let parsed = header_v3::HeaderV3::parse(header)?;
+    let parsed = header_v3::HeaderV3::extract_from_lines(lines)
+        .map_err(|e| format!("file is missing its @dotsec(...) header directive: {e}"))?;
 
     let dek = match encryption_engine {
         EncryptionEngine::Aws(opts) => {
@@ -651,17 +644,10 @@ async fn decrypt_v3(
     };
 
     if let Some(schema_hash) = schema_hash {
-        // Strip the header line before canonicalizing — the encrypt path
-        // strips and re-inserts it, so both sides must canonicalize over the
-        // same shape (header excluded).
-        let lines_for_canonical: Vec<Line> = lines
-            .iter()
-            .filter(|l| {
-                !matches!(l, Line::Comment { text } if header_v3::HeaderV3::is_header_line(text))
-            })
-            .cloned()
-            .collect();
-        let canonical = build_canonical_bytes(&lines_for_canonical, schema_hash);
+        // The header directive is filtered out of the canonical bytes inside
+        // `build_canonical_bytes` (it would otherwise be self-referencing —
+        // the MAC can't include itself).
+        let canonical = build_canonical_bytes(lines, schema_hash);
         crypto::verify_file_mac(&dek, &canonical, &parsed.mac)
             .map_err(|_| Box::<dyn std::error::Error>::from(MAC_FAILURE_MESSAGE))?;
     }
@@ -669,7 +655,7 @@ async fn decrypt_v3(
     let mut resolved: Vec<Line> = Vec::new();
     for line in lines {
         match line {
-            Line::Comment { text } if header_v3::HeaderV3::is_header_line(text) => continue,
+            Line::Directive { name, .. } if name == header_v3::HEADER_DIRECTIVE_NAME => continue,
             Line::Kv {
                 key,
                 value,
@@ -697,21 +683,15 @@ async fn decrypt_v3(
 
 type DekPair = (zeroize::Zeroizing<Vec<u8>>, Vec<u8>);
 
-/// Read the wrapped DEK from an existing .sec file's `#!dotsec` header.
+/// Read the wrapped DEK from an existing .sec file's `@dotsec(...)` directive.
 /// Returns a clean "no header" error when the file exists but has no
 /// recognized envelope (the encrypt path treats this as "new file →
 /// generate fresh DEK").
 fn load_existing_wrapped_dek(sec_file: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let content = load_file(sec_file)?;
     let lines = dotenv::parse_dotenv(&content)?;
-    let header_line = lines
-        .iter()
-        .find_map(|l| match l {
-            Line::Comment { text } if header_v3::HeaderV3::is_header_line(text) => Some(text),
-            _ => None,
-        })
-        .ok_or("No #!dotsec header found")?;
-    let parsed = header_v3::HeaderV3::parse(header_line)?;
+    let parsed = header_v3::HeaderV3::extract_from_lines(&lines)
+        .map_err(|_| "No @dotsec(...) directive found")?;
     Ok(parsed.wrapped_dek)
 }
 
@@ -923,6 +903,7 @@ mod tests {
     fn write_sec_file_sets_0600_permissions() {
         use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join("dotsec-test-write-sec");
+        let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("test.sec");
 
@@ -1570,6 +1551,7 @@ mod tests {
     #[tokio::test]
     async fn local_encrypt_decrypt_roundtrip() {
         let dir = std::env::temp_dir().join("dotsec-test-local-roundtrip");
+        let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::create_dir_all(&dir);
         let sec_file = dir.join("test.sec").to_string_lossy().to_string();
         let key_file = dir.join("test.sec.key").to_string_lossy().to_string();
@@ -1616,16 +1598,16 @@ mod tests {
             "encrypted value should contain ENC[...]"
         );
         assert!(
-            content.contains("#!dotsec"),
-            "new files should default to v3 (#!dotsec header)"
+            content.contains("@dotsec("),
+            "new files should carry the @dotsec(...) directive"
         );
         assert!(
-            content.contains(" mac="),
-            "v3 header should include the file MAC"
+            content.contains("mac="),
+            "@dotsec(...) should include the file integrity tag"
         );
         assert!(
             !content.contains("__DOTSEC_KEY__"),
-            "v3 should not emit the legacy __DOTSEC_KEY__ Kv line"
+            "v7 should not emit any legacy __DOTSEC_KEY__ Kv line"
         );
         assert!(!content.contains("hunter2"), "plaintext should not appear");
 
@@ -1662,6 +1644,7 @@ mod tests {
     #[tokio::test]
     async fn local_decrypt_with_wrong_key_fails() {
         let dir = std::env::temp_dir().join("dotsec-test-local-wrong-key");
+        let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::create_dir_all(&dir);
         let sec_file = dir.join("test.sec").to_string_lossy().to_string();
         let key_file = dir.join("test.sec.key").to_string_lossy().to_string();
@@ -1706,6 +1689,7 @@ mod tests {
     #[tokio::test]
     async fn local_decrypt_discovers_sibling_key_file() {
         let dir = std::env::temp_dir().join("dotsec-test-local-discovery");
+        let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::create_dir_all(&dir);
         let sec_file = dir.join("test.sec").to_string_lossy().to_string();
         let key_file = dir.join("test.sec.key").to_string_lossy().to_string();
@@ -1761,6 +1745,7 @@ mod tests {
         // encrypt_lines_to_sec must still encrypt the value. Pre-fix this silently wrote
         // plaintext, leaking secrets on rewrite paths (format, extract-schema, remove-directives).
         let dir = std::env::temp_dir().join("dotsec-test-schema-encrypt");
+        let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::create_dir_all(&dir);
         let sec_file = dir.join("test.sec").to_string_lossy().to_string();
         let key_file = dir.join("test.sec.key").to_string_lossy().to_string();
@@ -1807,6 +1792,7 @@ mod tests {
         // Regression: when @default-encrypt lives in dotsec.schema (file-level), all entries
         // without explicit @plaintext should still be encrypted.
         let dir = std::env::temp_dir().join("dotsec-test-schema-default-encrypt");
+        let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::create_dir_all(&dir);
         let sec_file = dir.join("test.sec").to_string_lossy().to_string();
         let key_file = dir.join("test.sec.key").to_string_lossy().to_string();
@@ -2595,10 +2581,10 @@ mod tests {
     }
 
     #[test]
-    fn select_target_format_v3_header_returns_v3() {
+    fn select_target_format_v3_header_returns_recognized() {
         let path = select_format_fixture(
             "v3",
-            "#!dotsec version=6.0.0 format=v3 mac=AA== dek=AQ==\nFOO=bar\n",
+            "# @dotsec(format=v3, mac=AA==, dek=AQ==)\nFOO=bar\n",
         );
         assert_eq!(select_target_format(&path), SecFormat::Recognized);
     }
@@ -2641,17 +2627,6 @@ mod tests {
         assert_eq!(select_target_format(&path), SecFormat::Unparseable);
     }
 
-    #[test]
-    fn select_target_format_v3_header_wins_over_stray_v2_kv() {
-        // Documented precedence: v3 header is authoritative; a stray
-        // `__DOTSEC_KEY__` Kv line in a v3 file is treated as a leftover the
-        // upgrade should have removed.
-        let path = select_format_fixture(
-            "v3-with-stray-v2",
-            "#!dotsec version=6.0.0 format=v3 mac=AA== dek=AQ==\nFOO=bar\n__DOTSEC_KEY__=\"leftover\"\n",
-        );
-        assert_eq!(select_target_format(&path), SecFormat::Recognized);
-    }
 
     // --- M2: upgrade-format v2 → v3 round-trip ---
 }

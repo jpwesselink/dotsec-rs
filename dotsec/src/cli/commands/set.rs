@@ -452,11 +452,7 @@ pub async fn match_args(
     let is_v3 = std::fs::read_to_string(sec_file)
         .ok()
         .and_then(|c| dotenv::parse_dotenv(&c).ok())
-        .map(|lines| {
-            lines.iter().any(|l| {
-                matches!(l, dotenv::Line::Comment { text } if dotsec::header_v3::HeaderV3::is_header_line(text))
-            })
-        })
+        .map(|lines| dotsec::header_v3::HeaderV3::is_present(&lines))
         .unwrap_or(false);
 
     let needs_round_trip = new_is_encrypted || old_was_encrypted || is_v3;

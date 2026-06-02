@@ -91,7 +91,6 @@ pub async fn match_args(
     };
     let mac = dotsec::compute_v3_mac(&sec_lines, &new_dek, &schema_hash);
     let header = dotsec::header_v3::HeaderV3 {
-        version: dotsec::header_version().to_string(),
         mac,
         wrapped_dek: new_wrapped_dek.to_vec(),
     };

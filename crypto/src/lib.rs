@@ -33,7 +33,8 @@ pub enum CryptoError {
 /// Compute the v3 file-level MAC: HMAC-SHA256(dek, canonical_bytes).
 ///
 /// `canonical_bytes` is the output of `crypto::mac::canonical_serialize`. The
-/// 32-byte output is stored verbatim (base64-encoded) in `#!dotsec mac=...`.
+/// 32-byte output is stored verbatim (base64-encoded) as `mac=...` inside the
+/// `@dotsec(...)` directive on disk.
 pub fn compute_file_mac(dek: &[u8], canonical: &[u8]) -> [u8; 32] {
     let mut hmac =
         <HmacSha256 as Mac>::new_from_slice(dek).expect("HMAC accepts any key length");

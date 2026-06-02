@@ -31,6 +31,11 @@ pub fn lines_to_string(lines: &[Line]) -> String {
                     in_directive = true;
                 }
                 match value {
+                    Some(v) if name == "dotsec" => {
+                        // @dotsec(params) — paren-grouped, not = separated.
+                        // Value carries the raw "name=value, name=value" body.
+                        output.push_str(&format!("@dotsec({})", v));
+                    }
                     Some(v) => {
                         if QUOTED_VALUE_DIRECTIVES.contains(&name.as_str()) {
                             output.push_str(&format!("@{}=\"{}\"", name, v));
@@ -117,7 +122,12 @@ pub fn lines_to_entries(lines: &[Line]) -> Vec<Entry> {
                 // Skip file-level config directives from being attached to entries
                 if matches!(
                     name.as_str(),
-                    "default-encrypt" | "default-plaintext" | "provider" | "key-id" | "region"
+                    "default-encrypt"
+                        | "default-plaintext"
+                        | "provider"
+                        | "key-id"
+                        | "region"
+                        | "dotsec"
                 ) {
                     continue;
                 }
@@ -496,6 +506,20 @@ fn parse_directive(pair: Pair<Rule>) -> Vec<Line> {
                     output.push(Line::Directive {
                         name: "deprecated".to_string(),
                         value: message,
+                    });
+                }
+                Rule::dotsec_directive => {
+                    // Whole inner string between the parens, comma-separated
+                    // name=value pairs. The header module parses this further.
+                    let raw = typed.as_str();
+                    let inner = raw
+                        .strip_prefix("@dotsec(")
+                        .and_then(|s| s.strip_suffix(')'))
+                        .unwrap_or("")
+                        .to_string();
+                    output.push(Line::Directive {
+                        name: "dotsec".to_string(),
+                        value: Some(inner),
                     });
                 }
                 Rule::text_directive => {

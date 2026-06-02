@@ -205,7 +205,7 @@ The command:
 1. Reads the file, bypassing the file-level integrity tag (per-value AEAD still authenticates every `ENC[…]`).
 2. Reloads `dotsec.schema` so its directives merge into the encrypt pass.
 3. Re-runs the standard encrypt pipeline — values with `@encrypt` get encrypted, values with `@plaintext` stay plaintext, and the wrapped DEK is preserved.
-4. Writes a fresh MAC into the `#!dotsec` header.
+4. Writes a fresh MAC into the `@dotsec(...)` directive.
 
 This is the recovery path the integrity-failure message points at: when the file's intent changed but the on-disk integrity tag hadn't been refreshed yet, `dotsec encrypt` brings them back into sync. See [encryption guide → File-level integrity tag](/guide/encryption#file-level-integrity-tag) for the full threat model.
 
@@ -217,7 +217,7 @@ Generate a new data encryption key (DEK) and re-encrypt all values:
 dotsec rotate-key
 ```
 
-For local encryption: generates a new DEK wrapped with the same age key. For AWS KMS: requests a new data key from KMS. Either way, all values are re-encrypted and the `#!dotsec` header's `dek=` and `mac=` fields are refreshed.
+For local encryption: generates a new DEK wrapped with the same age key. For AWS KMS: requests a new data key from KMS. Either way, all values are re-encrypted and the `@dotsec(...)` directive's `dek=` and `mac=` fields are refreshed.
 
 ## `dotsec migrate`
 
