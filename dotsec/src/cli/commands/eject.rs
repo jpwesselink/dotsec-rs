@@ -67,26 +67,29 @@ pub async fn match_args(
             }
         }
 
-        // Build the schema
+        // Build the schema. Merge file-level directives (`@default-encrypt`,
+        // etc.) into the first entry's directives — that mirrors what
+        // `parse_schema` will produce on read-back (it accumulates all
+        // pre-key directives onto the next key). Keeping both sides aligned
+        // is what makes `schema_to_canonical_bytes` deterministic across
+        // write and read.
         let mut schema = dotenv::Schema::default();
         schema.extend(schema_entries);
-
-        // Write schema file
-        let mut schema_output = String::new();
-        if !schema_directives_for_file.is_empty() {
-            schema_output.push_str("# ");
-            for (i, (name, value)) in schema_directives_for_file.iter().enumerate() {
-                if i > 0 {
-                    schema_output.push(' ');
-                }
-                match value {
-                    Some(v) => schema_output.push_str(&format!("@{}={}", name, v)),
-                    None => schema_output.push_str(&format!("@{}", name)),
-                }
+        let first_key: Option<String> = schema.keys().next().map(|k| k.to_string());
+        if let Some(first_key) = first_key {
+            if let Some(first_entry) = schema.get_mut(&first_key) {
+                let mut merged = schema_directives_for_file.clone();
+                merged.append(&mut first_entry.directives);
+                first_entry.directives = merged;
             }
-            schema_output.push_str("\n\n");
         }
-        schema_output.push_str(&dotenv::schema_to_string(&schema));
+
+        // Write schema file. We rely on `schema_to_string` to render
+        // everything — including the file-level directives now attached to
+        // the first entry — so that read-back via `parse_schema` produces
+        // an in-memory schema byte-for-byte equivalent to the one we just
+        // passed to `encrypt_lines_to_sec`.
+        let schema_output = dotenv::schema_to_string(&schema);
         dotsec::write_sec_file(output, &schema_output)?;
 
         // Rewrite the .sec file without schema directives. The just-built schema must be passed

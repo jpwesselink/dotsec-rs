@@ -41,6 +41,16 @@ pub fn command() -> Command {
                 .help("With --push: also inject into local env (default in v6 is push-only)"),
         )
         .arg(
+            Arg::new("description")
+                .long("description")
+                .value_name("TEXT")
+                .help(
+                    "Human-readable description for this variable. Written to \
+                     dotsec.schema if one exists (so it's shared across .sec \
+                     files); otherwise inline in .sec.",
+                ),
+        )
+        .arg(
             Arg::new("yes")
                 .short('y')
                 .long("yes")
@@ -250,6 +260,7 @@ pub async fn match_args(
     let type_arg = sub.get_one::<String>("type");
     let push_arg = sub.get_one::<String>("push");
     let also_env_flag = sub.get_flag("also-env");
+    let description_arg = sub.get_one::<String>("description");
 
     if key_in_schema {
         // Key already in schema — no directive prompts needed, just update value
@@ -264,7 +275,23 @@ pub async fn match_args(
         } else {
             new_is_encrypted = file_default_encrypt;
         }
-        // No directives go inline in .sec
+        // No directives go inline in .sec.
+        //
+        // Description updates land on the existing schema entry: replace any
+        // existing `@description` directive in place (so we don't accumulate
+        // duplicates across repeated `set --description` calls).
+        if let Some(desc) = description_arg {
+            if let Some(s) = schema.as_mut() {
+                if let Some(entry) = s.get_mut(&key) {
+                    entry.directives.retain(|(n, _)| n != "description");
+                    entry
+                        .directives
+                        .push(("description".to_string(), Some(desc.clone())));
+                }
+                let schema_output = dotenv::schema_to_string(s);
+                dotsec::write_sec_file(schema_path.as_ref().unwrap(), &schema_output)?;
+            }
+        }
     } else if schema.is_some() {
         // Schema exists but key is new — prompt for directives (or auto-detect with -y), write to schema
         if interactive {
@@ -340,6 +367,15 @@ pub async fn match_args(
             new_is_encrypted = false;
         } else {
             new_is_encrypted = file_default_encrypt;
+        }
+
+        // Tack on the description (if provided). Lives in the schema with
+        // every other directive on this entry.
+        if let Some(desc) = description_arg {
+            new_directives.push(dotenv::Line::Directive {
+                name: "description".to_string(),
+                value: Some(desc.clone()),
+            });
         }
 
         // Move directives to schema, not inline in .sec
@@ -442,6 +478,16 @@ pub async fn match_args(
                     });
                 }
             }
+        }
+
+        // Description applies regardless of how the other directives were
+        // populated (interactive / auto-yes / explicit flags). Append last so
+        // it shows up at the end of the inline directive line.
+        if let Some(desc) = description_arg {
+            new_directives.push(dotenv::Line::Directive {
+                name: "description".to_string(),
+                value: Some(desc.clone()),
+            });
         }
     }
 
@@ -558,14 +604,31 @@ pub async fn match_args(
 }
 
 /// Find the index where directives for a KV at `kv_pos` start.
+/// Walk backwards from `kv_pos` over the per-entry directives attached to
+/// the Kv at that position. **Stops at file-level directives** (`@provider`,
+/// `@key-id`, `@region`, `@default-encrypt`, `@default-plaintext`, `@dotsec`)
+/// so they're never accidentally drained along with the per-entry block when
+/// `set` does an in-place update of an existing Kv. Without the file-level
+/// guard, updating an entry whose file-level config was on the same comment
+/// line above would wipe `@provider`/`@key-id` from the file.
 fn find_directive_start(lines: &[dotenv::Line], kv_pos: usize) -> usize {
+    let is_file_level = |name: &str| {
+        matches!(
+            name,
+            "provider" | "key-id" | "region" | "default-encrypt" | "default-plaintext" | "dotsec"
+        )
+    };
     let mut start = kv_pos;
     while start > 0 {
         match &lines[start - 1] {
+            dotenv::Line::Directive { name, .. } if is_file_level(name) => break,
             dotenv::Line::Directive { .. } => start -= 1,
             dotenv::Line::Newline => {
                 if start >= 2 {
-                    if let dotenv::Line::Directive { .. } = &lines[start - 2] {
+                    if let dotenv::Line::Directive { name, .. } = &lines[start - 2] {
+                        if is_file_level(name) {
+                            break;
+                        }
                         start -= 1;
                         continue;
                     }
@@ -720,6 +783,44 @@ mod tests {
                 quote_type: QuoteType::Double,
             },
         ];
+        assert_eq!(find_directive_start(&lines, 5), 3);
+    }
+
+    #[test]
+    fn find_directive_start_skips_file_level_directives() {
+        // File-level directives that live directly above a Kv must NOT be
+        // treated as that Kv's per-entry directives. Otherwise `set` would
+        // drain them along with the Kv during an update and the next read
+        // would lose `@provider` / `@key-id` / `@default-encrypt`.
+        let lines = vec![
+            // [0] file-level: stays put on update
+            Line::Directive {
+                name: "provider".into(),
+                value: Some("local".into()),
+            },
+            // [1]
+            Line::Directive {
+                name: "default-encrypt".into(),
+                value: None,
+            },
+            // [2]
+            Line::Newline,
+            // [3] per-entry: drains with PORT
+            Line::Directive {
+                name: "type".into(),
+                value: Some("number".into()),
+            },
+            // [4]
+            Line::Newline,
+            // [5] Kv
+            Line::Kv {
+                key: "PORT".into(),
+                value: "3000".into(),
+                quote_type: QuoteType::Double,
+            },
+        ];
+        // Per-entry directive block starts at index 3 (the @type line) —
+        // NOT at 0 (which would also grab the file-level pair above).
         assert_eq!(find_directive_start(&lines, 5), 3);
     }
 
