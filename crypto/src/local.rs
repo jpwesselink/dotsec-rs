@@ -1,6 +1,6 @@
 use age::secrecy::ExposeSecret;
 use std::io::{Read, Write};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use crate::CryptoError;
 
@@ -69,10 +69,11 @@ pub fn unwrap_dek(wrapped: &[u8], identity_str: &str) -> Result<Zeroizing<Vec<u8
 
     // Cap the unwrapped read at DEK_LEN+1 so a crafted age payload that decompresses to
     // arbitrary size can't blow up memory before we discover the length is wrong.
-    let mut dek = Vec::with_capacity(DEK_LEN);
-    let mut buf = [0u8; DEK_LEN + 1];
+    // Zeroizing on both buffers covers the read-error and length-error exits.
+    let mut dek = Zeroizing::new(Vec::with_capacity(DEK_LEN));
+    let mut buf = Zeroizing::new([0u8; DEK_LEN + 1]);
     let n = reader
-        .read(&mut buf)
+        .read(buf.as_mut_slice())
         .map_err(|e| CryptoError::AesError(format!("age read error: {}", e)))?;
     dek.extend_from_slice(&buf[..n]);
 
@@ -81,14 +82,13 @@ pub fn unwrap_dek(wrapped: &[u8], identity_str: &str) -> Result<Zeroizing<Vec<u8
         .read(&mut [0u8; 1])
         .map_err(|e| CryptoError::AesError(format!("age read error: {}", e)))?;
     if extra != 0 || dek.len() != DEK_LEN {
-        dek.zeroize();
         return Err(CryptoError::AesError(format!(
             "unwrapped DEK has invalid length (expected {})",
             DEK_LEN
         )));
     }
 
-    Ok(Zeroizing::new(dek))
+    Ok(dek)
 }
 
 /// Derive the age recipient (public key) from an identity (private key) string.
@@ -125,12 +125,13 @@ pub fn load_private_key(
         None => format!("{}.key", sec_file),
     };
 
-    let content = std::fs::read_to_string(&key_path).map_err(|_| {
+    // The whole file (not just the extracted line) gets wiped on every exit.
+    let content = Zeroizing::new(std::fs::read_to_string(&key_path).map_err(|_| {
         CryptoError::AesError(format!(
             "private key not found — set DOTSEC_PRIVATE_KEY or create {}",
             key_path
         ))
-    })?;
+    })?);
 
     let key = content
         .lines()
