@@ -1,0 +1,3 @@
+FOO="quoted value"
+BAR=\x27single\x27
+BAZ=`backtick`

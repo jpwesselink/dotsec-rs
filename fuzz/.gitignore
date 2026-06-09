@@ -1,0 +1,9 @@
+target/
+Cargo.lock
+artifacts/
+coverage/
+
+# The live corpus is the fuzzer's working memory — thousands of generated
+# inputs per run. Curated seeds live under `seeds/<target>/` and get copied
+# into `corpus/<target>/` on first run (see README).
+corpus/

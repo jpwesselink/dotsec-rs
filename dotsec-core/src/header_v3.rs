@@ -158,6 +158,23 @@ impl HeaderV3 {
         let mac_b64 = mac_b64.ok_or(HeaderError::MissingField("mac"))?;
         let dek_b64 = dek_b64.ok_or(HeaderError::MissingField("dek"))?;
 
+        // Reject oversized base64 BEFORE decoding so a hostile .sec with a
+        // multi-megabyte `dek=` can't force a large allocation through
+        // base64::decode. Real values: mac=32 bytes (44 b64 chars),
+        // dek<=1024 bytes (~1368 b64 chars). Cap with slack.
+        if mac_b64.len() > 64 {
+            return Err(HeaderError::MalformedField {
+                field: "mac",
+                reason: format!("base64 length {} exceeds cap of 64", mac_b64.len()),
+            });
+        }
+        if dek_b64.len() > 2048 {
+            return Err(HeaderError::MalformedField {
+                field: "dek",
+                reason: format!("base64 length {} exceeds cap of 2048", dek_b64.len()),
+            });
+        }
+
         let mac_bytes = STANDARD
             .decode(&mac_b64)
             .map_err(|e| HeaderError::MalformedField {
