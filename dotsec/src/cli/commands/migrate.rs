@@ -302,9 +302,27 @@ pub async fn match_args(
 }
 
 /// Load a dotsec v4 config file by shelling out to npx tsx (for TS) or node (for JS).
+/// Env var used to hand the config path to the Node/tsx evaluator. Passing the
+/// path through the environment — never interpolated into the `-e` script — is
+/// what keeps a hostile path from being parsed as code. See `EVAL_SCRIPT`.
+const CONFIG_PATH_ENV: &str = "DOTSEC_MIGRATE_CONFIG_PATH";
+
+/// The evaluator script. This is a *constant* — no caller data is ever
+/// formatted into it. It reads the target path from `CONFIG_PATH_ENV` and
+/// builds the file URL with `pathToFileURL`, which correctly encodes spaces,
+/// quotes, and other characters that are legal in POSIX paths. The previous
+/// version interpolated the path into a `import('file://…')` string literal,
+/// so a path containing a single quote (legal on Unix) could break out of the
+/// literal and inject arbitrary JS into the evaluator.
+const EVAL_SCRIPT: &str = "\
+import('node:url').then(({ pathToFileURL }) => \
+import(pathToFileURL(process.env.DOTSEC_MIGRATE_CONFIG_PATH).href)).then(m => { \
+const c = m.dotsec ?? m.default?.dotsec ?? m.default; \
+process.stdout.write(JSON.stringify(c)); \
+})";
+
 fn load_v4_config(config_path: &str) -> Result<DotsecV4Config, Box<dyn std::error::Error>> {
     let abs_path = std::fs::canonicalize(config_path)?;
-    let abs_str = abs_path.to_string_lossy();
 
     // Determine runner based on file extension
     let ext = std::path::Path::new(config_path)
@@ -312,19 +330,11 @@ fn load_v4_config(config_path: &str) -> Result<DotsecV4Config, Box<dyn std::erro
         .and_then(|e| e.to_str())
         .unwrap_or("");
 
-    let eval_script = format!(
-        "import('file://{}').then(m => {{ const c = m.dotsec ?? m.default?.dotsec ?? m.default; process.stdout.write(JSON.stringify(c)); }})",
-        abs_str
-    );
-
     // Pin tsx to a known-good major to avoid pulling a "latest" that could be
     // compromised or accidentally break us. v4 is the current stable major.
-    let strategies: Vec<(&str, Vec<String>)> = match ext {
-        "ts" | "mts" | "cts" | "tsx" => vec![(
-            "npx",
-            vec!["tsx@4".into(), "-e".into(), eval_script.clone()],
-        )],
-        "js" | "mjs" | "cjs" => vec![("node", vec!["-e".into(), eval_script.clone()])],
+    let strategies: Vec<(&str, Vec<&str>)> = match ext {
+        "ts" | "mts" | "cts" | "tsx" => vec![("npx", vec!["tsx@4", "-e", EVAL_SCRIPT])],
+        "js" | "mjs" | "cjs" => vec![("node", vec!["-e", EVAL_SCRIPT])],
         _ => {
             // Try parsing as JSON directly
             let content = std::fs::read_to_string(config_path)?;
@@ -337,7 +347,14 @@ fn load_v4_config(config_path: &str) -> Result<DotsecV4Config, Box<dyn std::erro
     let mut output = None;
 
     for (runner, args) in &strategies {
-        match std::process::Command::new(runner).args(args).output() {
+        match std::process::Command::new(runner)
+            // The path travels through the environment, not the argv/script, so
+            // it is never subject to JS or shell parsing. `OsStr` preserves the
+            // exact bytes even for non-UTF-8 paths.
+            .env(CONFIG_PATH_ENV, abs_path.as_os_str())
+            .args(args)
+            .output()
+        {
             Ok(o) if o.status.success() => {
                 output = Some(o);
                 break;
@@ -755,6 +772,66 @@ mod tests {
         assert!(push["API_KEY"].aws.as_ref().unwrap().ssm.unwrap());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A config file whose *path* contains a single quote must still load.
+    /// Under the old string-interpolated `import('file://…')` script this path
+    /// would break out of the JS string literal; now the path travels via the
+    /// environment and is resolved with `pathToFileURL`, so a quote is inert.
+    ///
+    /// Requires Node.js on PATH, so it's ignored by default — run with
+    /// `cargo test -- --ignored` on a machine with Node installed.
+    #[test]
+    #[ignore = "requires node on PATH"]
+    fn load_v4_config_handles_quote_in_path() {
+        let dir = std::env::temp_dir().join("dotsec-test-migrate-quote-'dir");
+        let _ = std::fs::create_dir_all(&dir);
+        let config_path = dir.join("dotsec.config.mjs");
+
+        std::fs::write(
+            &config_path,
+            "export const dotsec = { defaults: { encryptionEngine: \"aws\" } };\n",
+        )
+        .unwrap();
+
+        let config = load_v4_config(config_path.to_str().unwrap())
+            .expect("config with a quote in its path should load");
+        assert_eq!(
+            config
+                .defaults
+                .as_ref()
+                .unwrap()
+                .encryption_engine
+                .as_deref(),
+            Some("aws")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Defense-in-depth: prove the evaluator script carries no caller data, so
+    /// there is nothing for a hostile path to inject into. If someone later
+    /// reintroduces string interpolation, this test fails and explains why.
+    #[test]
+    fn eval_script_contains_no_interpolation_markers() {
+        // The script must reference the path only via the environment, never
+        // splice it in. No `file://` literal, no format placeholders.
+        assert!(
+            EVAL_SCRIPT.contains("process.env.DOTSEC_MIGRATE_CONFIG_PATH"),
+            "path must be read from the environment"
+        );
+        assert!(
+            EVAL_SCRIPT.contains("pathToFileURL"),
+            "file URL must be built with pathToFileURL, not string concat"
+        );
+        assert!(
+            !EVAL_SCRIPT.contains("file://"),
+            "no hand-built file:// literal — that's the injection sink"
+        );
+        assert!(
+            !EVAL_SCRIPT.contains("{}"),
+            "no format placeholders should survive into the script"
+        );
     }
 
     #[test]
