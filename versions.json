@@ -41,6 +41,10 @@
     {
       "label": "#27 fix/parser-hardening-and-fuzz",
       "path": "/pr-27/"
+    },
+    {
+      "label": "#28 test/kms-localstack",
+      "path": "/pr-28/"
     }
   ],
   "latest": "/v6.0.0/"
