@@ -37,6 +37,10 @@
     {
       "label": "#26 fix/zeroize-error-paths",
       "path": "/pr-26/"
+    },
+    {
+      "label": "#27 fix/parser-hardening-and-fuzz",
+      "path": "/pr-27/"
     }
   ],
   "latest": "/v6.0.0/"
