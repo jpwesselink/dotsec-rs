@@ -221,7 +221,7 @@ For local encryption: generates a new DEK wrapped with the same age key. For AWS
 
 ## `dotsec migrate`
 
-Migrate from dotsec v4 (`dotsec.config.ts` + plaintext `.env`) to v5 `.sec` format:
+Migrate from dotsec v4 (`dotsec.config.ts` + plaintext `.env`) to the current `.sec` wire format:
 
 ```bash
 dotsec migrate                                       # uses dotsec.config.ts and .env
@@ -230,6 +230,8 @@ dotsec migrate --config dotsec.config.staging.ts     # specify v4 config
 ```
 
 Arguments: positional `[env-file]` (default `.env`, also reads `ENV_FILE`) for the plaintext source, `-c, --config <FILE>` (default `dotsec.config.ts`) for the v4 config.
+
+> **Heads-up: `migrate` runs your v4 config file.** A `dotsec.config.{ts,js}` is JavaScript/TypeScript, so reading it means executing it — dotsec shells out to `node -e` (or `npx tsx@4 -e`) to load the export. Only run `dotsec migrate` on configs you trust. If you cloned a repo for the first time, treat its `dotsec.config.ts` the same way you'd treat any other untrusted `.js`: glance at it first. A `.json` config skips this entirely (parsed natively, no executor invoked).
 
 ## `dotsec schema export`
 
