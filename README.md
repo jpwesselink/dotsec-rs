@@ -10,7 +10,7 @@ dotsec encrypts your secrets into a `.sec` file — committed alongside your cod
 npm install -g dotsec
 ```
 
-Distribution is npm-only (the obvious crate names on crates.io are owned by unrelated projects, so dotsec ships as a binary inside the npm package). See [setup](https://jpwesselink.github.io/dotsec-rs/v6.0.0/guide/setup) for `npx` and dev-dependency install patterns.
+Distribution is npm-only (the obvious crate names on crates.io are owned by unrelated projects, so dotsec ships as a binary inside the npm package). See [setup](https://jpwesselink.github.io/dotsec-rs/guide/setup) for `npx` and dev-dependency install patterns.
 
 ## Quick start
 
@@ -28,13 +28,13 @@ No AWS account. No config file. No setup step.
 
 ```
 .env (plaintext, gitignored)        .sec (encrypted, committed)
-┌────────────────────────┐          ┌──────────────────────────┐
-│ DATABASE_URL=postgres://│ encrypt │ DATABASE_URL=ENC[base64] │
-│ API_KEY=sk-live-xxx    │ ──────▶ │ API_KEY=ENC[base64]      │
-│ PORT=3000              │         │ PORT=3000                 │
-└────────────────────────┘         │ __DOTSEC_KEY__="..."     │
-                             ◀──── └──────────────────────────┘
-                            decrypt
+┌────────────────────────┐          ┌────────────────────────────┐
+│ DATABASE_URL=postgres://│ encrypt │ # @dotsec(format=v3,       │
+│ API_KEY=sk-live-xxx    │ ──────▶ │ #   mac=..., dek=...)      │
+│ PORT=3000              │         │ DATABASE_URL=ENC[base64]   │
+└────────────────────────┘         │ API_KEY=ENC[base64]        │
+                             ◀──── │ PORT=3000                  │
+                            decrypt└────────────────────────────┘
 ```
 
 Each secret is encrypted individually with AES-256-GCM using a data encryption key (DEK). The DEK is wrapped by your age keypair and stored in the `.sec` file. This makes `.sec` files git-mergeable — changing one secret only affects that line.
@@ -99,6 +99,10 @@ aws/               AWS KMS encryption (internal)
 | `latest` | Release PR merge | `npm install dotsec` |
 | `beta` | Every commit on `main` | `npm install dotsec@beta` |
 | `<branch-slug>` | Every PR commit | `npm install dotsec@<branch-slug>` |
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for build/test instructions, the fuzzing harness, the LocalStack KMS integration test, and the release workflow.
 
 ---
 
