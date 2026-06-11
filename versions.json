@@ -35,12 +35,12 @@
       "path": "/pr-27/"
     },
     {
-      "label": "#28 test/kms-localstack",
-      "path": "/pr-28/"
-    },
-    {
       "label": "#25 feat/dotsec-set-description",
       "path": "/pr-25/"
+    },
+    {
+      "label": "#28 test/kms-localstack",
+      "path": "/pr-28/"
     }
   ],
   "latest": "/v6.0.0/"
