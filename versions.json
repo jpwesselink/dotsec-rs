@@ -35,10 +35,6 @@
       "path": "/pr-25/"
     },
     {
-      "label": "#29 fix/migrate-path-injection",
-      "path": "/pr-29/"
-    },
-    {
       "label": "#26 fix/zeroize-error-paths",
       "path": "/pr-26/"
     },
