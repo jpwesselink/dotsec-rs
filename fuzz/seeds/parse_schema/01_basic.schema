@@ -1,0 +1,4 @@
+# @encrypt @type=string
+SECRET
+# @optional
+DEBUG
