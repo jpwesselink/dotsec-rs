@@ -18,7 +18,7 @@ features:
     link: /guide/encryption
   - icon: 🧠
     title: Decrypted in memory only
-    details: Secrets are never written to disk. Decrypted on the fly when you run your app, then gone.
+    details: dotsec run decrypts on the fly and injects straight into your process — nothing plaintext touches disk unless you explicitly export.
     link: /guide/commands#dotsec-run
   - icon: 🚀
     title: Zero config
@@ -30,8 +30,8 @@ features:
     link: /guide/commands#dotsec-run
   - icon: 📦
     title: Works everywhere
-    details: Available as a CLI via npm and cargo. Native Node.js bindings (@dotsec/core) for parsing and validating .env files programmatically.
-    link: /guide/#library
+    details: One npm install gets you a native binary on macOS, Linux, and Windows. Native Node.js bindings (@dotsec/core) for parsing and validating .env files programmatically.
+    link: /guide/library
   - icon: ✅
     title: Validation built in
     details: Directives like @type, @format, @pattern, @min/@max let you enforce rules on your env vars. Shared schema files keep constraints consistent across environments.

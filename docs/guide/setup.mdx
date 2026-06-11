@@ -54,6 +54,14 @@ Verify the install:
 dotsec --version
 ```
 
+### Release channels
+
+| Channel | When it updates | Install |
+|---------|-----------------|---------|
+| `latest` | Each release | `npm install -g dotsec` |
+| `beta` | Every commit on `main` | `npm install -g dotsec@beta` |
+| `<branch-slug>` | Every PR commit | `npm install -g dotsec@<branch-slug>` |
+
 ## Zero-config start
 
 No AWS account, no config file, no setup step required. The first `dotsec set` auto-creates everything:
