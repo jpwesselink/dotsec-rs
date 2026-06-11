@@ -45,7 +45,7 @@ dotsec import -y   # auto-detect types and encryption
 │ DEBUG=true              │           │ DATABASE_URL=ENC[base64]   │
 └─────────────────────────┘           │ API_KEY=ENC[base64]        │
                                  ◀─── │ DEBUG=true                 │
-                                decrypt└───────────────────────────┘
+                               decrypt└────────────────────────────┘
 ```
 
 Each secret is encrypted individually with AES-256-GCM using a data encryption key (DEK). The DEK is wrapped by your keypair (or AWS KMS) and stored in the `@dotsec(...)` directive. This makes `.sec` files git-mergeable — changing one secret only affects that line.

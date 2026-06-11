@@ -27,14 +27,14 @@ No AWS account. No config file. No setup step.
 ## How it works
 
 ```
-.env (plaintext, gitignored)        .sec (encrypted, committed)
-┌────────────────────────┐          ┌────────────────────────────┐
+.env (plaintext, gitignored)         .sec (encrypted, committed)
+┌─────────────────────────┐         ┌────────────────────────────┐
 │ DATABASE_URL=postgres://│ encrypt │ # @dotsec(format=v3,       │
-│ API_KEY=sk-live-xxx    │ ──────▶ │ #   mac=..., dek=...)      │
-│ PORT=3000              │         │ DATABASE_URL=ENC[base64]   │
-└────────────────────────┘         │ API_KEY=ENC[base64]        │
-                             ◀──── │ PORT=3000                  │
-                            decrypt└────────────────────────────┘
+│ API_KEY=sk-live-xxx     │ ──────▶ │ #   mac=..., dek=...)      │
+│ PORT=3000               │         │ DATABASE_URL=ENC[base64]   │
+└─────────────────────────┘         │ API_KEY=ENC[base64]        │
+                              ◀──── │ PORT=3000                  │
+                             decrypt└────────────────────────────┘
 ```
 
 Each secret is encrypted individually with AES-256-GCM using a data encryption key (DEK). The DEK is wrapped by your age keypair and stored in the `.sec` file. This makes `.sec` files git-mergeable — changing one secret only affects that line.

@@ -19,7 +19,7 @@ Nothing useful, by design — but precisely:
 
 | Attacker capability | Outcome |
 |---|---|
-| Read encrypted values | Sees `ENC[...]` blobs. Padding hides plaintext length to a 64-byte block. |
+| Read encrypted values | Sees `ENC[...]` blobs. Padding rounds plaintext up to a 64-byte multiple, plus a randomly added extra block — observed ciphertext length doesn't pin down the plaintext length. |
 | Read plaintext values | Sees them — that's what `@plaintext` means. Don't mark secrets plaintext. |
 | Swap a ciphertext between keys (`DB_PASSWORD` → `API_KEY`) | Rejected — per-value AEAD binds each ciphertext to its key name. |
 | Roll back one value to an older ciphertext from git history | Rejected — the file MAC covers the `ENC[...]` bytes. |
