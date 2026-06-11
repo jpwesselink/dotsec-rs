@@ -7,7 +7,7 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use thiserror::Error;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 pub mod local;
 pub mod mac;
@@ -112,7 +112,8 @@ pub fn encrypt_value(plaintext: &str, dek: &[u8], aad: &str) -> Result<String, C
     let cipher =
         Aes256Gcm::new_from_slice(dek).map_err(|e| CryptoError::AesError(e.to_string()))?;
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-    let mut padded = pad(plaintext.as_bytes())?;
+    // Zeroizing covers every `?` exit below — manual zeroize would skip them.
+    let padded = Zeroizing::new(pad(plaintext.as_bytes())?);
     let commitment = compute_key_commitment(dek);
 
     let payload = Payload {
@@ -122,8 +123,6 @@ pub fn encrypt_value(plaintext: &str, dek: &[u8], aad: &str) -> Result<String, C
     let ciphertext = cipher
         .encrypt(&nonce, payload)
         .map_err(|e| CryptoError::AesError(e.to_string()))?;
-
-    padded.zeroize();
 
     let mut blob = Vec::with_capacity(32 + 12 + ciphertext.len());
     blob.extend_from_slice(&commitment);
@@ -158,14 +157,18 @@ pub fn decrypt_value(enc_str: &str, dek: &[u8], aad: &str) -> Result<String, Cry
         msg: ciphertext,
         aad: aad.as_bytes(),
     };
-    let mut decrypted = cipher
-        .decrypt(nonce, payload)
-        .map_err(|e| CryptoError::AesError(e.to_string()))?;
+    // Zeroizing covers unpad + utf8 `?` exits; str::from_utf8 borrows so no
+    // intermediate plaintext copy escapes until the success-only to_string.
+    let decrypted = Zeroizing::new(
+        cipher
+            .decrypt(nonce, payload)
+            .map_err(|e| CryptoError::AesError(e.to_string()))?,
+    );
 
-    let plaintext = unpad(&decrypted)?.to_vec();
-    decrypted.zeroize();
-
-    String::from_utf8(plaintext).map_err(|e| CryptoError::AesError(e.to_string()))
+    let unpadded = unpad(&decrypted)?;
+    std::str::from_utf8(unpadded)
+        .map(str::to_string)
+        .map_err(|e| CryptoError::AesError(e.to_string()))
 }
 
 /// Check if a value is in the `ENC[...]` envelope format.
@@ -259,5 +262,70 @@ mod file_mac_tests {
         let a = compute_file_mac(&dek, &canonical_a);
         let b = compute_file_mac(&dek, &canonical_b);
         assert_ne!(a, b);
+    }
+}
+
+#[cfg(test)]
+mod decrypt_error_path_tests {
+    //! Covers the `?` exits inside `decrypt_value` that used to bypass zeroize.
+    use super::*;
+
+    fn dek() -> Vec<u8> {
+        vec![0x33; 32]
+    }
+
+    fn craft_unpad_failing_blob(dek_bytes: &[u8], aad: &str) -> String {
+        let cipher = Aes256Gcm::new_from_slice(dek_bytes).unwrap();
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+
+        // length header claims 999 bytes inside a 4-byte buffer -> unpad rejects.
+        let mut bad_inner = vec![0u8; 4];
+        bad_inner[0..2].copy_from_slice(&999u16.to_be_bytes());
+
+        let payload = Payload {
+            msg: &bad_inner,
+            aad: aad.as_bytes(),
+        };
+        let ciphertext = cipher.encrypt(&nonce, payload).unwrap();
+        let commitment = compute_key_commitment(dek_bytes);
+
+        let mut blob = Vec::with_capacity(32 + 12 + ciphertext.len());
+        blob.extend_from_slice(&commitment);
+        blob.extend_from_slice(&nonce);
+        blob.extend_from_slice(&ciphertext);
+        format!("ENC[{}]", STANDARD.encode(&blob))
+    }
+
+    #[test]
+    fn decrypt_value_returns_invalid_format_when_unpad_fails() {
+        let dek = dek();
+        let aad = "TEST_KEY";
+        let enc = craft_unpad_failing_blob(&dek, aad);
+        let result = decrypt_value(&enc, &dek, aad);
+        assert!(matches!(result, Err(CryptoError::InvalidFormat)));
+    }
+
+    #[test]
+    fn decrypt_value_returns_error_when_utf8_invalid() {
+        // Non-UTF-8 bytes survive AEAD + unpad and trip the from_utf8 exit.
+        let dek = dek();
+        let aad = "UTF8";
+        let cipher = Aes256Gcm::new_from_slice(&dek).unwrap();
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        let inner = pad(&[0xC3, 0x28]).unwrap();
+        let payload = Payload {
+            msg: &inner,
+            aad: aad.as_bytes(),
+        };
+        let ciphertext = cipher.encrypt(&nonce, payload).unwrap();
+        let commitment = compute_key_commitment(&dek);
+        let mut blob = Vec::with_capacity(32 + 12 + ciphertext.len());
+        blob.extend_from_slice(&commitment);
+        blob.extend_from_slice(&nonce);
+        blob.extend_from_slice(&ciphertext);
+        let enc = format!("ENC[{}]", STANDARD.encode(&blob));
+
+        let result = decrypt_value(&enc, &dek, aad);
+        assert!(matches!(result, Err(CryptoError::AesError(_))));
     }
 }
