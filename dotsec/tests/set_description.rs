@@ -63,10 +63,7 @@ fn description_lands_inline_when_no_schema_exists() {
         sec.contains("@description=HTTP port the API listens on"),
         "description must be inline in .sec when no schema:\n{sec}"
     );
-    assert!(
-        sec.contains("PORT=\"3000\""),
-        "Kv must be present: {sec}"
-    );
+    assert!(sec.contains("PORT=\"3000\""), "Kv must be present: {sec}");
     // No dotsec.schema was created.
     assert!(
         !dir.path().join("dotsec.schema").exists(),
@@ -78,11 +75,7 @@ fn description_lands_inline_when_no_schema_exists() {
 fn description_lands_in_schema_when_schema_exists_for_new_key() {
     let dir = fixture();
     // Pre-seed an empty-ish schema declaring DB_URL.
-    std::fs::write(
-        dir.path().join("dotsec.schema"),
-        "# @encrypt\nDB_URL\n",
-    )
-    .unwrap();
+    std::fs::write(dir.path().join("dotsec.schema"), "# @encrypt\nDB_URL\n").unwrap();
     let (_, _, code) = run(
         dir.path(),
         &[
