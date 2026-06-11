@@ -1,0 +1,50 @@
+[package]
+name = "dotsec-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Standalone — keeps nightly + libfuzzer-sys off the main build.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+# Point these at your workspace crates. Paths assume the fuzz/ dir lives at
+# the workspace root (next to dotenv/, dotsec-core/). Adjust if you nest it.
+dotenv = { path = "../dotenv" }
+dotsec-core = { path = "../dotsec-core" }
+
+[[bin]]
+name = "parse_dotenv"
+path = "fuzz_targets/parse_dotenv.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "parse_header"
+path = "fuzz_targets/parse_header.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "parse_schema"
+path = "fuzz_targets/parse_schema.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "roundtrip"
+path = "fuzz_targets/roundtrip.rs"
+test = false
+doc = false
+
+# Fuzzers want a tiny bit of opt so they explore faster, but keep debug
+# assertions + overflow checks on so logic bugs surface as panics.
+[profile.release]
+debug = 1
+debug-assertions = true
+overflow-checks = true

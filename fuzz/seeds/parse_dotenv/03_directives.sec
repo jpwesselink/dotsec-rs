@@ -1,0 +1,2 @@
+# @encrypt @type=string @not-empty
+SECRET=ENC[abc]
