@@ -1066,7 +1066,10 @@ mod tests {
         std::fs::write(&gi, original).unwrap();
         ensure_keyfile_gitignored(&key_file, false);
         let after = std::fs::read_to_string(&gi).unwrap();
-        assert_eq!(after, original, ".sec.key form should also count as covered");
+        assert_eq!(
+            after, original,
+            ".sec.key form should also count as covered"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1082,7 +1085,10 @@ mod tests {
             after.contains("node_modules"),
             "must preserve existing rules: {after}"
         );
-        assert!(after.contains(".env"), "must preserve existing rules: {after}");
+        assert!(
+            after.contains(".env"),
+            "must preserve existing rules: {after}"
+        );
         assert!(
             after.lines().any(|l| l.trim() == "*.key"),
             "must append the *.key line: {after}"
@@ -1100,8 +1106,14 @@ mod tests {
         std::fs::write(&gi, "node_modules").unwrap(); // no trailing newline
         ensure_keyfile_gitignored(&key_file, false);
         let after = std::fs::read_to_string(&gi).unwrap();
-        assert!(after.starts_with("node_modules\n"), "must insert separator: {after:?}");
-        assert!(after.contains("\n*.key"), "must put *.key on its own line: {after:?}");
+        assert!(
+            after.starts_with("node_modules\n"),
+            "must insert separator: {after:?}"
+        );
+        assert!(
+            after.contains("\n*.key"),
+            "must put *.key on its own line: {after:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -3389,10 +3389,9 @@ mod tests {
     fn canonical_drops_description() {
         // Adding a description must not change the canonical form — purely informational.
         let a = parse_schema("# @encrypt @type=string\nDB_URL\n").unwrap();
-        let b = parse_schema(
-            "# @encrypt @type=string @description=\"connection string\"\nDB_URL\n",
-        )
-        .unwrap();
+        let b =
+            parse_schema("# @encrypt @type=string @description=\"connection string\"\nDB_URL\n")
+                .unwrap();
         assert_eq!(schema_to_canonical_bytes(&a), schema_to_canonical_bytes(&b));
     }
 
@@ -3452,8 +3451,8 @@ mod tests {
 
     #[test]
     fn canonical_deterministic_across_calls() {
-        let schema = parse_schema("# @encrypt @type=string\nDB_URL\n\n# @type=number\nPORT\n")
-            .unwrap();
+        let schema =
+            parse_schema("# @encrypt @type=string\nDB_URL\n\n# @type=number\nPORT\n").unwrap();
         assert_eq!(
             schema_to_canonical_bytes(&schema),
             schema_to_canonical_bytes(&schema)

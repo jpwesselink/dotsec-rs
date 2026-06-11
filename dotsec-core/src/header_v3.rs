@@ -61,10 +61,7 @@ pub enum HeaderError {
     #[error("@dotsec(...) is missing required param: {0}")]
     MissingField(&'static str),
     #[error("@dotsec(...) param `{field}` is malformed: {reason}")]
-    MalformedField {
-        field: &'static str,
-        reason: String,
-    },
+    MalformedField { field: &'static str, reason: String },
     #[error("unsupported wire-format `{0}` — this dotsec only understands `v3`")]
     UnsupportedFormat(String),
     #[error("@dotsec(...) field `{0}` appears more than once — refusing to pick one")]
@@ -173,13 +170,12 @@ impl HeaderV3 {
         let mut mac = [0u8; 32];
         mac.copy_from_slice(&mac_bytes);
 
-        let wrapped_dek =
-            STANDARD
-                .decode(&dek_b64)
-                .map_err(|e| HeaderError::MalformedField {
-                    field: "dek",
-                    reason: e.to_string(),
-                })?;
+        let wrapped_dek = STANDARD
+            .decode(&dek_b64)
+            .map_err(|e| HeaderError::MalformedField {
+                field: "dek",
+                reason: e.to_string(),
+            })?;
         if wrapped_dek.is_empty() {
             return Err(HeaderError::MalformedField {
                 field: "dek",
@@ -234,7 +230,11 @@ mod tests {
         // Synthesize a file that contains the @dotsec(...) directive plus
         // other content, then re-parse via the dotenv parser to mimic the
         // real read path.
-        let source = format!("# @{}({})\nFOO=bar\n", HEADER_DIRECTIVE_NAME, h.format_inner());
+        let source = format!(
+            "# @{}({})\nFOO=bar\n",
+            HEADER_DIRECTIVE_NAME,
+            h.format_inner()
+        );
         let lines = dotenv::parse_dotenv(&source).unwrap();
         let extracted = HeaderV3::extract_from_lines(&lines).unwrap();
         assert_eq!(extracted, h);
@@ -305,8 +305,7 @@ mod tests {
 
     #[test]
     fn parse_rejects_malformed_mac_length() {
-        let err =
-            HeaderV3::parse_inner("format=v3, mac=AAAAAA==, dek=AQ==").unwrap_err();
+        let err = HeaderV3::parse_inner("format=v3, mac=AAAAAA==, dek=AQ==").unwrap_err();
         assert!(matches!(
             err,
             HeaderError::MalformedField { field: "mac", .. }
@@ -327,16 +326,16 @@ mod tests {
     fn parse_rejects_duplicate_mac() {
         let mac1 = STANDARD.encode([0u8; 32]);
         let mac2 = STANDARD.encode([1u8; 32]);
-        let err =
-            HeaderV3::parse_inner(&format!("format=v3, mac={mac1}, mac={mac2}, dek=AQ==")).unwrap_err();
+        let err = HeaderV3::parse_inner(&format!("format=v3, mac={mac1}, mac={mac2}, dek=AQ=="))
+            .unwrap_err();
         assert!(matches!(err, HeaderError::DuplicateField("mac")));
     }
 
     #[test]
     fn parse_rejects_duplicate_dek() {
         let mac = STANDARD.encode([0u8; 32]);
-        let err =
-            HeaderV3::parse_inner(&format!("format=v3, mac={mac}, dek=AQ==, dek=Ag==")).unwrap_err();
+        let err = HeaderV3::parse_inner(&format!("format=v3, mac={mac}, dek=AQ==, dek=Ag=="))
+            .unwrap_err();
         assert!(matches!(err, HeaderError::DuplicateField("dek")));
     }
 
