@@ -33,6 +33,10 @@
     {
       "label": "#25 feat/dotsec-set-description",
       "path": "/pr-25/"
+    },
+    {
+      "label": "#31 chore/rename-v4-types-to-js",
+      "path": "/pr-31/"
     }
   ],
   "latest": "/v6.0.0/"
