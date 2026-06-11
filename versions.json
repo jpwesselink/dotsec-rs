@@ -31,12 +31,12 @@
       "path": "/pr-24/"
     },
     {
-      "label": "#27 fix/parser-hardening-and-fuzz",
-      "path": "/pr-27/"
-    },
-    {
       "label": "#25 feat/dotsec-set-description",
       "path": "/pr-25/"
+    },
+    {
+      "label": "#27 fix/parser-hardening-and-fuzz",
+      "path": "/pr-27/"
     }
   ],
   "latest": "/v6.0.0/"
