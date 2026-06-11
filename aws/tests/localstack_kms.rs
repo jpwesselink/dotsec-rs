@@ -73,10 +73,9 @@ async fn kms_round_trip_via_localstack() {
 
     let context = vec![("dotsec:format".to_string(), "v3".to_string())];
 
-    let (plaintext_dek, wrapped_dek) =
-        aws::generate_data_key(&key_id, Some("us-east-1"), &context)
-            .await
-            .expect("generate_data_key");
+    let (plaintext_dek, wrapped_dek) = aws::generate_data_key(&key_id, Some("us-east-1"), &context)
+        .await
+        .expect("generate_data_key");
     assert_eq!(
         plaintext_dek.len(),
         32,
@@ -108,7 +107,10 @@ async fn kms_round_trip_via_localstack() {
     // down to "KMS error: service error" — losing the specificity. Asserting
     // on the message is brittle until error-sanitization lands; for now
     // require only that the call errored.
-    assert!(!msg.is_empty(), "expected non-empty error on context mismatch");
+    assert!(
+        !msg.is_empty(),
+        "expected non-empty error on context mismatch"
+    );
 
     // --- Round-trip 3: missing context must also fail ---
 
