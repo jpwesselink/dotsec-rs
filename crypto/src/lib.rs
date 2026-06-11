@@ -36,8 +36,7 @@ pub enum CryptoError {
 /// 32-byte output is stored verbatim (base64-encoded) as `mac=...` inside the
 /// `@dotsec(...)` directive on disk.
 pub fn compute_file_mac(dek: &[u8], canonical: &[u8]) -> [u8; 32] {
-    let mut hmac =
-        <HmacSha256 as Mac>::new_from_slice(dek).expect("HMAC accepts any key length");
+    let mut hmac = <HmacSha256 as Mac>::new_from_slice(dek).expect("HMAC accepts any key length");
     hmac.update(canonical);
     hmac.finalize().into_bytes().into()
 }

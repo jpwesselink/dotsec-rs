@@ -455,10 +455,7 @@ pub fn validate_value_against_constraints(
                             if val < min {
                                 errors.push(ValidationError::error(
                                     key,
-                                    format!(
-                                        "value {} is less than minimum {}",
-                                        val_display, min
-                                    ),
+                                    format!("value {} is less than minimum {}", val_display, min),
                                 ));
                             }
                         }
@@ -1193,9 +1190,19 @@ mod redaction_tests {
     #[test]
     fn validate_value_for_type_redacts_when_encrypted() {
         let mut errors = Vec::new();
-        validate_value_for_type("API_KEY", &VarType::Number, "sk-live-supersecret", true, &mut errors);
+        validate_value_for_type(
+            "API_KEY",
+            &VarType::Number,
+            "sk-live-supersecret",
+            true,
+            &mut errors,
+        );
         let msg = &errors[0].message;
-        assert!(!msg.contains("sk-live-supersecret"), "secret leaked: {}", msg);
+        assert!(
+            !msg.contains("sk-live-supersecret"),
+            "secret leaked: {}",
+            msg
+        );
         assert!(
             msg.contains("encrypted plaintext"),
             "redaction placeholder missing: {}",
@@ -1221,10 +1228,7 @@ mod redaction_tests {
         // appear verbatim in stderr / CI logs.
         let entry = schema_entry(
             "API_KEY",
-            &[
-                ("encrypt", None),
-                ("pattern", Some("^[a-z]+$")),
-            ],
+            &[("encrypt", None), ("pattern", Some("^[a-z]+$"))],
         );
         let errors = validate_value_against_constraints("API_KEY", "Hunter2!@#", &entry);
         assert!(!errors.is_empty());

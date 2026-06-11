@@ -219,7 +219,9 @@ mod tests {
         );
         let s = std::str::from_utf8(&bytes).unwrap();
         assert!(s.starts_with("dotsec-mac-v3\n"));
-        assert!(s.contains("schema-sha256=0000000000000000000000000000000000000000000000000000000000000000\n"));
+        assert!(s.contains(
+            "schema-sha256=0000000000000000000000000000000000000000000000000000000000000000\n"
+        ));
         assert!(s.contains("file-directive:provider=local\n"));
         assert!(s.contains("entry:FOO\n"));
         assert!(s.contains("  directive:encrypt=\n"));
@@ -238,7 +240,10 @@ mod tests {
             &[0u8; 32],
         );
         let s = std::str::from_utf8(&bytes).unwrap();
-        assert!(s.contains("entry:PORT\n"), "plaintext entry name must be covered");
+        assert!(
+            s.contains("entry:PORT\n"),
+            "plaintext entry name must be covered"
+        );
         assert!(!s.contains("3000"), "plaintext value must NOT be covered");
         assert!(
             !s.contains("directive:type"),
@@ -251,16 +256,8 @@ mod tests {
     #[test]
     fn plaintext_value_change_preserves_mac() {
         // Hand-editing PORT=3000 → PORT=4000 must not invalidate the MAC.
-        let a = canonical_serialize(
-            &[],
-            &[entry("PORT", &[], "3000")],
-            &[0u8; 32],
-        );
-        let b = canonical_serialize(
-            &[],
-            &[entry("PORT", &[], "4000")],
-            &[0u8; 32],
-        );
+        let a = canonical_serialize(&[], &[entry("PORT", &[], "3000")], &[0u8; 32]);
+        let b = canonical_serialize(&[], &[entry("PORT", &[], "4000")], &[0u8; 32]);
         assert_eq!(a, b);
     }
 
@@ -304,16 +301,8 @@ mod tests {
     fn renaming_plaintext_entry_invalidates_mac() {
         // An attacker who renames `LOG_LEVEL` → `DEBUG` to repurpose how the
         // app reads it gets caught even when the value doesn't change.
-        let a = canonical_serialize(
-            &[],
-            &[entry("LOG_LEVEL", &[], "info")],
-            &[0u8; 32],
-        );
-        let b = canonical_serialize(
-            &[],
-            &[entry("DEBUG", &[], "info")],
-            &[0u8; 32],
-        );
+        let a = canonical_serialize(&[], &[entry("LOG_LEVEL", &[], "info")], &[0u8; 32]);
+        let b = canonical_serialize(&[], &[entry("DEBUG", &[], "info")], &[0u8; 32]);
         assert_ne!(a, b);
     }
 
@@ -340,11 +329,7 @@ mod tests {
         // and trips the MAC. Same applies to a legitimate hand-edit; users
         // who want to add entries by hand must run `dotsec encrypt` (or just
         // use `dotsec set --plaintext`, which re-MACs automatically).
-        let a = canonical_serialize(
-            &[],
-            &[entry("PORT", &[], "3000")],
-            &[0u8; 32],
-        );
+        let a = canonical_serialize(&[], &[entry("PORT", &[], "3000")], &[0u8; 32]);
         let b = canonical_serialize(
             &[],
             &[
@@ -383,15 +368,14 @@ mod tests {
         // dedupe, this test fires and the change is intentional.
         let bytes = canonical_serialize(
             &[],
-            &[
-                entry("FOO", &[], "a"),
-                entry("FOO", &[], "b"),
-            ],
+            &[entry("FOO", &[], "a"), entry("FOO", &[], "b")],
             &[0u8; 32],
         );
         let s = std::str::from_utf8(&bytes).unwrap();
         let first = s.find("entry:FOO\n").expect("first occurrence");
-        let second = s[first + 1..].find("entry:FOO\n").expect("second occurrence");
+        let second = s[first + 1..]
+            .find("entry:FOO\n")
+            .expect("second occurrence");
         let _ = second;
         // Both entries appear → two distinct canonical lines.
         assert_eq!(s.matches("entry:FOO\n").count(), 2);
@@ -503,11 +487,7 @@ mod tests {
 
     #[test]
     fn flag_directives_serialize_with_empty_value() {
-        let bytes = canonical_serialize(
-            &[("default-encrypt".into(), None)],
-            &[],
-            &[0u8; 32],
-        );
+        let bytes = canonical_serialize(&[("default-encrypt".into(), None)], &[], &[0u8; 32]);
         let s = std::str::from_utf8(&bytes).unwrap();
         assert!(s.contains("file-directive:default-encrypt=\n"));
     }
@@ -521,7 +501,9 @@ mod tests {
         let s = std::str::from_utf8(&bytes).unwrap();
         // 32 bytes = 64 hex chars: ab + 30×00 + cd
         assert!(
-            s.contains("schema-sha256=ab000000000000000000000000000000000000000000000000000000000000cd\n"),
+            s.contains(
+                "schema-sha256=ab000000000000000000000000000000000000000000000000000000000000cd\n"
+            ),
             "got: {s}"
         );
     }
