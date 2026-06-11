@@ -31,10 +31,6 @@
       "path": "/pr-24/"
     },
     {
-      "label": "#25 feat/dotsec-set-description",
-      "path": "/pr-25/"
-    },
-    {
       "label": "#26 fix/zeroize-error-paths",
       "path": "/pr-26/"
     },
@@ -45,6 +41,10 @@
     {
       "label": "#28 test/kms-localstack",
       "path": "/pr-28/"
+    },
+    {
+      "label": "#25 feat/dotsec-set-description",
+      "path": "/pr-25/"
     }
   ],
   "latest": "/v6.0.0/"
