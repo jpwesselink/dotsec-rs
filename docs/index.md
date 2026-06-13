@@ -2,8 +2,8 @@
 pageType: home
 hero:
   name: dotsec
-  text: .env without .env
-  tagline: Stop sharing secrets over Slack. Encrypt your .env, commit it to git, decrypt at runtime. Done.
+  text: No more .env files
+  tagline: KMS-native envelope encryption, schema-driven validation, language-agnostic runtime injection. Your secrets' access boundary is your existing IAM. Your audit trail is your existing CloudTrail.
   actions:
     - theme: brand
       text: Get Started →
@@ -13,27 +13,27 @@ hero:
       link: /guide/setup
 features:
   - icon: 🔐
-    title: Encrypted in git
-    details: Your .env becomes a .sec file — encrypted and committed alongside your code. One source of truth, version-controlled.
-    link: /guide/encryption
-  - icon: 🧠
-    title: Decrypted in memory only
-    details: dotsec run decrypts on the fly and injects straight into your process — nothing plaintext touches disk unless you explicitly export.
-    link: /guide/commands#dotsec-run
+    title: KMS-native, AWS-integrated
+    details: Envelope encryption with EncryptionContext binding on every wrap and unwrap. IAM controls access; CloudTrail logs every decrypt. Push to SSM Parameter Store and Secrets Manager via @push directives, for runtime services that read from AWS directly.
+    link: /guide/setup#aws-kms-setup
+  - icon: 🧪
+    title: Engineered like crypto matters
+    details: AAD-bound per-value AEAD, file-level MAC over canonical content, schema-hash binding, key commitment, length padding, zeroize on every exit path, constant-time integrity checks. Cargo-fuzz harness with 4 targets. Visible in the source.
+    link: /guide/security
+  - icon: ✅
+    title: Schema-driven validation
+    details: Directives like @type, @format, @pattern, @min/@max enforce rules on every secret. Generate a zero-runtime-dependency TypeScript validator from your schema in one command — the generated file IS the validator.
+    link: /guide/library#start-here-typed-env-vars-zero-dependencies
   - icon: 🚀
-    title: Zero config
-    details: One command to start. dotsec set auto-creates an encrypted .sec file — no AWS, no cloud accounts, no setup.
-    link: /guide/
+    title: Works with anything
+    details: dotsec run -- <your command>. No SDK per language. Works for Node, Python, Ruby, Go, Rust, Docker, kubectl, terraform — anything that reads environment variables.
+    link: /guide/commands#dotsec-run
   - icon: 🛡️
     title: Redacted output
-    details: Accidentally logging a secret? dotsec intercepts stdout and redacts sensitive values before they hit your terminal or CI logs.
+    details: When dotsec run spawns your process, encrypted values are scrubbed from stdout and stderr before they hit your terminal or CI logs. The "accidentally console.log()'d a secret" class of bug is defended against by default.
     link: /guide/commands#dotsec-run
-  - icon: 📦
-    title: Works everywhere
-    details: One npm install gets you a native binary on macOS, Linux, and Windows. Native Node.js bindings (@dotsec/core) for parsing and validating .env files programmatically.
-    link: /guide/library
-  - icon: ✅
-    title: Validation built in
-    details: Directives like @type, @format, @pattern, @min/@max let you enforce rules on your env vars. Shared schema files keep constraints consistent across environments.
-    link: /guide/directives
+  - icon: 🔓
+    title: Standard age envelope — no lock-in
+    details: The wrapped DEK is a plain age envelope. Anyone with the private key can decrypt it with the age or rage CLI directly — your secrets are never trapped in a bespoke format.
+    link: /guide/encryption#why-age
 ---

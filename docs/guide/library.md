@@ -4,6 +4,24 @@ Use dotsec programmatically — parse, validate, and generate code from `.env` /
 
 > The libraries handle **parsing and validation only**. Encryption and decryption stay in the CLI — no key material ever crosses the library boundary. This is deliberate; see the [security model](/guide/security#engineering-posture).
 
+## Start here: typed env vars, zero dependencies
+
+The highest-leverage feature doesn't even need the library at runtime — generate validation code from your schema and ship it:
+
+```bash
+dotsec schema export --format ts -o src/env.ts
+```
+
+```ts
+import { parseEnv } from './env';
+
+const env = parseEnv();  // validates at startup, throws on error
+env.PORT;                // number
+env.NODE_ENV;            // "development" | "staging" | "production"
+```
+
+The generated file *is* the validator — no runtime dependency on dotsec at all. See [`dotsec schema export`](/guide/commands#dotsec-schema-export).
+
 ## Node.js — `@dotsec/core`
 
 Native bindings (NAPI, prebuilt per platform — no Rust toolchain needed):
@@ -100,21 +118,3 @@ for err in &errors {
     eprintln!("[{:?}] {}: {}", err.severity, err.key, err.message);
 }
 ```
-
-## Typed env vars in TypeScript
-
-The highest-leverage library feature is not calling the library at all — generate validation code from your schema and ship it with zero runtime dependencies:
-
-```bash
-dotsec schema export --format ts -o src/env.ts
-```
-
-```ts
-import { parseEnv } from './env';
-
-const env = parseEnv();  // validates at startup, throws on error
-env.PORT;                // number
-env.NODE_ENV;            // "development" | "staging" | "production"
-```
-
-See [`dotsec schema export`](/guide/commands#dotsec-schema-export).
