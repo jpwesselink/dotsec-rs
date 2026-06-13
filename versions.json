@@ -27,10 +27,6 @@
       "path": "/pr-34/"
     },
     {
-      "label": "#38 fix/disable-coredumps",
-      "path": "/pr-38/"
-    },
-    {
       "label": "#39 fix/preserve-cr-roundtrip",
       "path": "/pr-39/"
     },
