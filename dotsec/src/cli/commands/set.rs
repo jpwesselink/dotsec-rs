@@ -81,6 +81,10 @@ pub async fn match_args(
 
     let interactive = value.is_none() && !auto_yes;
 
+    if interactive {
+        helpers::ensure_interactive()?;
+    }
+
     // Resolve key
     let key = match key {
         Some(k) => k.clone(),

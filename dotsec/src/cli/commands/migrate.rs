@@ -58,6 +58,7 @@ pub async fn match_args(
         )
     };
 
+    helpers::ensure_interactive()?;
     let proceed = inquire::Confirm::new(&confirm_msg)
         .with_default(true)
         .prompt()?;

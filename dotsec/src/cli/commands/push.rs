@@ -1,7 +1,7 @@
 use clap::{Arg, ArgAction, Command};
 use colored::Colorize;
 
-use crate::cli::helpers::with_progress;
+use crate::cli::helpers::{ensure_interactive, with_progress};
 use crate::default_options::DefaultOptions;
 
 pub fn command() -> Command {
@@ -170,6 +170,7 @@ pub async fn match_args(
     }
 
     if !auto_yes {
+        ensure_interactive()?;
         let proceed = inquire::Confirm::new(&format!("Push {} values?", plan.len()))
             .with_default(false)
             .prompt()?;
