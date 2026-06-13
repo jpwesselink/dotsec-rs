@@ -58,7 +58,7 @@ const QUICK_START_LINES: &[&str] = &[
 const QUICK_START_FG: Color = Color { r: 40, g: 30, b: 8 };
 const LICENSE_FG: Color = Color { r: 40, g: 30, b: 8 };
 /// One-liner under the wordmark. The whole pitch in seven characters.
-const TAGLINE: &str = ".env without the .env";
+const TAGLINE: &str = "No more .env files";
 const TAGLINE_FG: Color = Color { r: 40, g: 30, b: 8 };
 const PAD_X: usize = 4;
 const PAD_TOP: usize = 2;
