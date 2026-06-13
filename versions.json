@@ -31,10 +31,6 @@
       "path": "/pr-40/"
     },
     {
-      "label": "#41 ci/nightly-fuzz",
-      "path": "/pr-41/"
-    },
-    {
       "label": "#42 release-plz-2026-06-13T13-54-53Z",
       "path": "/pr-42/"
     },
