@@ -37,6 +37,10 @@
     {
       "label": "#39 fix/preserve-cr-roundtrip",
       "path": "/pr-39/"
+    },
+    {
+      "label": "#40 fix/sanitize-kms-errors",
+      "path": "/pr-40/"
     }
   ],
   "latest": "/v6.0.0/"
