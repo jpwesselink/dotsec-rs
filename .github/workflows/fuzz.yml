@@ -1,0 +1,100 @@
+name: Fuzz
+
+# Per-PR fuzz gating is the wrong shape (libfuzzer compile times alone would
+# add ~5 minutes to every PR, the corpus barely grows in 90-second runs, and
+# the harness already produced its highest-impact finding offline). Schedule
+# real fuzzing as a long-running nightly instead: each target gets a 10-minute
+# budget against a corpus that's cached and accumulates between runs.
+#
+# Any crash, hang, or OOM lands as an artifact on the workflow run; a separate
+# follow-up will surface those automatically as GitHub issues once we've
+# observed the steady-state false-positive rate.
+
+on:
+  schedule:
+    # 04:00 UTC daily — well clear of PR / release-plz noise during European
+    # working hours, so a fuzz-found regression has time to be triaged before
+    # the next contributor pushes work on top of it.
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Cancel an in-flight nightly when a new one (or a manual dispatch) starts.
+  # We don't want two nightly runs racing on the cache.
+  group: fuzz
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - parse_dotenv
+          - parse_header
+          - parse_schema
+          - roundtrip
+    steps:
+      - uses: actions/checkout@v4
+
+      # Nightly toolchain is required by `cargo-fuzz` (libfuzzer-sys uses
+      # rustc-internal sanitizer flags that don't exist on stable).
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      # Persist the libfuzzer build cache + the per-target accumulated corpus
+      # across runs. The corpus growing over time is what makes scheduled fuzz
+      # genuinely productive — each night starts where the previous night
+      # left off rather than from the curated seeds alone.
+      - name: Cache fuzz state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            fuzz/target
+            fuzz/corpus/${{ matrix.target }}
+          key: ${{ runner.os }}-fuzz-${{ matrix.target }}-${{ hashFiles('fuzz/Cargo.toml', 'fuzz/fuzz_targets/${{ matrix.target }}.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-fuzz-${{ matrix.target }}-
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      # Seed the live corpus from `fuzz/seeds/` if the cache restore missed —
+      # mirrors the local-developer setup documented in fuzz/README.md.
+      - name: Seed corpus if empty
+        working-directory: fuzz
+        run: |
+          mkdir -p corpus/${{ matrix.target }}
+          if [ -z "$(ls -A corpus/${{ matrix.target }} 2>/dev/null)" ]; then
+            cp seeds/${{ matrix.target }}/* corpus/${{ matrix.target }}/
+          fi
+
+      # 600 seconds per target = 10 min nightly budget. `rss_limit_mb` guards
+      # against runaway allocations from a crafted input — without it, a
+      # bad-input OOM would manifest as a CI timeout instead of a finding.
+      - name: Run fuzz target
+        working-directory: fuzz
+        run: |
+          cargo +nightly fuzz run ${{ matrix.target }} -- \
+            -max_total_time=600 \
+            -rss_limit_mb=512 \
+            -print_final_stats=1
+
+      # If the fuzzer crashes, the libfuzzer reproducer lands under
+      # fuzz/artifacts/<target>/. Capture it on the workflow run so we can
+      # download + replay without having to reproduce the corpus locally.
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore
+          retention-days: 30
