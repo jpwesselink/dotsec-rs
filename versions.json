@@ -29,6 +29,10 @@
     {
       "label": "#37 chore/bump-to-v7",
       "path": "/pr-37/"
+    },
+    {
+      "label": "#38 fix/disable-coredumps",
+      "path": "/pr-38/"
     }
   ],
   "latest": "/v6.0.0/"
