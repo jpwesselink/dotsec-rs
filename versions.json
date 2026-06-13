@@ -43,10 +43,6 @@
       "path": "/pr-44/"
     },
     {
-      "label": "#46 test/harden-set-description-stdin",
-      "path": "/pr-46/"
-    },
-    {
       "label": "#47 fix/tty-guard-interactive-prompts",
       "path": "/pr-47/"
     }
