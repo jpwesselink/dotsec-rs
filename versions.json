@@ -37,6 +37,10 @@
     {
       "label": "#42 release-plz-2026-06-13T13-54-53Z",
       "path": "/pr-42/"
+    },
+    {
+      "label": "#44 docs/home-what-is-sec",
+      "path": "/pr-44/"
     }
   ],
   "latest": "/v7.0.0/"
