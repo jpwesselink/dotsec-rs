@@ -92,7 +92,7 @@ Then run:
 dotsec schema export --format ts -o src/env.ts
 ```
 
-and import the generated validator anywhere in your app:
+**Like a Svelte compile: dotsec does its work and disappears.** `src/env.ts` is real, committed, dependency-free TypeScript — your app imports `parseEnv` from `./env`, never from `dotsec`. Regenerate when the schema changes; the type system catches every breakage.
 
 ```ts
 import { parseEnv } from './env';
@@ -104,4 +104,4 @@ env.DATABASE_URL;         // string (validated as URL)
 env.API_KEY;              // string, 32+ chars
 ```
 
-The generated file *is* the validator — no `import 'dotsec'` at runtime, nothing to keep in sync, no SDK version drift. JSON Schema export (`--format json`) works the same way.
+Run `grep import src/env.ts` and you'll find nothing — that's the whole point. JSON Schema export (`--format json`) works the same way.
