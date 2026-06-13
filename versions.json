@@ -45,6 +45,10 @@
     {
       "label": "#45 docs/security-review-followup",
       "path": "/pr-45/"
+    },
+    {
+      "label": "#46 test/harden-set-description-stdin",
+      "path": "/pr-46/"
     }
   ],
   "latest": "/v7.0.0/"
