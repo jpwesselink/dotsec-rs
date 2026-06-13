@@ -31,6 +31,11 @@ pub fn lines_to_string(lines: &[Line]) -> String {
                     in_directive = true;
                 }
                 match value {
+                    Some(v) if name == "dotsec" => {
+                        // @dotsec(params) — paren-grouped, not = separated.
+                        // Value carries the raw "name=value, name=value" body.
+                        output.push_str(&format!("@dotsec({})", v));
+                    }
                     Some(v) => {
                         if QUOTED_VALUE_DIRECTIVES.contains(&name.as_str()) {
                             output.push_str(&format!("@{}=\"{}\"", name, v));
@@ -117,7 +122,12 @@ pub fn lines_to_entries(lines: &[Line]) -> Vec<Entry> {
                 // Skip file-level config directives from being attached to entries
                 if matches!(
                     name.as_str(),
-                    "default-encrypt" | "default-plaintext" | "provider" | "key-id" | "region"
+                    "default-encrypt"
+                        | "default-plaintext"
+                        | "provider"
+                        | "key-id"
+                        | "region"
+                        | "dotsec"
                 ) {
                     continue;
                 }
@@ -498,6 +508,20 @@ fn parse_directive(pair: Pair<Rule>) -> Vec<Line> {
                         value: message,
                     });
                 }
+                Rule::dotsec_directive => {
+                    // Whole inner string between the parens, comma-separated
+                    // name=value pairs. The header module parses this further.
+                    let raw = typed.as_str();
+                    let inner = raw
+                        .strip_prefix("@dotsec(")
+                        .and_then(|s| s.strip_suffix(')'))
+                        .unwrap_or("")
+                        .to_string();
+                    output.push(Line::Directive {
+                        name: "dotsec".to_string(),
+                        value: Some(inner),
+                    });
+                }
                 Rule::text_directive => {
                     let mut inner = typed.into_inner();
                     let name = inner.next().unwrap().as_str().to_string();
@@ -647,6 +671,64 @@ pub fn schema_to_string(schema: &Schema) -> String {
     }
 
     output
+}
+
+/// Render a schema in canonical form for hashing into the v3 file MAC.
+///
+/// "Canonical" here means: same *semantic* schema ⇒ same bytes ⇒ same MAC.
+/// We drop everything that doesn't change runtime behaviour:
+///   - `@description` and `@deprecated` text (purely informational)
+///   - Inter-entry whitespace and comment-style formatting
+///   - Directive ordering within an entry (sorted by name)
+///
+/// We keep everything that DOES change behaviour: by default *every* directive
+/// the schema grammar parses ends up in the canonical form, except the two
+/// explicitly informational ones (`@description`, `@deprecated`). See
+/// `SCHEMA_DIRECTIVES` and `SCHEMA_FILE_LEVEL_DIRECTIVES` for the current set
+/// — adding a new directive automatically gets it covered by the MAC, which
+/// is the safe default.
+///
+/// Format (intentionally simple, line-oriented, deterministic):
+///
+/// ```text
+/// schema-canonical-v1\n
+/// <key>\n
+///   @<name>=<value>\n        (sorted by name; flag-only directives use empty value)
+///   @<name>=<value>\n
+/// <key>\n
+///   …
+/// ```
+///
+/// The leading domain tag `schema-canonical-v1` lets us bump the canonicalizer
+/// later without colliding with v3 MACs computed against the old form.
+pub fn schema_to_canonical_bytes(schema: &Schema) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::new();
+    out.extend_from_slice(b"schema-canonical-v1\n");
+
+    for (key, entry) in schema.iter() {
+        out.extend_from_slice(key.as_bytes());
+        out.push(b'\n');
+
+        // Sort directives by name. Drop @description/@deprecated — adding docs
+        // to a schema entry must not invalidate every teammate's MACs.
+        let mut sorted: Vec<&(String, Option<String>)> = entry
+            .directives
+            .iter()
+            .filter(|(name, _)| name != "description" && name != "deprecated")
+            .collect();
+        sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        for (name, value) in &sorted {
+            out.extend_from_slice(b"  @");
+            out.extend_from_slice(name.as_bytes());
+            out.push(b'=');
+            if let Some(v) = value {
+                out.extend_from_slice(v.as_bytes());
+            }
+            out.push(b'\n');
+        }
+    }
+
+    out
 }
 
 /// Convert a schema to a JSON Schema object.
@@ -3292,5 +3374,99 @@ mod tests {
         }];
         let csv = lines_to_csv(&lines).unwrap();
         assert_eq!(csv, "name,value\nHOSTS,\"a,b,c\"\n");
+    }
+
+    // --- schema_to_canonical_bytes ---
+
+    #[test]
+    fn canonical_starts_with_domain_tag() {
+        let schema = parse_schema("# @encrypt @type=string\nDB_URL\n").unwrap();
+        let bytes = schema_to_canonical_bytes(&schema);
+        assert!(bytes.starts_with(b"schema-canonical-v1\n"));
+    }
+
+    #[test]
+    fn canonical_drops_description() {
+        // Adding a description must not change the canonical form — purely informational.
+        let a = parse_schema("# @encrypt @type=string\nDB_URL\n").unwrap();
+        let b =
+            parse_schema("# @encrypt @type=string @description=\"connection string\"\nDB_URL\n")
+                .unwrap();
+        assert_eq!(schema_to_canonical_bytes(&a), schema_to_canonical_bytes(&b));
+    }
+
+    #[test]
+    fn canonical_drops_deprecated() {
+        // Same for @deprecated annotations.
+        let a = parse_schema("# @type=string\nOLD_KEY\n").unwrap();
+        let b = parse_schema("# @type=string @deprecated=\"use NEW_KEY\"\nOLD_KEY\n").unwrap();
+        assert_eq!(schema_to_canonical_bytes(&a), schema_to_canonical_bytes(&b));
+    }
+
+    #[test]
+    fn canonical_sorts_directives_within_entry() {
+        // Directive order in the source file must not affect the hash —
+        // a teammate reordering with their editor's formatter shouldn't break MACs.
+        let a = parse_schema("# @encrypt @type=string @optional\nFOO\n").unwrap();
+        let b = parse_schema("# @optional @type=string @encrypt\nFOO\n").unwrap();
+        assert_eq!(schema_to_canonical_bytes(&a), schema_to_canonical_bytes(&b));
+    }
+
+    #[test]
+    fn canonical_changes_when_type_changes() {
+        // Semantic edits must invalidate the hash — that's the whole point.
+        let a = parse_schema("# @type=number @max=65535\nPORT\n").unwrap();
+        let b = parse_schema("# @type=string\nPORT\n").unwrap();
+        assert_ne!(schema_to_canonical_bytes(&a), schema_to_canonical_bytes(&b));
+    }
+
+    #[test]
+    fn canonical_changes_when_encrypt_toggled() {
+        let a = parse_schema("# @encrypt @type=string\nSECRET\n").unwrap();
+        let b = parse_schema("# @type=string\nSECRET\n").unwrap();
+        assert_ne!(schema_to_canonical_bytes(&a), schema_to_canonical_bytes(&b));
+    }
+
+    #[test]
+    fn canonical_changes_when_push_target_changes() {
+        let a = parse_schema("# @push=aws-ssm\nKEY\n").unwrap();
+        let b = parse_schema("# @push=aws-secrets-manager\nKEY\n").unwrap();
+        assert_ne!(schema_to_canonical_bytes(&a), schema_to_canonical_bytes(&b));
+    }
+
+    #[test]
+    fn canonical_changes_when_max_changes() {
+        // Validation-rule changes count as semantic.
+        let a = parse_schema("# @type=number @max=65535\nPORT\n").unwrap();
+        let b = parse_schema("# @type=number @max=8080\nPORT\n").unwrap();
+        assert_ne!(schema_to_canonical_bytes(&a), schema_to_canonical_bytes(&b));
+    }
+
+    #[test]
+    fn canonical_changes_when_key_added() {
+        let a = parse_schema("# @type=string\nA\n").unwrap();
+        let b = parse_schema("# @type=string\nA\n\n# @type=string\nB\n").unwrap();
+        assert_ne!(schema_to_canonical_bytes(&a), schema_to_canonical_bytes(&b));
+    }
+
+    #[test]
+    fn canonical_deterministic_across_calls() {
+        let schema =
+            parse_schema("# @encrypt @type=string\nDB_URL\n\n# @type=number\nPORT\n").unwrap();
+        assert_eq!(
+            schema_to_canonical_bytes(&schema),
+            schema_to_canonical_bytes(&schema)
+        );
+    }
+
+    #[test]
+    fn canonical_keeps_entry_order() {
+        // Schema entry order is preserved in the canonical form (we MAC the .sec
+        // file's entry order separately, so consistency matters).
+        let schema = parse_schema("# @type=string\nZEBRA\n\n# @type=string\nAPPLE\n").unwrap();
+        let s = String::from_utf8(schema_to_canonical_bytes(&schema)).unwrap();
+        let zebra_pos = s.find("ZEBRA").unwrap();
+        let apple_pos = s.find("APPLE").unwrap();
+        assert!(zebra_pos < apple_pos);
     }
 }

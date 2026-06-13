@@ -10,7 +10,7 @@ comment_char =  { !NEW_LINE ~ ANY }
 directive          = ${ "#" ~ " "* ~ single_directive ~ (" "+ ~ single_directive)* }
 single_directive   = ${ flag_directive | push_directive | type_directive | format_directive
                       | numeric_directive | pattern_directive
-                      | deprecated_directive | text_directive }
+                      | deprecated_directive | dotsec_directive | text_directive }
 
 // --- Flag directives (no value) ---
 // @encrypt, @plaintext, @default-encrypt, @default-plaintext, @optional, @not-empty,
@@ -91,6 +91,18 @@ pattern_value     = @{ (!"\"" ~ ANY)* }
 // @deprecated or @deprecated="Use NEW_KEY instead"
 deprecated_directive = ${ "@deprecated" ~ !(ASCII_ALPHA | "_" | "-") ~ ("=" ~ "\"" ~ deprecated_message ~ "\"")? }
 deprecated_message   = @{ (!"\"" ~ ANY)* }
+
+// --- @dotsec directive ---
+// Single file-level directive carrying machine state (format tag, integrity
+// tag, wrapped DEK). Distinct from @push because it has params but no value
+// before the parens: `@dotsec(format=v3, mac=base64, dek=base64)`.
+// Values are unquoted; base64 chars don't include `,` or `)`.
+dotsec_directive = ${
+    "@dotsec(" ~ dotsec_param ~ ("," ~ " "* ~ dotsec_param)* ~ ")"
+}
+dotsec_param      = ${ dotsec_param_name ~ "=" ~ dotsec_param_value }
+dotsec_param_name = @{ (ASCII_ALPHA | "-")+ }
+dotsec_param_value = @{ (!("," | ")") ~ ANY)+ }
 
 // --- Text-value directives ---
 // @provider=aws, @key-id=alias/dotsec, @region=us-east-1, @description=Some text

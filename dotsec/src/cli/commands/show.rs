@@ -42,6 +42,7 @@ pub async fn match_args(
                 &default_options.encryption_engine,
                 output_format,
                 reveal,
+                &default_options.schema_hash,
             ),
         )
         .await?;

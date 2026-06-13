@@ -86,17 +86,18 @@ pub async fn match_args(
     let encryption_engine = if std::path::Path::new(sec_file).exists() {
         &default_options.encryption_engine
     } else {
-        // Generate keypair and create .sec
-        let key_file = format!("{}.key", sec_file);
-        if !std::path::Path::new(&key_file).exists() {
-            let (identity, _) = crypto::local::generate_keypair();
-            dotsec::write_sec_file(&key_file, &format!("{}\n", identity))?;
-            eprintln!("{} Created {}", "✓".green(), key_file);
-            helpers::ensure_keyfile_gitignored(
-                std::path::Path::new(&key_file),
-                sub.get_flag("no-gitignore"),
-            );
-        }
+        // Generate keypair and create .sec. Honor the engine's custom
+        // `key_file` if one was resolved (e.g. via @key-id mapping); fall
+        // back to the sibling `<sec_file>.key` default. The helper is
+        // TOCTOU-safe and skips the .gitignore touch when --no-gitignore.
+        let key_file = match &default_options.encryption_engine {
+            dotsec::EncryptionEngine::Local(opts) => opts
+                .key_file
+                .clone()
+                .unwrap_or_else(|| format!("{}.key", sec_file)),
+            _ => format!("{}.key", sec_file),
+        };
+        helpers::bootstrap_keypair(&key_file, sub.get_flag("no-gitignore"))?;
 
         // Write initial .sec with header + local provider config
         let mut init_lines = dotsec::generate_header();
@@ -444,13 +445,23 @@ pub async fn match_args(
         }
     }
 
-    let needs_kms = new_is_encrypted || old_was_encrypted;
+    // v3 files always need the round-trip path: the MAC covers entry names
+    // and directives, so even a "plaintext-only" edit shifts the canonical
+    // bytes and must produce a fresh MAC. Without this, the non-KMS branch
+    // below would write raw lines and leave the stored MAC stale.
+    let is_v3 = std::fs::read_to_string(sec_file)
+        .ok()
+        .and_then(|c| dotenv::parse_dotenv(&c).ok())
+        .map(|lines| dotsec::header_v3::HeaderV3::is_present(&lines))
+        .unwrap_or(false);
 
-    if needs_kms {
+    let needs_round_trip = new_is_encrypted || old_was_encrypted || is_v3;
+
+    if needs_round_trip {
         // Decrypt → modify → re-encrypt (full KMS round trip)
         let mut lines = with_progress(
             "Decrypting...",
-            dotsec::decrypt_sec_to_lines(sec_file, encryption_engine),
+            dotsec::decrypt_sec_to_lines(sec_file, encryption_engine, &default_options.schema_hash),
         )
         .await?;
 

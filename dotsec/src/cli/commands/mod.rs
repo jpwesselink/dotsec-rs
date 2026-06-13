@@ -1,6 +1,7 @@
 mod base;
 pub mod diff;
 pub mod eject;
+pub mod encrypt;
 pub mod export;
 pub mod format;
 pub mod header;
@@ -19,6 +20,7 @@ pub mod validate;
 pub fn create_command() -> clap::Command {
     base::command()
         .subcommand(set::command())
+        .subcommand(encrypt::command())
         .subcommand(import::command())
         .subcommand(run::command())
         .subcommand(show::command())

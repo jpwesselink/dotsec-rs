@@ -11,6 +11,7 @@ crypto = { path = "../crypto" }
 base64 = { workspace = true }
 dotenv = { path = "../dotenv" }
 serde_json = "1.0"
+thiserror = { workspace = true }
 zeroize = "1.8"
 
 [dev-dependencies]

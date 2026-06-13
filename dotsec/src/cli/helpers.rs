@@ -27,6 +27,58 @@ fn in_git_repo(start: &Path) -> bool {
     }
 }
 
+/// First-run keypair bootstrap shared by `dotsec set`, `dotsec init`, and
+/// `dotsec import`. Generates an age keypair, writes it to `key_file` using
+/// `O_CREAT | O_EXCL` semantics (TOCTOU-safe — if two CLI invocations race
+/// against a fresh directory, exactly one wins and the other gets a clean
+/// "file already exists" outcome, no silent overwrite). No-ops when the key
+/// file already exists. Auto-updates `.gitignore` unless `skip_gitignore`.
+///
+/// Failure to write the key file is fatal (returns Err); `.gitignore` write
+/// failure is logged but not fatal (mirrors `ensure_keyfile_gitignored`).
+pub fn bootstrap_keypair(
+    key_file: &str,
+    skip_gitignore: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Write;
+
+    if std::path::Path::new(key_file).exists() {
+        return Ok(());
+    }
+
+    let (identity, _) = crypto::local::generate_keypair();
+
+    // O_CREAT | O_EXCL: atomic "create only if absent". A racing process
+    // already wrote a keypair → we get AlreadyExists and bail without
+    // clobbering it. On Unix we additionally set mode 0600 so the secret
+    // isn't world-readable; on Windows, NTFS inherits the parent directory's
+    // ACL — there's no `mode()` to set, and dotsec doesn't paper over that.
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = match opts.open(key_file) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // Lost the race; whoever wrote the file first wins.
+            return Ok(());
+        }
+        Err(e) => return Err(format!("failed to create {key_file}: {e}").into()),
+    };
+    file.write_all(format!("{}\n", identity).as_bytes())
+        .map_err(|e| format!("failed to write {key_file}: {e}"))?;
+    file.sync_all()
+        .map_err(|e| format!("failed to fsync {key_file}: {e}"))?;
+    drop(file);
+
+    eprintln!("{} Created {}", "✓".green(), key_file);
+    ensure_keyfile_gitignored(std::path::Path::new(key_file), skip_gitignore);
+    Ok(())
+}
+
 /// Ensure the `.gitignore` near `key_file` excludes `*.key`. Creates `.gitignore` if
 /// missing (only when we're inside a git repo). Appends `*.key` if existing but
 /// missing the pattern. No-op when already covered, when `skip` is true, or when
@@ -916,5 +968,59 @@ mod tests {
             extracted_str, stripped_str,
             "both methods should produce identical output"
         );
+    }
+
+    // --- bootstrap_keypair (G5 — regression coverage for the import on-ramp) ---
+
+    fn bootstrap_fixture(name: &str) -> (PathBuf, String) {
+        let dir = std::env::temp_dir().join(format!("dotsec-test-bootstrap-{}", name));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let key_file = dir.join(".sec.key").to_string_lossy().to_string();
+        (dir, key_file)
+    }
+
+    #[test]
+    fn bootstrap_keypair_creates_age_identity_file() {
+        let (dir, key_file) = bootstrap_fixture("creates");
+        bootstrap_keypair(&key_file, true).unwrap();
+        let body = std::fs::read_to_string(&key_file).unwrap();
+        assert!(
+            body.starts_with("AGE-SECRET-KEY-"),
+            "expected age identity, got: {body}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bootstrap_keypair_no_op_when_file_exists() {
+        // If the user (or a parallel invocation) already wrote a keypair,
+        // bootstrap must NOT clobber it.
+        let (dir, key_file) = bootstrap_fixture("noop");
+        let original = "AGE-SECRET-KEY-EXISTING-DO-NOT-OVERWRITE\n";
+        std::fs::write(&key_file, original).unwrap();
+        bootstrap_keypair(&key_file, true).unwrap();
+        let body = std::fs::read_to_string(&key_file).unwrap();
+        assert_eq!(body, original, "existing key must survive bootstrap");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The age identity is a private key — must not be world-readable.
+    /// Unix-only: Windows doesn't have POSIX mode bits, and `OpenOptionsExt`
+    /// doesn't compile there.
+    #[cfg(unix)]
+    #[test]
+    fn bootstrap_keypair_writes_0600_perms() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, key_file) = bootstrap_fixture("perms");
+        bootstrap_keypair(&key_file, true).unwrap();
+        let mode = std::fs::metadata(&key_file).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "key file must be 0600 (owner read/write only), got {:o}",
+            mode & 0o777
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -14,8 +14,9 @@ pub async fn show(
     encryption_engine: &EncryptionEngine,
     output_format: &OutputFormat,
     reveal: bool,
+    schema_hash: &[u8; 32],
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let lines = decrypt_sec_to_lines(sec_file, encryption_engine).await?;
+    let lines = decrypt_sec_to_lines(sec_file, encryption_engine, schema_hash).await?;
     if reveal {
         create_output(&lines, output_format)
     } else {
@@ -138,6 +139,10 @@ pub async fn run_command(
 ) -> Result<i32, Box<dyn std::error::Error>> {
     use portable_pty::{native_pty_system, CommandBuilder, PtySize};
     use std::io::{Read, Write};
+    // `Arc` is only used by the Unix-gated SIGWINCH handler below — Windows
+    // doesn't subscribe to that signal, so the import would be flagged
+    // unused on `cargo build --target *-windows-msvc` without this gate.
+    #[cfg(unix)]
     use std::sync::Arc;
 
     let (cols, rows) = terminal_size().unwrap_or((80, 24));
