@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.0.1](https://github.com/jpwesselink/dotsec-rs/compare/dotenv-v7.0.0...dotenv-v7.0.1) - 2026-06-13
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [7.0.0](https://github.com/jpwesselink/dotsec-rs/compare/dotenv-v0.15.0...dotenv-v7.0.0) - 2026-06-13
 
 ### Added
