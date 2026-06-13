@@ -43,10 +43,6 @@
       "path": "/pr-44/"
     },
     {
-      "label": "#47 fix/tty-guard-interactive-prompts",
-      "path": "/pr-47/"
-    },
-    {
       "label": "#48 release-plz-2026-06-13T21-05-28Z",
       "path": "/pr-48/"
     }
