@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.0.0](https://github.com/jpwesselink/dotsec-rs/compare/crypto-v0.5.1...crypto-v7.0.0) - 2026-06-13
+
+### Added
+
+- *(set)* --description flag (schema-aware) ([#25](https://github.com/jpwesselink/dotsec-rs/pull/25))
+- [**breaking**] v3 wire format with file-level integrity tag ([#23](https://github.com/jpwesselink/dotsec-rs/pull/23))
+- [**breaking**] @push entries no longer injected into env (use @also-env to opt in)
+- add age-based local key wrapping to crypto crate
+- create crypto crate with shared value encryption
+
+### Fixed
+
+- cap age DEK unwrap output and reject oversized wrapped blobs
+
+### Other
+
+- bump workspace to 7.0.0 ([#37](https://github.com/jpwesselink/dotsec-rs/pull/37))
+- release v5.0.2
+- release v5.0.1 ([#19](https://github.com/jpwesselink/dotsec-rs/pull/19))
+- release v5.0.1
+- cargo fmt across workspace
+- release v5.0.0 ([#14](https://github.com/jpwesselink/dotsec-rs/pull/14))
+- migrate aws crate to use crypto for shared functions
+
 ## [5.0.1](https://github.com/jpwesselink/dotsec-rs/compare/crypto-v0.5.1...crypto-v5.0.1) - 2026-05-13
 
 ### Added
