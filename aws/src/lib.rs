@@ -37,6 +37,52 @@ impl From<CryptoError> for DataStoreError {
     }
 }
 
+/// Redact AWS resource identifiers — ARNs and 12-digit account IDs — from
+/// an error message before it bubbles up into the application's error
+/// chain. The AWS SDK's error formatters routinely include the calling
+/// principal's ARN, the target resource ARN, and the account ID, all of
+/// which the user doesn't necessarily want appearing in CI logs or `dotsec
+/// run` stderr.
+///
+/// Conservative: replace any `arn:aws:…` token (terminated by whitespace,
+/// quote, comma, or end-of-string) with `arn:aws:[REDACTED]`, and any
+/// stand-alone 12-digit number with `[ACCOUNT]`. Leaves the error type
+/// name and the human-readable message intact so the user still knows
+/// what kind of failure it is.
+pub fn sanitize_aws_error(input: String) -> String {
+    let mut out = String::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // ARN: "arn:aws:..." up to a terminator.
+        if bytes[i..].starts_with(b"arn:aws:") {
+            out.push_str("arn:aws:[REDACTED]");
+            i += "arn:aws:".len();
+            while i < bytes.len() && !matches!(bytes[i], b' ' | b'\t' | b'\n' | b'"' | b'\'' | b',')
+            {
+                i += 1;
+            }
+            continue;
+        }
+        // 12-digit standalone number (account ID). Require non-digit boundaries
+        // on both sides so we don't mangle, e.g., a 12-byte hash that happens
+        // to be all digits or a longer number.
+        if bytes[i].is_ascii_digit()
+            && (i == 0 || !bytes[i - 1].is_ascii_digit())
+            && i + 12 <= bytes.len()
+            && bytes[i..i + 12].iter().all(|b| b.is_ascii_digit())
+            && (i + 12 == bytes.len() || !bytes[i + 12].is_ascii_digit())
+        {
+            out.push_str("[ACCOUNT]");
+            i += 12;
+            continue;
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
 async fn create_kms_client(region: Option<&str>) -> aws_sdk_kms::Client {
     let region_provider = match region {
         Some(r) => {
@@ -73,7 +119,9 @@ pub async fn check_key_alias(
             if is_not_found {
                 Ok(None)
             } else {
-                Err(DataStoreError::KmsError(err.to_string()))
+                Err(DataStoreError::KmsError(sanitize_aws_error(
+                    err.to_string(),
+                )))
             }
         }
     }
@@ -91,7 +139,7 @@ pub async fn create_key_with_alias(
         .description("Created by dotsec")
         .send()
         .await
-        .map_err(|e| DataStoreError::KmsError(e.to_string()))?;
+        .map_err(|e| DataStoreError::KmsError(sanitize_aws_error(e.to_string())))?;
 
     let metadata = key_resp
         .key_metadata()
@@ -106,7 +154,7 @@ pub async fn create_key_with_alias(
         .target_key_id(&key_id)
         .send()
         .await
-        .map_err(|e| DataStoreError::KmsError(e.to_string()))?;
+        .map_err(|e| DataStoreError::KmsError(sanitize_aws_error(e.to_string())))?;
 
     Ok(key_arn)
 }
@@ -156,7 +204,7 @@ pub async fn generate_data_key(
     let resp = req
         .send()
         .await
-        .map_err(|e| DataStoreError::KmsError(e.to_string()))?;
+        .map_err(|e| DataStoreError::KmsError(sanitize_aws_error(e.to_string())))?;
 
     let plaintext = resp
         .plaintext()
@@ -191,7 +239,7 @@ pub async fn unwrap_data_key(
     let resp = req
         .send()
         .await
-        .map_err(|e| DataStoreError::KmsError(e.to_string()))?;
+        .map_err(|e| DataStoreError::KmsError(sanitize_aws_error(e.to_string())))?;
 
     let plaintext = resp
         .plaintext()
@@ -254,7 +302,7 @@ pub async fn push_to_ssm(
         .overwrite(true)
         .send()
         .await
-        .map_err(|e| DataStoreError::SsmError(e.to_string()))?;
+        .map_err(|e| DataStoreError::SsmError(sanitize_aws_error(e.to_string())))?;
 
     Ok(())
 }
@@ -288,10 +336,14 @@ pub async fn push_to_secrets_manager(
                     .secret_string(value)
                     .send()
                     .await
-                    .map_err(|e| DataStoreError::SecretsManagerError(e.to_string()))?;
+                    .map_err(|e| {
+                        DataStoreError::SecretsManagerError(sanitize_aws_error(e.to_string()))
+                    })?;
                 Ok(())
             } else {
-                Err(DataStoreError::SecretsManagerError(err.to_string()))
+                Err(DataStoreError::SecretsManagerError(sanitize_aws_error(
+                    err.to_string(),
+                )))
             }
         }
     }
@@ -352,6 +404,70 @@ mod tests {
         assert!(!is_encrypted_value("plaintext"));
         assert!(!is_encrypted_value("ENC[no closing"));
         assert!(!is_encrypted_value("prefix ENC[abc]"));
+    }
+
+    #[test]
+    fn sanitize_strips_kms_arn() {
+        let raw = "AccessDenied: User: arn:aws:iam::123456789012:user/alice is not authorized to perform: kms:Decrypt on resource: arn:aws:kms:us-east-1:123456789012:key/abcd-1234".to_string();
+        let cleaned = sanitize_aws_error(raw);
+        // Account ID is embedded inside both ARNs — the ARN replacement
+        // collapses those entirely, so the account ID disappears as a
+        // side effect (no separate `[ACCOUNT]` token needed here).
+        assert!(!cleaned.contains("123456789012"));
+        assert!(!cleaned.contains("user/alice"));
+        assert!(!cleaned.contains("abcd-1234"));
+        assert!(cleaned.contains("arn:aws:[REDACTED]"));
+        assert!(cleaned.starts_with("AccessDenied: User: "));
+        assert!(cleaned.contains("not authorized to perform: kms:Decrypt"));
+    }
+
+    #[test]
+    fn sanitize_strips_standalone_account_id() {
+        // The 12-digit `[ACCOUNT]` token kicks in when an account number
+        // appears outside an ARN context — common in CloudTrail snippets
+        // or hand-rolled error messages.
+        let raw = "operation failed for account 123456789012 in region us-east-1".to_string();
+        let cleaned = sanitize_aws_error(raw);
+        assert!(!cleaned.contains("123456789012"));
+        assert!(cleaned.contains("[ACCOUNT]"));
+        assert_eq!(
+            cleaned,
+            "operation failed for account [ACCOUNT] in region us-east-1"
+        );
+    }
+
+    #[test]
+    fn sanitize_strips_arn_at_quote_boundary() {
+        let raw = r#"error: "arn:aws:kms:us-east-1:111122223333:key/key-id-here""#.to_string();
+        let cleaned = sanitize_aws_error(raw);
+        assert!(!cleaned.contains("111122223333"));
+        assert!(!cleaned.contains("key-id-here"));
+        assert_eq!(cleaned, r#"error: "arn:aws:[REDACTED]""#);
+    }
+
+    #[test]
+    fn sanitize_leaves_unrelated_numbers_alone() {
+        // 12-digit account requires non-digit neighbors on both sides. A
+        // 13- or 15-digit number must NOT match.
+        let raw = "size: 1234567890123 bytes; rev: 1234567890".to_string();
+        let cleaned = sanitize_aws_error(raw.clone());
+        assert_eq!(cleaned, raw, "non-12-digit numbers must pass through");
+    }
+
+    #[test]
+    fn sanitize_preserves_kms_action_name() {
+        // The action name `kms:Decrypt` contains a colon and could be
+        // confused with an ARN-shaped fragment by a naive impl. Ensure
+        // we only strip on `arn:aws:` prefix specifically.
+        let raw = "AccessDenied: principal not authorized to perform kms:Decrypt".to_string();
+        let cleaned = sanitize_aws_error(raw.clone());
+        assert_eq!(cleaned, raw);
+    }
+
+    #[test]
+    fn sanitize_handles_empty_and_short_input() {
+        assert_eq!(sanitize_aws_error(String::new()), "");
+        assert_eq!(sanitize_aws_error("nope".to_string()), "nope");
     }
 
     #[test]
