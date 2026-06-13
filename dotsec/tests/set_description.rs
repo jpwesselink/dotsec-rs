@@ -9,17 +9,23 @@
 //! binary crate run — no `assert_cmd` dep needed.
 
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 fn dotsec_bin() -> &'static str {
     env!("CARGO_BIN_EXE_dotsec")
 }
 
 /// Run `dotsec <args>` in `cwd`. Returns (stdout, stderr, exit-code).
+///
+/// Stdin is wired to `/dev/null` so that any unexpected interactive prompt
+/// (a missing `-y`, a new confirm-step on a subcommand) fails fast with a
+/// read-error exit code instead of blocking the test on a child that's
+/// waiting forever for input.
 fn run(cwd: &Path, args: &[&str]) -> (String, String, i32) {
     let output = Command::new(dotsec_bin())
         .args(args)
         .current_dir(cwd)
+        .stdin(Stdio::null())
         .output()
         .expect("failed to spawn dotsec");
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
