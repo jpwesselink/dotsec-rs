@@ -6,7 +6,7 @@
 
 **No more .env files.**
 
-dotsec encrypts your secrets into a `.sec` file — same shape as `.env`, committed to git, decrypted in memory when your app runs. Your code still reads `process.env.X`, but there's no plaintext secrets file on disk for compromised dependencies to grep.
+dotsec encrypts your secrets into a `.sec` file — same shape as `.env`, but committed to git as the single source of truth, decrypted in memory only when your app runs.
 
 - **KMS-native, AWS-integrated** — `EncryptionContext` binding on every wrap and unwrap; IAM controls access, CloudTrail logs every decrypt. Push to SSM Parameter Store and Secrets Manager via `@push=aws-ssm` / `@push=aws-secrets-manager` directives, for runtime services that read from AWS directly.
 - **Built like crypto matters** — AAD-bound per-value AEAD, file-level MAC over canonical content, schema-hash binding, key commitment, zeroize on every exit path, constant-time integrity checks, cargo-fuzz harness with 4 targets.
