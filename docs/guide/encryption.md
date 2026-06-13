@@ -17,10 +17,10 @@ dotsec uses [age](https://age-encryption.org/) for key management. Each `.sec` f
 
 - **Small, audited surface.** age is a deliberately minimal design ([Cure53 audit, 2021](https://github.com/FiloSottile/age/tree/main/doc)) — one curve (X25519), one AEAD (ChaCha20-Poly1305), no parameter choices to footgun.
 - **Standard interchange format.** The wrapped DEK is a plain age envelope. If dotsec ever broke or disappeared, the `age`/`rage` CLI can decrypt it — your secrets are never locked into a bespoke format.
-- **Multi-recipient by design.** age envelopes can be encrypted to several recipients, which is the natural path to per-teammate keys and painless key rotation in a future dotsec release.
+- **Plugin protocol for hardware-backed identities.** The age plugin protocol means future support for YubiKey, Secure Enclave, TPM, and FIDO2 identities comes from the age ecosystem rather than dotsec-specific code.
 - **Maintained Rust implementation** by the spec's author.
 
-The alternatives were worse fits: raw libsodium/NaCl sealed boxes have no multi-recipient story and no interchange format; GPG brings an enormous surface area and a web-of-trust model dotsec doesn't need.
+GPG was the alternative considered: too much surface area, web-of-trust we don't need.
 
 ### How it works
 
@@ -70,7 +70,7 @@ export DOTSEC_PRIVATE_KEY="AGE-SECRET-KEY-1..."
 
 ## AWS KMS
 
-For enterprise teams needing IAM-controlled access and CloudTrail audit logs.
+When you have an AWS account and want IAM-controlled access plus CloudTrail audit logs — and no local key file at all.
 
 ### How it works
 
@@ -204,3 +204,7 @@ Use this periodically or after a suspected key compromise. For a full key compro
 dotsec init          # generates new .sec.key
 dotsec rotate-key    # re-wraps all values with new key
 ```
+
+---
+
+**Next:** the [Security model](/guide/security) covers what this defends against and where the honest limits sit.

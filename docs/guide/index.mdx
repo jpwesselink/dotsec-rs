@@ -1,10 +1,6 @@
-import { Tabs, Tab } from '@rspress/core/theme';
-
 # Getting Started
 
-dotsec encrypts your `.env` files into `.sec` files. The `.sec` file is committed to git as the single source of truth for your secrets — no more sharing credentials over Slack or managing secret vaults.
-
-Encryption uses age (X25519 + ChaCha20-Poly1305) by default. AWS KMS is also supported for enterprise teams.
+dotsec replaces your `.env` file with a `.sec` file: same shape, same workflow, but encrypted and committed to git. Your tools don't notice — the integration is `dotsec run -- <whatever you were running before>`.
 
 ## Install
 
@@ -12,33 +8,56 @@ Encryption uses age (X25519 + ChaCha20-Poly1305) by default. AWS KMS is also sup
 npm install -g dotsec
 ```
 
-Distribution is npm-only — the package bundles a native per-platform binary. Prefer a dev-dependency or one-shot `npx`? See [Setup → Install](/guide/setup#install).
+npm-only, bundles a native binary for macOS / Linux / Windows. Dev-dependency and one-shot `npx` patterns: [Setup → Install](/guide/setup#install).
 
-## Your first secret
+## Already have a `.env`?
 
-```bash
-dotsec set API_KEY sk-live-xxx --encrypt  # add a secret (auto-creates .sec + keypair)
-dotsec set PORT 3000                      # add a plaintext var
-dotsec run -- node server.js              # run with decrypted env vars
-```
-
-That's it. Three things just happened:
-
-1. `.sec` was created — encrypted, **commit this**
-2. `.sec.key` was created — your private key, auto-added to `.gitignore`, **never commit this**
-3. `node server.js` ran with `API_KEY` and `PORT` in its environment, decrypted in memory only
-
-Already have a `.env`? Import it:
+Then you're two commands from done:
 
 ```bash
-dotsec import      # interactive
-dotsec import -y   # auto-detect types and encryption
+dotsec import -y                 # .env → encrypted .sec
+dotsec run -- node server.js    # ← whatever you were running before
 ```
+
+Check what happened, then commit:
+
+```bash
+dotsec show       # decrypted view, values masked
+git add .sec      # .sec goes into git
+rm .env           # no more .env files
+```
+
+Your private key landed in `.sec.key`, which dotsec auto-added to `.gitignore`. Stash a copy in your password manager.
+
+## Starting fresh?
+
+```bash
+dotsec set API_KEY sk-live-xxx --encrypt   # auto-creates .sec + keypair
+dotsec set PORT 3000                       # plaintext var
+dotsec run -- node server.js
+```
+
+## Works with anything
+
+`dotsec run` injects decrypted env vars into any child process — there's no SDK, no framework adapter, nothing to integrate:
+
+```bash
+dotsec run -- node server.js
+dotsec run -- npm run dev
+dotsec run -- python manage.py runserver
+dotsec run -- cargo run
+dotsec run -- go run ./cmd/api
+dotsec run -- rails server
+dotsec run -- docker compose up
+dotsec run -- terraform apply
+```
+
+If it reads environment variables, it works. The child gets a real PTY, so colors and interactivity survive.
 
 ## How it works
 
 ```
-.env (plaintext, gitignored)          .sec (encrypted, committed)
+.env (plaintext, gone)                .sec (encrypted, committed)
 ┌─────────────────────────┐           ┌────────────────────────────┐
 │ DATABASE_URL=postgres://│  encrypt  │ # @dotsec(format=v3,       │
 │ API_KEY=sk-live-xxx     │ ───────▶  │ #   mac=..., dek=...)      │
@@ -48,33 +67,19 @@ dotsec import -y   # auto-detect types and encryption
                                decrypt└────────────────────────────┘
 ```
 
-Each secret is encrypted individually with AES-256-GCM using a data encryption key (DEK). The DEK is wrapped by your keypair (or AWS KMS) and stored in the `@dotsec(...)` directive. This makes `.sec` files git-mergeable — changing one secret only affects that line.
-
-## Everyday commands
-
-```bash
-dotsec set KEY value              # add or update a variable
-dotsec show                       # display decrypted .sec contents (masked)
-dotsec run -- npm start           # inject decrypted vars into a command
-dotsec export -o .env             # .sec → .env (decrypts to file)
-dotsec validate                   # check directives and values
-dotsec diff .sec.staging          # compare .sec files
-dotsec rotate-key                 # generate new DEK, re-encrypt all values
-```
-
-Full reference: [Commands](/guide/commands).
+Each secret is encrypted individually with AES-256-GCM using a data encryption key (DEK). The DEK is wrapped by your keypair (or AWS KMS) and stored in the `@dotsec(...)` directive. Per-value encryption is what makes `.sec` files **git-mergeable** — two teammates changing different secrets merge cleanly.
 
 ## Team sharing
 
-Share the `.sec.key` file with teammates over a secure channel (a password manager, not Slack). For CI, set `DOTSEC_PRIVATE_KEY` as a secret — see [CI/CD](/guide/ci) for copy-paste GitHub Actions and GitLab recipes.
+Share the `.sec.key` file over a secure channel (a password manager, not Slack). For CI, set `DOTSEC_PRIVATE_KEY` as a secret — copy-paste recipes in [CI/CD](/guide/ci).
 
 ## Where to go next
 
 | You want to… | Read |
 |---|---|
-| Install as a dev dependency, set up AWS KMS, run multiple environments | [Setup](/guide/setup) |
+| Install as a dev dependency, use AWS KMS, run multiple environments | [Setup](/guide/setup) |
 | Add types, validation, and push targets to your vars | [Directives](/guide/directives) |
 | Wire dotsec into GitHub Actions / GitLab | [CI/CD](/guide/ci) |
 | Understand the crypto and the threat model | [Encryption](/guide/encryption) · [Security](/guide/security) |
-| Use dotsec programmatically (Node.js / Rust) or generate TypeScript types | [Library](/guide/library) |
+| Use dotsec programmatically or generate TypeScript types | [Library](/guide/library) |
 | Fix an error you just hit | [Troubleshooting](/guide/troubleshooting) |
