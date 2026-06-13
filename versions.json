@@ -29,10 +29,6 @@
     {
       "label": "#34 docs/remove-card-wiggle",
       "path": "/pr-34/"
-    },
-    {
-      "label": "#25 feat/dotsec-set-description",
-      "path": "/pr-25/"
     }
   ],
   "latest": "/v6.0.0/"
