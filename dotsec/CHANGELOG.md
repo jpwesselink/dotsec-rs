@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.0.0](https://github.com/jpwesselink/dotsec-rs/compare/dotsec-v0.1.0...dotsec-v6.0.0) - 2026-06-13
+
+### Added
+
+- *(set)* --description flag (schema-aware) ([#25](https://github.com/jpwesselink/dotsec-rs/pull/25))
+- KMS EncryptionContext + redact @encrypt validation errors + helper tests ([#35](https://github.com/jpwesselink/dotsec-rs/pull/35))
+- [**breaking**] v3 wire format with file-level integrity tag ([#23](https://github.com/jpwesselink/dotsec-rs/pull/23))
+- auto-add *.key to .gitignore on keypair creation (--no-gitignore to opt out)
+- *(poster)* multi-line quick-start with local + AWS examples
+- bump chromakopia to 0.2.0-pr-7 + brand-poster no-args screen
+
+### Other
+
+- hide 3D tilt on home cards + align CLI poster tagline ([#36](https://github.com/jpwesselink/dotsec-rs/pull/36))
+- *(poster)* drop confusing inline # comments from quick-start lines
+
 ## [5.0.1](https://github.com/jpwesselink/dotsec-rs/compare/dotsec-v0.1.0...dotsec-v5.0.1) - 2026-05-13
 
 ### Added

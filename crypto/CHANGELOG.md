@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.0.0](https://github.com/jpwesselink/dotsec-rs/compare/crypto-v0.5.1...crypto-v6.0.0) - 2026-06-13
+
+### Added
+
+- *(set)* --description flag (schema-aware) ([#25](https://github.com/jpwesselink/dotsec-rs/pull/25))
+- [**breaking**] v3 wire format with file-level integrity tag ([#23](https://github.com/jpwesselink/dotsec-rs/pull/23))
+
 ## [5.0.1](https://github.com/jpwesselink/dotsec-rs/compare/crypto-v0.5.1...crypto-v5.0.1) - 2026-05-13
 
 ### Added
