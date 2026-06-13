@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Security Model - dotsec</title>
+<script src="/dotsec-rs/version-switcher.js" defer>
+  <script>{;const saved = localStorage.getItem('rspress-theme-appearance');const preferDark = window.matchMedia('(prefers-color-scheme: dark)').matches;const isDark = !saved || saved === 'auto' ? preferDark : saved === 'dark';document.documentElement.classList.toggle('dark', isDark);document.documentElement.classList.toggle('rp-dark', isDark);document.documentElement.style.colorScheme = isDark ? 'dark' : 'light';}</script>
+<link href="/dotsec-rs/pr-47/static/css/styles.eb28f81c80.css" rel="stylesheet">
+<script defer src="/dotsec-rs/pr-47/static/js/styles.35a12ac0d5.js"></script>
+<script defer src="/dotsec-rs/pr-47/static/js/lib-react.a054607913.js"></script>
+<script defer src="/dotsec-rs/pr-47/static/js/lib-router.b2c64079c3.js"></script>
+<script defer src="/dotsec-rs/pr-47/static/js/613.d46e225703.js"></script>
+<script defer src="/dotsec-rs/pr-47/static/js/index.60d059e553.js"></script>
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="generator" content="Rspress v2.0.5">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Security Model - dotsec">
+<meta name="description" content="What dotsec protects, what it assumes, and what it explicitly does not defend against. For the mechanics (ciphertext format, MAC scope, key wrapping) see How Encryption Works.">
+<meta property="og:description" content="What dotsec protects, what it assumes, and what it explicitly does not defend against. For the mechanics (ciphertext format, MAC scope, key wrapping) see How Encryption Works."></head>
+
+  <body>
+    <div id="__rspress_root"><header class="rp-nav"><div class="rp-nav__left"><div class="rp-nav__title"><a href="/dotsec-rs/pr-47/" class="rp-nav__title__link rp-link"><span>dotsec</span></a></div></div><div class="rp-nav__right"><button class="rp-search-button"><div class="rp-search-button__content"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" fill="none" viewBox="0 0 20 21" class="rp-search-button__icon"><path fill="currentColor" d="M8.333 1.913A6.667 6.667 0 0 1 15 8.58c0 1.54-.525 2.957-1.402 4.085l4.49 4.492a.834.834 0 0 1-1.177 1.178l-4.491-4.49a6.64 6.64 0 0 1-4.087 1.402 6.667 6.667 0 0 1 0-13.334m0 1.667a5 5 0 1 0 0 10 5 5 0 0 0 0-10"></path></svg><span class="rp-search-button__word">Search</span></div><div class="rp-search-button__hotkey" style="opacity:0"><span></span><span>K</span></div></button><div class="rp-search-button--mobile"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" fill="none" viewBox="0 0 20 21"><path fill="currentColor" d="M8.333 1.913A6.667 6.667 0 0 1 15 8.58c0 1.54-.525 2.957-1.402 4.085l4.49 4.492a.834.834 0 0 1-1.177 1.178l-4.491-4.49a6.64 6.64 0 0 1-4.087 1.402 6.667 6.667 0 0 1 0-13.334m0 1.667a5 5 0 1 0 0 10 5 5 0 0 0 0-10"></path></svg></div><div class="rp-nav__others"><div class="rp-nav-menu__divider"></div><div class="rp-switch-appearance"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" class="rp-switch-appearance__icon rp-switch-appearance__icon--sun"><path fill="currentColor" d="m7.001 15.848-1.226 1.226a.58.58 0 0 0 0 .818.58.58 0 0 0 .818 0l1.226-1.226a.58.58 0 0 0 0-.818.58.58 0 0 0-.818 0m-.352-8.735a.584.584 0 0 0 .825-.825L6.237 5.051a.584.584 0 0 0-.825.825zM5.011 11.07h-1.75a.584.584 0 0 0 0 1.167h1.75c.324 0 .584-.26.584-.583a.585.585 0 0 0-.584-.584m7.003-5.835c.324 0 .584-.26.584-.584V2.9a.58.58 0 0 0-.584-.584.58.58 0 0 0-.583.583V4.65c0 .323.262.584.583.584m5.616 1.621 1.226-1.225a.58.58 0 0 0 0-.818.58.58 0 0 0-.818 0l-1.226 1.225a.58.58 0 0 0 0 .818.576.576 0 0 0 .818 0m3.138 4.214h-1.75a.58.58 0 0 0-.584.584c0 .324.26.584.583.584h1.751a.584.584 0 1 0 0-1.167m-3.389 5.124a.584.584 0 0 0-.825.825l1.238 1.238a.584.584 0 0 0 .825-.826zm-5.365-9.795a5.256 5.256 0 0 0-5.257 5.258 5.256 5.256 0 0 0 5.257 5.257 5.256 5.256 0 0 0 5.257-5.257 5.256 5.256 0 0 0-5.257-5.258m0 11.675a.58.58 0 0 0-.583.583v1.751a.582.582 0 1 0 1.167 0v-1.75a.584.584 0 0 0-.584-.584"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="19" height="19" fill="currentColor" viewBox="0 0 19 19" class="rp-switch-appearance__icon rp-switch-appearance__icon--moon"><path fill="currentColor" d="M9.166 0a9.2 9.2 0 0 1 1.857.188.834.834 0 0 1 .042 1.623 4.47 4.47 0 1 0 5.457 5.457l.048-.135a.834.834 0 0 1 1.575.177q.186.902.188 1.856A9.168 9.168 0 1 1 9.166 0"></path></svg></div><div class="rp-social-links"><a href="https://github.com/jpwesselink/dotsec-rs" target="_blank" rel="noopener noreferrer" class="rp-social-links__item"><div class="rp-social-links__icon"><div class="rp-social-links__icon"><svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 24 24"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12c0 5.303 3.438 9.8 8.205 11.385c.6.113.82-.258.82-.577c0-.285-.01-1.04-.015-2.04c-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729c1.205.084 1.838 1.236 1.838 1.236c1.07 1.835 2.809 1.305 3.495.998c.108-.776.417-1.305.76-1.605c-2.665-.3-5.466-1.332-5.466-5.93c0-1.31.465-2.38 1.235-3.22c-.135-.303-.54-1.523.105-3.176c0 0 1.005-.322 3.3 1.23c.96-.267 1.98-.399 3-.405c1.02.006 2.04.138 3 .405c2.28-1.552 3.285-1.23 3.285-1.23c.645 1.653.24 2.873.12 3.176c.765.84 1.23 1.91 1.23 3.22c0 4.61-2.805 5.625-5.475 5.92c.42.36.81 1.096.81 2.22c0 1.606-.015 2.896-.015 3.286c0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></div></div></a><ul class="rp-hover-group rp-hover-group--hidden rp-hover-group--right"></ul></div></div><button aria-label="mobile hamburger" class="rp-nav-hamburger rp-nav-hamburger__sm"><svg xmlns="http://www.w3.org/2000/svg" width="21" height="21" fill="none" viewBox="0 0 21 21"><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.667" d="M3.645 5.225h13.333M3.645 10.225h13.333M3.645 15.225h13.333"></path></svg></button><button aria-label="mobile hamburger" class="rp-nav-hamburger rp-nav-hamburger__md"><svg xmlns="http://www.w3.org/2000/svg" width="21" height="21" fill="none" viewBox="0 0 21 21"><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.667" d="M3.645 5.225h13.333M3.645 10.225h13.333M3.645 15.225h13.333"></path></svg><ul class="rp-hover-group rp-hover-group--hidden rp-hover-group--right"><div class="rp-nav-menu__others-mobile__container"><div class="rp-nav-hamburger__md__hover-group"><div class="rp-nav-screen-appearance"><div class="rp-nav-screen-appearance__left">Theme</div><div class="rp-nav-screen-appearance__right"></div></div><div class="rp-nav-screen-divider"></div><div class="rp-social-links"><a href="https://github.com/jpwesselink/dotsec-rs" target="_blank" rel="noopener noreferrer" class="rp-social-links__item"><div class="rp-social-links__icon"><div class="rp-social-links__icon"><svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 24 24"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12c0 5.303 3.438 9.8 8.205 11.385c.6.113.82-.258.82-.577c0-.285-.01-1.04-.015-2.04c-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729c1.205.084 1.838 1.236 1.838 1.236c1.07 1.835 2.809 1.305 3.495.998c.108-.776.417-1.305.76-1.605c-2.665-.3-5.466-1.332-5.466-5.93c0-1.31.465-2.38 1.235-3.22c-.135-.303-.54-1.523.105-3.176c0 0 1.005-.322 3.3 1.23c.96-.267 1.98-.399 3-.405c1.02.006 2.04.138 3 .405c2.28-1.552 3.285-1.23 3.285-1.23c.645 1.653.24 2.873.12 3.176c.765.84 1.23 1.91 1.23 3.22c0 4.61-2.805 5.625-5.475 5.92c.42.36.81 1.096.81 2.22c0 1.606-.015 2.896-.015 3.286c0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></div></div></a><ul class="rp-hover-group rp-hover-group--hidden rp-hover-group--right"></ul></div></div></div></ul></button></div></header><div class="rp-doc-layout__menu"><div class="rp-sidebar-menu"><button type="button" class="rp-sidebar-menu__left"><svg width="1em" height="1em" viewBox="0 0 32 32"><path fill="currentColor" d="M4 6h24v2H4zm0 18h24v2H4zm0-12h24v2H4zm0 6h24v2H4z"></path></svg><span>Menu</span></button><button type="button" class="rp-sidebar-menu__right"><span class="rp-sidebar-menu__right__text">ON THIS PAGE</span><svg width="14" height="14" class="rp-progress-circle"><circle cx="7" cy="7" r="6" stroke-linecap="round" fill="none" stroke="var(--rp-c-divider-light)" stroke-width="2"></circle><circle cx="7" cy="7" r="6" stroke-linecap="round" fill="none" stroke="var(--rp-c-brand)" stroke-width="2" stroke-dasharray="37.69911184307752" stroke-dashoffset="37.69911184307752" transform="rotate(-90 7 7)" style="transition:stroke-dashoffset 0.3s"></circle></svg><svg width="1em" height="1em" viewBox="0 0 32 32" class="rp-sidebar-menu__right__icon" style="transform:rotate(0deg);transition:transform 0.2s ease-out"><path fill="currentColor" d="M22 16 12 26l-1.4-1.4 8.6-8.6-8.6-8.6L12 6z"></path></svg></button></div></div><div class="rp-doc-layout__container"><aside class="rp-doc-layout__sidebar rp-scrollbar"><a href="/dotsec-rs/pr-47/guide/index.html" class="rp-sidebar-item rp-sidebar-group rp-link" style="padding-left:12px" data-depth="0"><div class="rp-sidebar-item__left"><span>Guide</span></div><div class="rp-sidebar-item__right"><div style="cursor:pointer;transition:transform 0.2s ease-out;transform:rotate(90deg)"><svg width="1em" height="1em" viewBox="0 0 32 32"><path fill="currentColor" d="M22 16 12 26l-1.4-1.4 8.6-8.6-8.6-8.6L12 6z"></path></svg></div></div></a><div style="display:grid;grid-template-rows:1fr;transition:grid-template-rows 0.2s ease-out"><div style="overflow:hidden"><a href="/dotsec-rs/pr-47/guide/index.html" class="rp-sidebar-item rp-sidebar-item--group-item rp-link" style="padding-left:calc(12px * 1 + 12px)" data-depth="1"><div class="rp-sidebar-item__left"><span>Getting Started</span></div><div class="rp-sidebar-item__right"></div></a><a href="/dotsec-rs/pr-47/guide/setup.html" class="rp-sidebar-item rp-sidebar-item--group-item rp-link" style="padding-left:calc(12px * 1 + 12px)" data-depth="1"><div class="rp-sidebar-item__left"><span>Setup</span></div><div class="rp-sidebar-item__right"></div></a><a href="/dotsec-rs/pr-47/guide/commands.html" class="rp-sidebar-item rp-sidebar-item--group-item rp-link" style="padding-left:calc(12px * 1 + 12px)" data-depth="1"><div class="rp-sidebar-item__left"><span>Commands</span></div><div class="rp-sidebar-item__right"></div></a><a href="/dotsec-rs/pr-47/guide/directives.html" class="rp-sidebar-item rp-sidebar-item--group-item rp-link" style="padding-left:calc(12px * 1 + 12px)" data-depth="1"><div class="rp-sidebar-item__left"><span>Directives</span></div><div class="rp-sidebar-item__right"></div></a><a href="/dotsec-rs/pr-47/guide/ci.html" class="rp-sidebar-item rp-sidebar-item--group-item rp-link" style="padding-left:calc(12px * 1 + 12px)" data-depth="1"><div class="rp-sidebar-item__left"><span>CI/CD</span></div><div class="rp-sidebar-item__right"></div></a><a href="/dotsec-rs/pr-47/guide/encryption.html" class="rp-sidebar-item rp-sidebar-item--group-item rp-link" style="padding-left:calc(12px * 1 + 12px)" data-depth="1"><div class="rp-sidebar-item__left"><span>How Encryption Works</span></div><div class="rp-sidebar-item__right"></div></a><a href="/dotsec-rs/pr-47/guide/security.html" class="rp-sidebar-item rp-sidebar-item--active rp-sidebar-item--group-item rp-link" style="padding-left:calc(12px * 1 + 12px)" data-depth="1"><div class="rp-sidebar-item__left"><span>Security Model</span></div><div class="rp-sidebar-item__right"></div></a><a href="/dotsec-rs/pr-47/guide/library.html" class="rp-sidebar-item rp-sidebar-item--group-item rp-link" style="padding-left:calc(12px * 1 + 12px)" data-depth="1"><div class="rp-sidebar-item__left"><span>Library Usage</span></div><div class="rp-sidebar-item__right"></div></a><a href="/dotsec-rs/pr-47/guide/troubleshooting.html" class="rp-sidebar-item rp-sidebar-item--group-item rp-link" style="padding-left:calc(12px * 1 + 12px)" data-depth="1"><div class="rp-sidebar-item__left"><span>Troubleshooting</span></div><div class="rp-sidebar-item__right"></div></a></div></div></aside><div class="rp-doc-layout__doc"><main class="rp-doc-layout__doc-container"><div class="rp-doc rspress-doc"><!--$--><h1 class="rp-toc-include" id="security-model"><a href="#security-model" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Security Model<!-- --> </h1>
+<p>What dotsec protects, what it assumes, and what it explicitly does not defend against. For the mechanics (ciphertext format, MAC scope, key wrapping) see <a href="/dotsec-rs/pr-47/guide/encryption.html" class="rp-link">How Encryption Works</a>.</p>
+<h2 class="rp-toc-include" id="the-core-claim"><a href="#the-core-claim" class="rp-header-anchor rp-link" aria-hidden="true">#</a>The core claim</h2>
+<p>A <code>.sec</code> file is safe to publish. The design assumes the file is world-readable — committed to a public repo, attached to a PR, cached by a CI runner. Everything sensitive in it is AES-256-GCM encrypted with a 256-bit data encryption key (DEK), and the DEK is wrapped by your age keypair or AWS KMS.</p>
+<p>What&#x27;s secret is the <strong>key</strong>, never the file:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="rp-table-scroll-container rp-scrollbar"><table><thead><tr><th>Provider</th><th>The secret</th><th>Where it lives</th></tr></thead><tbody><tr><td>Local (age)</td><td><code>.sec.key</code> / <code>DOTSEC_PRIVATE_KEY</code></td><td>Your machine, your team&#x27;s password manager, CI secrets</td></tr><tr><td>AWS KMS</td><td>IAM permission to call <code>kms:Decrypt</code></td><td>AWS — the private key material never leaves the HSM</td></tr></tbody></table></div>
+<p>The KMS path is the strongest version of this. With KMS, dotsec is a thin client and <strong>the trust root is the HSM that backs your existing AWS account</strong> — the same one your compliance team has already approved for every other workload. dotsec is not a vendor you trust; AWS is, and you trust them already.</p>
+<h2 class="rp-toc-include" id="how-the-cryptography-is-built"><a href="#how-the-cryptography-is-built" class="rp-header-anchor rp-link" aria-hidden="true">#</a>How the cryptography is built</h2>
+<p>The properties below are visible in the source — they&#x27;re not marketing claims.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="rp-table-scroll-container rp-scrollbar"><table><thead><tr><th>Property</th><th>How</th></tr></thead><tbody><tr><td>Per-value confidentiality</td><td>AES-256-GCM, fresh 96-bit nonce per value, separately keyed under the DEK</td></tr><tr><td>Per-value tamper detection</td><td>AEAD authentication tag covers ciphertext; AAD binds each ciphertext to its key name so values can&#x27;t be swapped between keys</td></tr><tr><td>File-level integrity</td><td>HMAC-SHA256 over a canonical serialization covering entry names, order, ENC bytes, file-level directives, directives on encrypted entries, and a hash of <code>dotsec.schema</code></td></tr><tr><td>Rollback resistance</td><td>The file MAC covers ENC ciphertext bytes, so substituting an older blob from git history breaks verification</td></tr><tr><td>Wrong-key detection</td><td>32-byte key commitment over the DEK, checked before AEAD decrypt</td></tr><tr><td>Plaintext-length hiding</td><td>Plaintext padded to a 64-byte multiple plus a random extra block</td></tr><tr><td>Confidentiality at rest in process memory</td><td>DEKs, decrypted plaintext, key-file contents wrapped in <code>Zeroizing</code> at the moment secret material enters them — every error path wipes</td></tr><tr><td>Timing-safe integrity comparison</td><td>MAC and key-commitment checks via <code>subtle</code> (constant-time)</td></tr><tr><td>Parser robustness on untrusted input</td><td>Cargo-fuzz harness with four targets covering <code>.sec</code> parsing, schema parsing, header parsing, and parse → render idempotency</td></tr></tbody></table></div>
+<p>For the full wire-format details and the explicit list of what the MAC does <em>not</em> cover (and why), read on.</p>
+<h2 class="rp-toc-include" id="what-an-attacker-with-the-sec-file-can-do"><a href="#what-an-attacker-with-the-sec-file-can-do" class="rp-header-anchor rp-link" aria-hidden="true">#</a>What an attacker with the <code>.sec</code> file can do</h2>
+<p>Nothing useful, by design — but precisely:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="rp-table-scroll-container rp-scrollbar"><table><thead><tr><th>Attacker capability</th><th>Outcome</th></tr></thead><tbody><tr><td>Read encrypted values</td><td>Sees <code>ENC[...]</code> blobs. Padding rounds plaintext up to a 64-byte multiple, plus a randomly added extra block — observed ciphertext length doesn&#x27;t pin down the plaintext length.</td></tr><tr><td>Read plaintext values</td><td>Sees them — that&#x27;s what <code>@plaintext</code> means. Don&#x27;t mark secrets plaintext.</td></tr><tr><td>Swap a ciphertext between keys (<code>DB_PASSWORD</code> → <code>API_KEY</code>)</td><td>Rejected — per-value AEAD binds each ciphertext to its key name.</td></tr><tr><td>Roll back one value to an older ciphertext from git history</td><td>Rejected — the file MAC covers the <code>ENC[...]</code> bytes.</td></tr><tr><td>Add, remove, rename, or reorder entries</td><td>Rejected — entry names and order are MAC-covered, plaintext included.</td></tr><tr><td>Flip <code>@encrypt</code> off, redirect <code>@push</code>, weaken <code>@type</code> on an encrypted entry</td><td>Rejected — directives on encrypted entries are MAC-covered.</td></tr><tr><td>Weaken <code>dotsec.schema</code> (drop <code>@max</code>, loosen <code>@pattern</code>)</td><td>Rejected — a canonical hash of the schema is bound into the MAC.</td></tr><tr><td>Edit a plaintext <strong>value</strong> in place (<code>PORT=3000</code> → <code>PORT=4000</code>)</td><td><strong>Passes.</strong> Deliberate — see below.</td></tr></tbody></table></div>
+<p>The last row is the documented gap: plaintext values are not MAC-covered, so hand-editing them stays friction-free. Compensate by putting validation rules (<code>@type</code>, <code>@pattern</code>, <code>@min</code>/<code>@max</code>, <code>enum(...)</code>) in <code>dotsec.schema</code> — the schema <em>is</em> integrity-bound, and <code>dotsec validate</code> enforces it on every load.</p>
+<h2 class="rp-toc-include" id="on-disk-surface-area"><a href="#on-disk-surface-area" class="rp-header-anchor rp-link" aria-hidden="true">#</a>On-disk surface area</h2>
+<p>dotsec is designed so the only sensitive artifact on a developer&#x27;s machine is the private key — and even that can move off-disk:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="rp-table-scroll-container rp-scrollbar"><table><thead><tr><th>Setup</th><th>What sits on disk</th><th>Defense surface</th></tr></thead><tbody><tr><td>dotsec, local provider</td><td><code>.sec</code> (encrypted, committed) + <code>.sec.key</code> (gitignored)</td><td>Same as any private-key-on-disk model. Key file inherits the OS&#x27;s filesystem permissions.</td></tr><tr><td>dotsec, local provider with <code>DOTSEC_PRIVATE_KEY</code> injected</td><td><code>.sec</code> only</td><td>No key material on disk — comes from an env var that any wrapping tool (password manager CLI, <code>direnv</code>, <code>gpg --decrypt</code>) can fill in at spawn time</td></tr><tr><td>dotsec, AWS KMS provider</td><td><code>.sec</code> only</td><td><strong>No key material on disk at all.</strong> The wrapped DEK is in <code>.sec</code> but is opaque to anyone without <code>kms:Decrypt</code>. The KEK lives in the AWS HSM.</td></tr></tbody></table></div>
+<p>The KMS row matters for the supply-chain attack class — when a compromised dependency&#x27;s postinstall script runs as your user and grep-walks the filesystem for <code>.env</code>, <code>.sec.key</code>, AWS credentials, etc., there&#x27;s simply nothing to find. The wrapped DEK in <code>.sec</code> is useless without an IAM-authenticated, CloudTrail-logged call to KMS, which the malicious script cannot make undetected.</p>
+<div class="rp-callout rp-callout--tip"><div class="rp-callout__title">Harden the local provider further</div><div class="rp-callout__content"><p>
+<code>DOTSEC_PRIVATE_KEY</code> is checked before any key file (<a href="/dotsec-rs/pr-47/guide/encryption.html#key-file" class="rp-link">discovery order</a>), so any tool that can inject an env var into a child process can take over key delivery — letting you delete <code>.sec.key</code> from disk. Examples worth exploring: the <a href="https://developer.1password.com/docs/cli/" target="_blank" rel="noopener noreferrer" class="rp-link">1Password CLI</a> (<code>op run</code> resolves <code>op://</code> secret references), <a href="https://direnv.net/" target="_blank" rel="noopener noreferrer" class="rp-link">direnv</a> bound to a keychain command, or a shell function that reads from <code>gpg --decrypt</code>.</p></div></div>
+<h2 class="rp-toc-include" id="assumptions"><a href="#assumptions" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Assumptions</h2>
+<ul>
+<li><strong>dotsec can&#x27;t stop same-user code from clobbering <code>.sec.key</code>.</strong> Use the KMS provider if that&#x27;s in your threat model — no key file.</li>
+<li><strong>Key compromise ends the story.</strong> An attacker holding both the file and the private key (or <code>kms:Decrypt</code> rights) reads everything. There is no defense-in-depth below the key.</li>
+<li><strong><code>panic = &quot;abort&quot;</code> skips destructor-based memory wipe.</strong> Two layers defend against the resulting coredump exposure: the fuzz harness keeps the input-driven panic surface closed, and <code>dotsec</code> calls <code>setrlimit(RLIMIT_CORE, 0)</code> at startup so a panic can&#x27;t drop a dump containing in-flight secrets in the first place.</li>
+<li><strong><code>dotsec migrate</code> executes the v4 config.</strong> A <code>dotsec.config.{ts,js}</code> is code; migrating runs it. Only migrate configs you trust — see <a href="/dotsec-rs/pr-47/guide/commands.html#dotsec-migrate" class="rp-link">the migrate command</a>.</li>
+</ul>
+<h2 class="rp-toc-include" id="engineering-posture"><a href="#engineering-posture" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Engineering posture</h2>
+<ul>
+<li><strong>Fuzzing.</strong> The parser surface that consumes untrusted <code>.sec</code> content (grammar, <code>@dotsec(...)</code> header, schema files, parse→render round-trip) is covered by four <code>cargo-fuzz</code> targets with curated seed corpora — see <code>fuzz/</code> in the repo.</li>
+<li><strong>Dependency audit.</strong> CI runs <code>cargo audit</code> on every push; ignores live in <code>.cargo/audit.toml</code>, each with a written rationale.</li>
+<li><strong>Memory hygiene.</strong> DEKs, decrypted values, and key-file contents are wrapped in <code>Zeroizing</code> at the moment secret material enters them, so every exit path (including errors) wipes them.</li>
+<li><strong>Constant-time comparisons</strong> for the file MAC and the key commitment (via <code>subtle</code>).</li>
+<li><strong>No secrets over FFI.</strong> The <code>@dotsec/core</code> Node bindings expose parsing, validation, and formatting only — no decrypt, no key material crosses the boundary.</li>
+</ul>
+<h2 class="rp-toc-include" id="wire-format-history"><a href="#wire-format-history" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Wire format history</h2>
+<p>The on-disk envelope is versioned by the <code>format=</code> field in the <code>@dotsec(...)</code> directive, independent of the package version.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="rp-table-scroll-container rp-scrollbar"><table><thead><tr><th>Format</th><th>Era</th><th>Mechanism</th></tr></thead><tbody><tr><td><strong>v1</strong></td><td>JS-era <code>dotsec</code> npm package</td><td>Per-value KMS <code>Encrypt</code> calls, chunked; stored as <code>KEY=&quot;{hash, parts: [...]}&quot;</code>. No envelope, no AAD, no padding.</td></tr><tr><td><strong>v2</strong></td><td>First Rust releases</td><td>Per-value AES-256-GCM envelope: a single wrapped DEK (carried as a <code>__DOTSEC_KEY__</code> entry), AAD binding to the key name, key commitment, length padding.</td></tr><tr><td><strong>v3</strong></td><td>Current</td><td>v2 plus a file-level integrity tag (HMAC-SHA256 over a canonical serialization), schema-hash binding, and the header moved into the <code>@dotsec(format=v3, mac=..., dek=...)</code> directive.</td></tr></tbody></table></div>
+<p>Readers reject unknown <code>format=</code> tags rather than guessing. The format version only bumps when the envelope changes incompatibly — package majors come and go without touching it.</p>
+<h2 class="rp-toc-include" id="reporting"><a href="#reporting" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Reporting</h2>
+<p>Found something? Open a <a href="https://github.com/jpwesselink/dotsec-rs/security/advisories/new" target="_blank" rel="noopener noreferrer" class="rp-link">GitHub security advisory</a> — please don&#x27;t file public issues for suspected vulnerabilities.</p><!--/$--></div><footer class="rp-doc-footer"><div class="rp-doc-footer__edit"></div><div class="rp-doc-footer__divider"></div><div class="rp-prev-next-page"><a href="/dotsec-rs/pr-47/guide/encryption.html" class="rp-prev-next-page__item rp-prev-next-page__prev rp-link"><span class="rp-prev-next-page__item__desc">Previous page</span><span class="rp-prev-next-page__item__title"><svg width="1em" height="1em" viewBox="0 0 32 32" class="rp-prev-next-page__icon rp-prev-next-page__rotate_180"><path fill="currentColor" d="M22 16 12 26l-1.4-1.4 8.6-8.6-8.6-8.6L12 6z"></path></svg><span>How Encryption Works</span></span></a><a href="/dotsec-rs/pr-47/guide/library.html" class="rp-prev-next-page__item rp-prev-next-page__next rp-link"><span class="rp-prev-next-page__item__desc">Next page</span><span class="rp-prev-next-page__item__title"><span>Library Usage</span><svg width="1em" height="1em" viewBox="0 0 32 32" class="rp-prev-next-page__icon"><path fill="currentColor" d="M22 16 12 26l-1.4-1.4 8.6-8.6-8.6-8.6L12 6z"></path></svg></span></a></div></footer></main></div><aside class="rp-doc-layout__outline rp-scrollbar"><div class="rp-outline"><div class="rp-outline__title">ON THIS PAGE<svg width="14" height="14" class="rp-progress-circle"><circle cx="7" cy="7" r="6" stroke-linecap="round" fill="none" stroke="var(--rp-c-divider-light)" stroke-width="2"></circle><circle cx="7" cy="7" r="6" stroke-linecap="round" fill="none" stroke="var(--rp-c-brand)" stroke-width="2" stroke-dasharray="37.69911184307752" stroke-dashoffset="37.69911184307752" transform="rotate(-90 7 7)" style="transition:stroke-dashoffset 0.3s"></circle></svg></div><nav class="rp-outline__toc rp-scrollbar"><a href="#the-core-claim" class="rp-toc-item rp-link" title="The core claim" style="padding-left:0" data-depth="0"><span class="rp-toc-item__text rp-doc">The core claim</span></a><a href="#how-the-cryptography-is-built" class="rp-toc-item rp-link" title="How the cryptography is built" style="padding-left:0" data-depth="0"><span class="rp-toc-item__text rp-doc">How the cryptography is built</span></a><a href="#what-an-attacker-with-the-sec-file-can-do" class="rp-toc-item rp-link" title="What an attacker with the .sec file can do" style="padding-left:0" data-depth="0"><span class="rp-toc-item__text rp-doc">What an attacker with the <code>.sec</code> file can do</span></a><a href="#on-disk-surface-area" class="rp-toc-item rp-link" title="On-disk surface area" style="padding-left:0" data-depth="0"><span class="rp-toc-item__text rp-doc">On-disk surface area</span></a><a href="#assumptions" class="rp-toc-item rp-link" title="Assumptions" style="padding-left:0" data-depth="0"><span class="rp-toc-item__text rp-doc">Assumptions</span></a><a href="#engineering-posture" class="rp-toc-item rp-link" title="Engineering posture" style="padding-left:0" data-depth="0"><span class="rp-toc-item__text rp-doc">Engineering posture</span></a><a href="#wire-format-history" class="rp-toc-item rp-link" title="Wire format history" style="padding-left:0" data-depth="0"><span class="rp-toc-item__text rp-doc">Wire format history</span></a><a href="#reporting" class="rp-toc-item rp-link" title="Reporting" style="padding-left:0" data-depth="0"><span class="rp-toc-item__text rp-doc">Reporting</span></a></nav><div class="rp-outline__divider"></div><div class="rp-outline__bottom"></div></div></aside></div></div>
+    <div id="__rspress_modal_container"></div>
+  </body>
+</html>
