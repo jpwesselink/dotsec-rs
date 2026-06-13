@@ -3,7 +3,7 @@ pageType: home
 hero:
   name: dotsec
   text: No more .env files
-  tagline: KMS-native envelope encryption, schema-driven validation, language-agnostic runtime injection. Your secrets' access boundary is your existing IAM. Your audit trail is your existing CloudTrail.
+  tagline: Encrypted in git, decrypted in memory — your app still reads process.env vars, but there's nothing on disk for supply-chain malware to harvest.
   actions:
     - theme: brand
       text: Get Started →
