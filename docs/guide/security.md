@@ -70,7 +70,7 @@ The KMS row matters for the supply-chain attack class — when a compromised dep
 
 - **dotsec can't stop same-user code from clobbering `.sec.key`.** Use the KMS provider if that's in your threat model — no key file.
 - **Key compromise ends the story.** An attacker holding both the file and the private key (or `kms:Decrypt` rights) reads everything. There is no defense-in-depth below the key.
-- **`panic = "abort"` skips destructor-based memory wipe.** A coredump produced after a panic could expose secret material in flight; the fuzz harness keeps the input-driven panic surface closed.
+- **`panic = "abort"` skips destructor-based memory wipe.** Two layers defend against the resulting coredump exposure: the fuzz harness keeps the input-driven panic surface closed, and `dotsec` calls `setrlimit(RLIMIT_CORE, 0)` at startup so a panic can't drop a dump containing in-flight secrets in the first place.
 - **`dotsec migrate` executes the v4 config.** A `dotsec.config.{ts,js}` is code; migrating runs it. Only migrate configs you trust — see [the migrate command](/guide/commands#dotsec-migrate).
 
 ## Engineering posture
