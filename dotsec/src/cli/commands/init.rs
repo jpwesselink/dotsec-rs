@@ -45,6 +45,7 @@ pub async fn match_args(
                         println!("{} Key found: {}", "✓".green(), arn.dimmed());
                     }
                     Ok(None) => {
+                        helpers::ensure_interactive()?;
                         let region_label = region.unwrap_or("default");
                         let create = inquire::Confirm::new(&format!(
                             "{} not found in {}. Create it?",

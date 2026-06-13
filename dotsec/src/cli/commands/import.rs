@@ -98,6 +98,7 @@ pub async fn match_args(
                 "Cancel".to_string(),
             ];
 
+            helpers::ensure_interactive()?;
             let mode = Select::new(
                 &format!("{} already exists. Import mode?", sec_file),
                 options,
@@ -133,6 +134,7 @@ pub async fn match_args(
                 }
                 println!();
 
+                helpers::ensure_interactive()?;
                 let choice = Select::new(
                     "Which config to use?",
                     vec![

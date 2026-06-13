@@ -1,7 +1,22 @@
 use colored::Colorize;
 use inquire::{Confirm, Select, Text};
 use std::future::Future;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+
+/// Refuse to start an interactive flow when stdin isn't a terminal.
+///
+/// Without this check, an `inquire::Confirm`/`Select`/`Text` prompt can block
+/// forever waiting for keystrokes on a pipe — the common signature of a
+/// "hanging test" or a CI step that times out an hour later. Surfacing the
+/// situation early lets the caller know exactly what flag to add (`-y` /
+/// `--yes`) instead of staring at a frozen process.
+pub fn ensure_interactive() -> Result<(), Box<dyn std::error::Error>> {
+    if !std::io::stdin().is_terminal() {
+        return Err("stdin is not a terminal — this command needs interactive input. Re-run in a terminal, or pass `-y`/`--yes` to accept defaults.".into());
+    }
+    Ok(())
+}
 
 /// Whether `start` (or any ancestor) contains a `.git` directory or file.
 fn in_git_repo(start: &Path) -> bool {
@@ -184,6 +199,10 @@ pub fn ensure_keyfile_gitignored(key_file: &Path, skip: bool) {
 /// Run an async operation with a dark_n_stormy glow animation as progress indicator.
 /// When done, the label fades to the terminal's foreground color.
 pub async fn with_progress<T>(label: &str, fut: impl Future<Output = T>) -> T {
+    if !std::io::stderr().is_terminal() {
+        return fut.await;
+    }
+
     use chromakopia::animate::Glow;
     let palette = chromakopia::presets::dark_n_stormy().palette(256);
     let anim = Glow::on(label).palette(palette).spawn();
@@ -407,6 +426,7 @@ pub fn config_diffs(source: &dotenv::FileConfig, existing: &dotenv::FileConfig) 
 
 /// Prompt for encryption provider config (like init).
 pub fn prompt_config() -> Result<dotenv::FileConfig, Box<dyn std::error::Error>> {
+    ensure_interactive()?;
     let provider = Select::new("Encryption provider?", vec!["local", "aws"]).prompt()?;
 
     match provider {
@@ -447,6 +467,7 @@ pub fn resolve_encrypt_default(
         println!("{} Using source default: {}", "✓".green(), label);
         Ok(val)
     } else {
+        ensure_interactive()?;
         let choice = Select::new(
             "Default encryption policy?",
             vec!["encrypt all", "encrypt none"],
@@ -465,6 +486,7 @@ pub fn prompt_variable_directives(
     encrypt_all: bool,
     source_directives: Option<&[(String, Option<String>)]>,
 ) -> Result<Vec<dotenv::Line>, Box<dyn std::error::Error>> {
+    ensure_interactive()?;
     let mut directives: Vec<dotenv::Line> = Vec::new();
 
     // Check source directives for existing encrypt/plaintext

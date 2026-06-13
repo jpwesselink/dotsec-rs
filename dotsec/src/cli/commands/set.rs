@@ -81,10 +81,14 @@ pub async fn match_args(
 
     let interactive = value.is_none() && !auto_yes;
 
-    // Resolve key
+    // Resolve key — `-y` doesn't supply a missing key, so guard the prompt
+    // independently of auto_yes / interactive.
     let key = match key {
         Some(k) => k.clone(),
-        None => Text::new("Variable name?").prompt()?,
+        None => {
+            helpers::ensure_interactive()?;
+            Text::new("Variable name?").prompt()?
+        }
     };
 
     if key.is_empty() {
@@ -208,10 +212,12 @@ pub async fn match_args(
         None // Can't show encrypted value without KMS
     };
 
-    // Resolve value — mask input for secret-looking keys
+    // Resolve value — mask input for secret-looking keys. `-y` doesn't supply
+    // a missing value either, so guard the prompt by `value.is_none()` alone.
     let value = match value {
         Some(v) => v.clone(),
         None => {
+            helpers::ensure_interactive()?;
             if helpers::looks_like_secret(&key) {
                 Password::new("Value (hidden)?")
                     .with_display_mode(PasswordDisplayMode::Masked)
