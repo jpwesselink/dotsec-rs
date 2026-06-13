@@ -29,13 +29,21 @@
 /* Home feature cards: rspress applies a JS-driven 3D mouse-tracking tilt
    via `useCardAnimation` — `perspective(...)` is set as an inline style on
    `.rp-home-feature__item`, and `rotateX(...) rotateY(...)` on the inner
-   `.rp-home-feature__item-wrapper`. Plus `transform-style: preserve-3d` to
-   make the 3D real, and a shine overlay div. Reads as a wiggle on hover.
-   Override all of it with `!important` since the transforms are inline. */
+   `.rp-home-feature__item-wrapper`. The inner <article> also has
+   `transition: all .3s` which can pick up any transient transform change
+   during React state churn from mousemove. Kill all of it:
+
+     - hard-disable transforms at every nesting level
+     - replace `transition: all` with explicit border-color + color
+     - hide the shine overlay div */
 .rp-home-feature__item,
-.rp-home-feature__item-wrapper {
+.rp-home-feature__item-wrapper,
+.rp-home-feature__card {
   transform: none !important;
   transform-style: flat !important;
+}
+.rp-home-feature__card {
+  transition: border-color .2s, color .2s !important;
 }
 .rp-home-feature__item__shine {
   display: none !important;
