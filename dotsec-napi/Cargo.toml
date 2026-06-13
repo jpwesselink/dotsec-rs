@@ -1,6 +1,6 @@
 [package]
 name = "dotsec-napi"
-version = "6.0.0"
+version = "7.0.0"
 edition = "2021"
 description = "NAPI-RS bindings for dotsec"
 license = "MIT"
@@ -12,7 +12,7 @@ crate-type = ["cdylib"]
 [dependencies]
 napi = { version = "3", default-features = false, features = ["napi9"] }
 napi-derive = "3"
-dotsec-core = { path = "../dotsec-core", version = "6.0.0" }
+dotsec-core = { path = "../dotsec-core", version = "7.0.0" }
 serde_json = "1.0"
 
 [build-dependencies]
