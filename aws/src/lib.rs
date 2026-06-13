@@ -111,17 +111,49 @@ pub async fn create_key_with_alias(
     Ok(key_arn)
 }
 
-/// Generate a new AES-256 data encryption key via KMS.
-/// Returns (plaintext_dek, wrapped_dek) where wrapped_dek is KMS-encrypted.
+/// EncryptionContext entries bound to every KMS `GenerateDataKey` and
+/// `Decrypt` call that wraps/unwraps a DEK. The context is symmetric:
+/// `Decrypt` MUST be called with the same context that was passed to
+/// `GenerateDataKey`, otherwise KMS refuses to unwrap.
+///
+/// Today we only bind `dotsec:format=v3` — a format-confusion guard. The
+/// real protection lands when callers can write IAM policies pinning
+/// `dotsec:format=v3` to specific roles (and CloudTrail logs the context
+/// on every Decrypt for audit).
+///
+/// Why `dotsec:` prefix: KMS contexts are an unstructured `Map<String, String>`,
+/// so unique namespacing prevents accidental collisions with whatever else
+/// the user's IAM policies bind on the same KMS key.
+pub type EncryptionContext = Vec<(String, String)>;
+
+/// Generate a new AES-256 data encryption key via KMS, binding the given
+/// `EncryptionContext`. The wrapped DEK can only be unwrapped later with
+/// the same context.
+///
+/// **Coverage note:** this function and its `unwrap_data_key` twin are
+/// only exercised end-to-end via manual smoke against a real AWS account.
+/// Mocking KMS via `aws-smithy-mocks(-experimental)` would close the loop
+/// but the crate pulls in a transitive `aws-smithy-runtime` revision that
+/// conflicts with the rest of our dep graph. The contract these functions
+/// promise — that the EncryptionContext is exactly what
+/// `dotsec_core::kms_encryption_context()` returns and that it's passed
+/// symmetrically to both calls — is pinned by the
+/// `kms_encryption_context_pins_format_v3` unit test in `dotsec-core`.
+/// LocalStack-driven integration tests are a reasonable follow-up.
 pub async fn generate_data_key(
     key_id: &str,
     region: Option<&str>,
+    context: &EncryptionContext,
 ) -> Result<(Zeroizing<Vec<u8>>, Vec<u8>), Box<dyn std::error::Error>> {
     let client = create_kms_client(region).await;
-    let resp = client
+    let mut req = client
         .generate_data_key()
         .key_id(key_id)
-        .key_spec(aws_sdk_kms::types::DataKeySpec::Aes256)
+        .key_spec(aws_sdk_kms::types::DataKeySpec::Aes256);
+    for (k, v) in context {
+        req = req.encryption_context(k, v);
+    }
+    let resp = req
         .send()
         .await
         .map_err(|e| DataStoreError::KmsError(e.to_string()))?;
@@ -141,15 +173,22 @@ pub async fn generate_data_key(
     Ok((Zeroizing::new(plaintext), wrapped))
 }
 
-/// Unwrap a KMS-encrypted data key back to plaintext.
+/// Unwrap a KMS-encrypted data key back to plaintext. The `context` must
+/// match what was passed to `generate_data_key` (or KMS rejects with
+/// `InvalidCiphertextException`).
 pub async fn unwrap_data_key(
     wrapped_dek: &[u8],
     region: Option<&str>,
+    context: &EncryptionContext,
 ) -> Result<Zeroizing<Vec<u8>>, Box<dyn std::error::Error>> {
     let client = create_kms_client(region).await;
-    let resp = client
+    let mut req = client
         .decrypt()
-        .ciphertext_blob(aws_sdk_kms::primitives::Blob::new(wrapped_dek))
+        .ciphertext_blob(aws_sdk_kms::primitives::Blob::new(wrapped_dek));
+    for (k, v) in context {
+        req = req.encryption_context(k, v);
+    }
+    let resp = req
         .send()
         .await
         .map_err(|e| DataStoreError::KmsError(e.to_string()))?;

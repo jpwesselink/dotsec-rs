@@ -30,7 +30,12 @@ pub async fn match_args(
     let (new_dek, new_wrapped_dek) = match encryption_engine {
         dotsec::EncryptionEngine::Aws(opts) => {
             let key_id = opts.key_id.as_deref().ok_or("AWS key_id is required")?;
-            aws::generate_data_key(key_id, opts.region.as_deref()).await?
+            aws::generate_data_key(
+                key_id,
+                opts.region.as_deref(),
+                &dotsec::kms_encryption_context(),
+            )
+            .await?
         }
         dotsec::EncryptionEngine::Local(opts) => {
             let private_key = crypto::local::load_private_key(sec_file, opts.key_file.as_deref())?;

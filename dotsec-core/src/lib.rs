@@ -137,6 +137,17 @@ pub fn parse_content(content: &str) -> Result<Vec<Line>, Box<dyn std::error::Err
 
 // --- Constants ---
 
+/// Build the standard KMS `EncryptionContext` that dotsec passes to every
+/// `GenerateDataKey` / `Decrypt` call. Today this is just `dotsec:format=v3`:
+/// a format-confusion guard plus a stable IAM-policy hook (security teams
+/// can pin `dotsec:format=v3` to specific roles).
+///
+/// Symmetric: same context on encrypt and decrypt. If the keys/values ever
+/// diverge between code paths, KMS will refuse to unwrap with `InvalidCiphertext`.
+pub fn kms_encryption_context() -> aws::EncryptionContext {
+    vec![("dotsec:format".to_string(), "v3".to_string())]
+}
+
 /// User-facing copy for integrity verification failure. Plain English, no
 /// jargon. Phrased so running `dotsec encrypt` only sounds like the right
 /// call when the user actually changed something themselves.
@@ -306,7 +317,7 @@ pub async fn encrypt_lines_to_sec(
                 Err(e) => {
                     let is_new = is_new_or_no_key(&e);
                     if is_new {
-                        aws::generate_data_key(key_id, region).await?
+                        aws::generate_data_key(key_id, region, &kms_encryption_context()).await?
                     } else {
                         return Err(e);
                     }
@@ -634,7 +645,12 @@ async fn decrypt_v3(
 
     let dek = match encryption_engine {
         EncryptionEngine::Aws(opts) => {
-            aws::unwrap_data_key(&parsed.wrapped_dek, opts.region.as_deref()).await?
+            aws::unwrap_data_key(
+                &parsed.wrapped_dek,
+                opts.region.as_deref(),
+                &kms_encryption_context(),
+            )
+            .await?
         }
         EncryptionEngine::Local(opts) => {
             let private_key = crypto::local::load_private_key(sec_file, opts.key_file.as_deref())?;
@@ -700,7 +716,7 @@ async fn load_existing_dek_aws(
     region: Option<&str>,
 ) -> Result<DekPair, Box<dyn std::error::Error>> {
     let wrapped_dek = load_existing_wrapped_dek(sec_file)?;
-    let dek = aws::unwrap_data_key(&wrapped_dek, region).await?;
+    let dek = aws::unwrap_data_key(&wrapped_dek, region, &kms_encryption_context()).await?;
     Ok((dek, wrapped_dek))
 }
 
@@ -889,6 +905,32 @@ pub fn redact(line: &str, secrets: &[String]) -> String {
         result = result.replace(secret, &"*".repeat(secret.len()));
     }
     result
+}
+
+#[cfg(test)]
+mod kms_context_tests {
+    use super::*;
+
+    #[test]
+    fn kms_encryption_context_pins_format_v3() {
+        // This contract is load-bearing for KMS: changing it silently means
+        // every existing wrapped DEK becomes un-decryptable. If a future
+        // change adds a field, do it as an additive migration with a
+        // documented re-wrap path — never by editing this constant in place.
+        let ctx = kms_encryption_context();
+        assert_eq!(ctx, vec![("dotsec:format".to_string(), "v3".to_string())]);
+    }
+
+    #[test]
+    fn kms_encryption_context_is_deterministic() {
+        // Order matters to KMS — same key/value pairs in a different order
+        // are treated as identical, but our code path appends in a fixed
+        // sequence and we want to keep it that way for diffability of
+        // any future audit log dumps.
+        let a = kms_encryption_context();
+        let b = kms_encryption_context();
+        assert_eq!(a, b);
+    }
 }
 
 #[cfg(test)]

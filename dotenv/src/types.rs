@@ -161,7 +161,12 @@ impl FormatType {
     }
 
     /// Validate a value against this format. Returns an error message if invalid.
-    pub fn validate(&self, value: &str) -> Option<String> {
+    ///
+    /// `is_encrypted` controls whether the offending value shows up in the
+    /// error message — encrypted values get redacted to a length placeholder
+    /// so a decrypted secret can't slip into stderr / CI logs verbatim.
+    pub fn validate(&self, value: &str, is_encrypted: bool) -> Option<String> {
+        let display = || render_value_for_error(value, is_encrypted);
         match self {
             Self::Email => {
                 if let Some(at_pos) = value.find('@') {
@@ -172,15 +177,15 @@ impl FormatType {
                         }
                     }
                 }
-                Some(format!("expected email format, got \"{}\"", value))
+                Some(format!("expected email format, got {}", display()))
             }
             Self::Url => {
                 if value.starts_with("http://") || value.starts_with("https://") {
                     None
                 } else {
                     Some(format!(
-                        "expected url format (http:// or https://), got \"{}\"",
-                        value
+                        "expected url format (http:// or https://), got {}",
+                        display()
                     ))
                 }
             }
@@ -200,8 +205,8 @@ impl FormatType {
                     None
                 } else {
                     Some(format!(
-                        "expected uuid format (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx), got \"{}\"",
-                        value
+                        "expected uuid format (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx), got {}",
+                        display()
                     ))
                 }
             }
@@ -210,7 +215,7 @@ impl FormatType {
                 if parts.len() == 4 && parts.iter().all(|p| p.parse::<u8>().is_ok()) {
                     None
                 } else {
-                    Some(format!("expected ipv4 format, got \"{}\"", value))
+                    Some(format!("expected ipv4 format, got {}", display()))
                 }
             }
             Self::Ipv6 => {
@@ -227,7 +232,7 @@ impl FormatType {
                 {
                     None
                 } else {
-                    Some(format!("expected ipv6 format, got \"{}\"", value))
+                    Some(format!("expected ipv6 format, got {}", display()))
                 }
             }
             Self::Date => {
@@ -256,8 +261,8 @@ impl FormatType {
                     }
                 }
                 Some(format!(
-                    "expected date format (YYYY-MM-DD), got \"{}\"",
-                    value
+                    "expected date format (YYYY-MM-DD), got {}",
+                    display()
                 ))
             }
             Self::Semver => {
@@ -268,8 +273,8 @@ impl FormatType {
                     None
                 } else {
                     Some(format!(
-                        "expected semver format (MAJOR.MINOR.PATCH), got \"{}\"",
-                        value
+                        "expected semver format (MAJOR.MINOR.PATCH), got {}",
+                        display()
                     ))
                 }
             }
@@ -298,11 +303,30 @@ pub trait DirectiveSource {
     }
 }
 
+/// Render a value for inclusion in a validation error message. When the
+/// value comes from an `@encrypt` entry the decrypted plaintext would
+/// otherwise leak into stderr / CI logs verbatim, so we redact it to just
+/// a length indicator. Plaintext values are quoted as-is — the user can
+/// already read them in the file, the "got X" hint is the whole point.
+pub(crate) fn render_value_for_error(value: &str, encrypted: bool) -> String {
+    if encrypted {
+        let len = value.len();
+        let plural = if len == 1 { "" } else { "s" };
+        format!("<{len} byte{plural} of encrypted plaintext>")
+    } else {
+        format!("\"{value}\"")
+    }
+}
+
 /// Validate a value against its declared type. Returns errors appended to the provided vector.
+///
+/// `is_encrypted` controls whether the offending value gets surfaced in
+/// error messages (plaintext → yes, encrypted → redacted by length).
 pub fn validate_value_for_type(
     key: &str,
     var_type: &VarType,
     value: &str,
+    is_encrypted: bool,
     errors: &mut Vec<ValidationError>,
 ) {
     match var_type {
@@ -310,7 +334,10 @@ pub fn validate_value_for_type(
             if value.parse::<f64>().is_err() {
                 errors.push(ValidationError::error(
                     key,
-                    format!("expected number, got \"{}\"", value),
+                    format!(
+                        "expected number, got {}",
+                        render_value_for_error(value, is_encrypted)
+                    ),
                 ));
             }
         }
@@ -319,7 +346,10 @@ pub fn validate_value_for_type(
             _ => {
                 errors.push(ValidationError::error(
                     key,
-                    format!("expected boolean (true/false/1/0), got \"{}\"", value),
+                    format!(
+                        "expected boolean (true/false/1/0), got {}",
+                        render_value_for_error(value, is_encrypted)
+                    ),
                 ));
             }
         },
@@ -328,8 +358,8 @@ pub fn validate_value_for_type(
                 errors.push(ValidationError::error(
                     key,
                     format!(
-                        "value \"{}\" not in enum. Expected one of: {}",
-                        value,
+                        "value {} not in enum. Expected one of: {}",
+                        render_value_for_error(value, is_encrypted),
                         variants
                             .iter()
                             .map(|v| format!("\"{}\"", v))
@@ -352,15 +382,20 @@ pub fn validate_value_against_constraints(
 ) -> Vec<ValidationError> {
     let mut errors = Vec::new();
     let var_type = source.var_type();
+    // Entries marked @encrypt carry decrypted plaintext at validation time;
+    // surfacing that plaintext in error messages would defeat the whole
+    // point of encrypting it. `is_encrypted` gates every value interpolation
+    // below — when true, only a length placeholder appears in error text.
+    let is_encrypted = source.has_directive("encrypt");
 
     // Validate @type
     if let Some(ref vt) = var_type {
-        validate_value_for_type(key, vt, value, &mut errors);
+        validate_value_for_type(key, vt, value, is_encrypted, &mut errors);
     }
 
     // Validate @format
     if let Some(format_type) = source.format_type() {
-        if let Some(msg) = format_type.validate(value) {
+        if let Some(msg) = format_type.validate(value, is_encrypted) {
             errors.push(ValidationError::error(key, msg));
         }
     }
@@ -384,7 +419,11 @@ pub fn validate_value_against_constraints(
                     if !re.is_match(value) {
                         errors.push(ValidationError::error(
                             key,
-                            format!("value \"{}\" does not match pattern \"{}\"", value, pattern),
+                            format!(
+                                "value {} does not match pattern \"{}\"",
+                                render_value_for_error(value, is_encrypted),
+                                pattern
+                            ),
                         ));
                     }
                 }
@@ -398,17 +437,25 @@ pub fn validate_value_against_constraints(
         }
     }
 
-    // Validate @min / @max (only meaningful with @type=number)
+    // Validate @min / @max (only meaningful with @type=number). The bounds
+    // themselves are metadata (directives) — safe to show. The value
+    // comparison would also embed the parsed number, which IS the plaintext
+    // for `@encrypt @type=number` entries, so redact in that case.
     if let Some(ref var_type) = var_type {
         if *var_type == VarType::Number {
             if let Ok(val) = value.parse::<f64>() {
+                let val_display = if is_encrypted {
+                    "<encrypted numeric value>".to_string()
+                } else {
+                    val.to_string()
+                };
                 if let Some(Some(min_str)) = source.get_directive("min") {
                     match min_str.parse::<f64>() {
                         Ok(min) => {
                             if val < min {
                                 errors.push(ValidationError::error(
                                     key,
-                                    format!("value {} is less than minimum {}", val, min),
+                                    format!("value {} is less than minimum {}", val_display, min),
                                 ));
                             }
                         }
@@ -426,7 +473,10 @@ pub fn validate_value_against_constraints(
                             if val > max {
                                 errors.push(ValidationError::error(
                                     key,
-                                    format!("value {} is greater than maximum {}", val, max),
+                                    format!(
+                                        "value {} is greater than maximum {}",
+                                        val_display, max
+                                    ),
                                 ));
                             }
                         }
@@ -615,21 +665,27 @@ impl Entry {
         errors
     }
 
-    /// Validate a value against its declared type.
+    /// Validate a value against its declared type. Redacts the value in any
+    /// error message when this entry is `@encrypt` (decrypted plaintext
+    /// would otherwise leak into stderr / CI logs).
     pub fn validate_value(
         &self,
         var_type: &VarType,
         value: &str,
         errors: &mut Vec<ValidationError>,
     ) {
-        validate_value_for_type(&self.key, var_type, value, errors);
+        let is_encrypted = self.has_directive("encrypt");
+        validate_value_for_type(&self.key, var_type, value, is_encrypted, errors);
     }
 
-    /// Validate a value from an environment variable override against this entry's @type.
+    /// Validate a value from an environment variable override against this
+    /// entry's `@type`. Env-override values are always plaintext (the user
+    /// typed them into their shell), so no redaction is needed regardless
+    /// of whether the entry itself is `@encrypt`.
     pub fn validate_env_override(&self, env_value: &str) -> Vec<ValidationError> {
         let mut errors = Vec::new();
         if let Some(var_type) = self.var_type() {
-            validate_value_for_type(&self.key, &var_type, env_value, &mut errors);
+            validate_value_for_type(&self.key, &var_type, env_value, false, &mut errors);
             // Rewrite messages to indicate it's an env override
             for error in &mut errors {
                 error.message = format!("env override: {}", error.message);
@@ -1093,5 +1149,112 @@ fn parse_var_type(value: &str) -> Option<VarType> {
             }
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod redaction_tests {
+    use super::*;
+
+    fn schema_entry(key: &str, directives: &[(&str, Option<&str>)]) -> SchemaEntry {
+        SchemaEntry {
+            key: key.into(),
+            directives: directives
+                .iter()
+                .map(|(n, v)| (n.to_string(), v.map(|s| s.to_string())))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn redact_helper_quotes_plaintext_and_redacts_encrypted() {
+        assert_eq!(render_value_for_error("hello", false), "\"hello\"");
+        assert_eq!(
+            render_value_for_error("hunter2", true),
+            "<7 bytes of encrypted plaintext>"
+        );
+        // Singular form
+        assert_eq!(
+            render_value_for_error("x", true),
+            "<1 byte of encrypted plaintext>"
+        );
+    }
+
+    #[test]
+    fn validate_value_for_type_redacts_when_encrypted() {
+        let mut errors = Vec::new();
+        validate_value_for_type(
+            "API_KEY",
+            &VarType::Number,
+            "sk-live-supersecret",
+            true,
+            &mut errors,
+        );
+        let msg = &errors[0].message;
+        assert!(
+            !msg.contains("sk-live-supersecret"),
+            "secret leaked: {}",
+            msg
+        );
+        assert!(
+            msg.contains("encrypted plaintext"),
+            "redaction placeholder missing: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn validate_value_for_type_shows_plaintext_when_not_encrypted() {
+        let mut errors = Vec::new();
+        validate_value_for_type("PORT", &VarType::Number, "not-a-number", false, &mut errors);
+        let msg = &errors[0].message;
+        assert!(
+            msg.contains("not-a-number"),
+            "plaintext error must surface the bad value: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn validate_value_against_constraints_redacts_encrypted_pattern_fail() {
+        // Pattern mismatch on an encrypted secret — the secret would otherwise
+        // appear verbatim in stderr / CI logs.
+        let entry = schema_entry(
+            "API_KEY",
+            &[("encrypt", None), ("pattern", Some("^[a-z]+$"))],
+        );
+        let errors = validate_value_against_constraints("API_KEY", "Hunter2!@#", &entry);
+        assert!(!errors.is_empty());
+        for e in &errors {
+            assert!(!e.message.contains("Hunter2!@#"), "leak: {}", e.message);
+        }
+    }
+
+    #[test]
+    fn validate_value_against_constraints_redacts_encrypted_numeric_bounds() {
+        // @encrypt @type=number @max=1000 → the over-bound value (which IS
+        // the decrypted secret) must be redacted from the error.
+        let entry = schema_entry(
+            "PIN",
+            &[
+                ("encrypt", None),
+                ("type", Some("number")),
+                ("max", Some("1000")),
+            ],
+        );
+        let errors = validate_value_against_constraints("PIN", "987654321", &entry);
+        assert!(!errors.is_empty());
+        for e in &errors {
+            assert!(!e.message.contains("987654321"), "leak: {}", e.message);
+        }
+    }
+
+    #[test]
+    fn format_type_validate_redacts_encrypted() {
+        // @encrypt @format=email with a bad value — secret in the error
+        // would leak. Confirm redaction.
+        let msg = FormatType::Email.validate("not-an-email-but-secret", true);
+        let msg = msg.expect("invalid email should error");
+        assert!(!msg.contains("not-an-email-but-secret"), "leak: {}", msg);
     }
 }

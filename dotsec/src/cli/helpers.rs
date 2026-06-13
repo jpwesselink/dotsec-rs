@@ -1005,6 +1005,146 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // --- ensure_keyfile_gitignored (5 documented branches) ---
+    //
+    // Branches per the doc:
+    //   1. `--no-gitignore` flag → log + skip, never touch .gitignore.
+    //   2. `.gitignore` already contains `*.key` (or `.sec.key` or `**/*.key`)
+    //      → no-op.
+    //   3. `.gitignore` exists, missing `*.key` → append.
+    //   4. `.gitignore` missing AND inside a git repo → create with `*.key`.
+    //   5. `.gitignore` missing AND NOT in a git repo → log + skip
+    //      (creating one there would be presumptuous).
+
+    fn gitignore_fixture(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("dotsec-test-gitignore-{}", name));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Stamp a fake git repo at `dir` by dropping a `.git` directory in it.
+    /// `in_git_repo` walks ancestors looking for a `.git` entry — this is
+    /// sufficient to make it return true.
+    fn pretend_git_repo(dir: &Path) {
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+    }
+
+    #[test]
+    fn ensure_keyfile_gitignored_skip_flag_does_nothing() {
+        let dir = gitignore_fixture("skip-flag");
+        let key_file = dir.join(".sec.key");
+        // `.gitignore` doesn't exist before; the skip flag must keep it that way.
+        ensure_keyfile_gitignored(&key_file, true);
+        assert!(
+            !dir.join(".gitignore").exists(),
+            "--no-gitignore must not create .gitignore"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ensure_keyfile_gitignored_noop_when_already_excluded() {
+        let dir = gitignore_fixture("already-excluded");
+        let key_file = dir.join(".sec.key");
+        let gi = dir.join(".gitignore");
+        let original = "node_modules\n*.key\n.env\n";
+        std::fs::write(&gi, original).unwrap();
+        ensure_keyfile_gitignored(&key_file, false);
+        let after = std::fs::read_to_string(&gi).unwrap();
+        assert_eq!(after, original, "existing *.key entry → byte-stable no-op");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ensure_keyfile_gitignored_noop_when_sec_key_already_excluded() {
+        // The doc lists `.sec.key` as also satisfying the predicate.
+        let dir = gitignore_fixture("sec-key-excluded");
+        let key_file = dir.join(".sec.key");
+        let gi = dir.join(".gitignore");
+        let original = "node_modules\n.sec.key\n";
+        std::fs::write(&gi, original).unwrap();
+        ensure_keyfile_gitignored(&key_file, false);
+        let after = std::fs::read_to_string(&gi).unwrap();
+        assert_eq!(
+            after, original,
+            ".sec.key form should also count as covered"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ensure_keyfile_gitignored_appends_to_existing_file() {
+        let dir = gitignore_fixture("append");
+        let key_file = dir.join(".sec.key");
+        let gi = dir.join(".gitignore");
+        std::fs::write(&gi, "node_modules\n.env\n").unwrap();
+        ensure_keyfile_gitignored(&key_file, false);
+        let after = std::fs::read_to_string(&gi).unwrap();
+        assert!(
+            after.contains("node_modules"),
+            "must preserve existing rules: {after}"
+        );
+        assert!(
+            after.contains(".env"),
+            "must preserve existing rules: {after}"
+        );
+        assert!(
+            after.lines().any(|l| l.trim() == "*.key"),
+            "must append the *.key line: {after}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ensure_keyfile_gitignored_appends_newline_when_missing() {
+        // The append branch handles existing files that don't end in `\n` —
+        // it should add a separator so `*.key` lands on its own line.
+        let dir = gitignore_fixture("append-no-trailing-nl");
+        let key_file = dir.join(".sec.key");
+        let gi = dir.join(".gitignore");
+        std::fs::write(&gi, "node_modules").unwrap(); // no trailing newline
+        ensure_keyfile_gitignored(&key_file, false);
+        let after = std::fs::read_to_string(&gi).unwrap();
+        assert!(
+            after.starts_with("node_modules\n"),
+            "must insert separator: {after:?}"
+        );
+        assert!(
+            after.contains("\n*.key"),
+            "must put *.key on its own line: {after:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ensure_keyfile_gitignored_creates_in_git_repo() {
+        let dir = gitignore_fixture("create-in-repo");
+        pretend_git_repo(&dir);
+        let key_file = dir.join(".sec.key");
+        ensure_keyfile_gitignored(&key_file, false);
+        let body = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
+        assert!(body.contains("*.key"), "must contain *.key: {body}");
+        assert!(
+            body.contains("Added by dotsec"),
+            "fresh .gitignore should carry the attribution comment: {body}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ensure_keyfile_gitignored_skips_when_not_in_repo() {
+        let dir = gitignore_fixture("not-a-repo");
+        // No .git dir → in_git_repo returns false.
+        let key_file = dir.join(".sec.key");
+        ensure_keyfile_gitignored(&key_file, false);
+        assert!(
+            !dir.join(".gitignore").exists(),
+            "must not create .gitignore outside a git repo"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The age identity is a private key — must not be world-readable.
     /// Unix-only: Windows doesn't have POSIX mode bits, and `OpenOptionsExt`
     /// doesn't compile there.
