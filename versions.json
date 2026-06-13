@@ -41,6 +41,10 @@
     {
       "label": "#44 docs/home-what-is-sec",
       "path": "/pr-44/"
+    },
+    {
+      "label": "#45 docs/security-review-followup",
+      "path": "/pr-45/"
     }
   ],
   "latest": "/v7.0.0/"
