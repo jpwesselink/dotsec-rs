@@ -1301,7 +1301,18 @@ fn parse_value(pair: Pair<Rule>) -> Option<(String, QuoteType)> {
                 .find(|p| p.as_rule() == Rule::inner_bt)?;
             Some((inner.as_str().to_string(), QuoteType::Backtick))
         }
-        Rule::var => Some((variant.as_str().to_string(), QuoteType::None)),
+        Rule::var => {
+            // Strip trailing `\r` so a CRLF-terminated unquoted value parses
+            // the same as an LF-terminated one. Without this, an input like
+            // `foo\r\r\n` parses as value=`foo\r` (NEW_LINE consumes the
+            // final `\r\n`), and round-tripping through `lines_to_string`
+            // (which emits `\n`) eats another `\r` per cycle until none
+            // are left. Quote the value if a literal trailing `\r` matters.
+            Some((
+                variant.as_str().trim_end_matches('\r').to_string(),
+                QuoteType::None,
+            ))
+        }
         _ => Some((variant.as_str().to_string(), QuoteType::None)),
     }
 }
@@ -1361,6 +1372,49 @@ mod tests {
         let lines = parse_dotenv("FOO=\n").unwrap();
         assert!(
             matches!(&lines[0], Line::Kv { key, value, quote_type: QuoteType::None } if key == "FOO" && value.is_empty())
+        );
+    }
+
+    /// Trailing `\r` in unquoted values is normalized away — without this,
+    /// a value like `foo\r\r\n` parses as `foo\r` (`NEW_LINE` consumes the
+    /// final `\r\n`), and rendering through `lines_to_string` (which emits
+    /// `\n`) eats another `\r` per cycle until none are left. Found by the
+    /// `roundtrip` fuzz target.
+    #[test]
+    fn parse_strips_trailing_cr_from_unquoted_value() {
+        let lines = parse_dotenv("FOO=bar\r\r\r\n").unwrap();
+        assert!(
+            matches!(&lines[0], Line::Kv { key, value, quote_type: QuoteType::None } if key == "FOO" && value == "bar"),
+            "expected value=\"bar\" with all trailing \\r stripped, got {:?}",
+            &lines[0]
+        );
+    }
+
+    /// Render → parse → render must reach a fixed point after the first
+    /// pass — anything else means a value mutates across an encrypt cycle.
+    /// This is the invariant the `roundtrip` fuzz target checks.
+    #[test]
+    fn render_parse_render_is_a_fixed_point_for_trailing_cr() {
+        let original = "FOO=bar\r\r\r\n";
+        let lines1 = parse_dotenv(original).unwrap();
+        let rendered1 = lines_to_string(&lines1);
+        let lines2 = parse_dotenv(&rendered1).unwrap();
+        let rendered2 = lines_to_string(&lines2);
+        assert_eq!(
+            rendered1, rendered2,
+            "render → parse → render is not a fixed point"
+        );
+    }
+
+    /// Trailing `\r` IS preserved inside a quoted value — the user opted
+    /// in to verbatim bytes by quoting.
+    #[test]
+    fn quoted_value_preserves_trailing_cr() {
+        let lines = parse_dotenv("FOO=\"bar\r\"\n").unwrap();
+        assert!(
+            matches!(&lines[0], Line::Kv { key, value, quote_type: QuoteType::Double } if key == "FOO" && value == "bar\r"),
+            "expected quoted value to preserve trailing \\r, got {:?}",
+            &lines[0]
         );
     }
 
