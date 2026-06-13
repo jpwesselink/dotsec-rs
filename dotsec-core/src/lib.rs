@@ -148,7 +148,6 @@ pub fn kms_encryption_context() -> aws::EncryptionContext {
     vec![("dotsec:format".to_string(), "v3".to_string())]
 }
 
-
 /// User-facing copy for integrity verification failure. Plain English, no
 /// jargon. Phrased so running `dotsec encrypt` only sounds like the right
 /// call when the user actually changed something themselves.
