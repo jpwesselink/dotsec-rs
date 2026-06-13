@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.0.1](https://github.com/jpwesselink/dotsec-rs/compare/dotsec-v0.1.0...dotsec-v7.0.1) - 2026-06-13
+
+### Fixed
+
+- refuse interactive prompts when stdin is not a tty ([#47](https://github.com/jpwesselink/dotsec-rs/pull/47))
+
+### Other
+
+- close stdin on dotsec subprocess in integration tests ([#46](https://github.com/jpwesselink/dotsec-rs/pull/46))
+
 ## [7.0.0](https://github.com/jpwesselink/dotsec-rs/compare/dotsec-v0.1.0...dotsec-v7.0.0) - 2026-06-13
 
 ### Added

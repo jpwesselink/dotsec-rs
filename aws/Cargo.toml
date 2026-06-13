@@ -1,6 +1,6 @@
 [package]
 name = "aws"
-version = "7.0.0"
+version = "7.0.1"
 edition = "2021"
 description = "AWS KMS encryption for dotsec"
 license = "MIT"
