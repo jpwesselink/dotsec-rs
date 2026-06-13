@@ -1611,7 +1611,9 @@ mod tests {
         );
         assert!(!content.contains("hunter2"), "plaintext should not appear");
 
-        let decrypted = decrypt_sec_to_lines(&sec_file, &engine, &crypto::mac::empty_schema_hash()).await.unwrap();
+        let decrypted = decrypt_sec_to_lines(&sec_file, &engine, &crypto::mac::empty_schema_hash())
+            .await
+            .unwrap();
         let secret_val = decrypted.iter().find_map(|l| {
             if let Line::Kv { key, value, .. } = l {
                 if key == "SECRET" {
@@ -1680,7 +1682,8 @@ mod tests {
         let wrong_engine = EncryptionEngine::Local(LocalEncryptionOptions {
             key_file: Some(wrong_key_file),
         });
-        let result = decrypt_sec_to_lines(&sec_file, &wrong_engine, &crypto::mac::empty_schema_hash()).await;
+        let result =
+            decrypt_sec_to_lines(&sec_file, &wrong_engine, &crypto::mac::empty_schema_hash()).await;
         assert!(result.is_err(), "decrypting with wrong key should fail");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1720,9 +1723,13 @@ mod tests {
 
         // Decrypt with key_file: None — must auto-discover <sec>.key.
         let decrypt_engine = EncryptionEngine::Local(LocalEncryptionOptions { key_file: None });
-        let decrypted = decrypt_sec_to_lines(&sec_file, &decrypt_engine, &crypto::mac::empty_schema_hash())
-            .await
-            .unwrap();
+        let decrypted = decrypt_sec_to_lines(
+            &sec_file,
+            &decrypt_engine,
+            &crypto::mac::empty_schema_hash(),
+        )
+        .await
+        .unwrap();
         let secret_val = decrypted.iter().find_map(|l| {
             if let Line::Kv { key, value, .. } = l {
                 if key == "SECRET" {
@@ -2053,7 +2060,12 @@ mod tests {
         let tampered = on_disk.replace("/legit", "/attacker-owned");
         std::fs::write(&sec_file, tampered).unwrap();
 
-        let result = decrypt_sec_to_lines(&sec_file, &v3_local_engine(&key_file), &crypto::mac::empty_schema_hash()).await;
+        let result = decrypt_sec_to_lines(
+            &sec_file,
+            &v3_local_engine(&key_file),
+            &crypto::mac::empty_schema_hash(),
+        )
+        .await;
         match result {
             Err(e) => assert_mac_mismatch_error(e.as_ref()),
             Ok(_) => panic!("MAC verification must reject @push directive tampering"),
@@ -2090,7 +2102,12 @@ mod tests {
         let tampered = on_disk.replace("alias/legit", "alias/attacker");
         std::fs::write(&sec_file, tampered).unwrap();
 
-        let result = decrypt_sec_to_lines(&sec_file, &v3_local_engine(&key_file), &crypto::mac::empty_schema_hash()).await;
+        let result = decrypt_sec_to_lines(
+            &sec_file,
+            &v3_local_engine(&key_file),
+            &crypto::mac::empty_schema_hash(),
+        )
+        .await;
         match result {
             Err(e) => assert_mac_mismatch_error(e.as_ref()),
             Ok(_) => panic!("MAC verification must reject @key-id tampering"),
@@ -2126,7 +2143,12 @@ mod tests {
         let tampered = on_disk.replace("@type=enum(\"prod\",\"staging\")", "@type=string");
         std::fs::write(&sec_file, tampered).unwrap();
 
-        let result = decrypt_sec_to_lines(&sec_file, &v3_local_engine(&key_file), &crypto::mac::empty_schema_hash()).await;
+        let result = decrypt_sec_to_lines(
+            &sec_file,
+            &v3_local_engine(&key_file),
+            &crypto::mac::empty_schema_hash(),
+        )
+        .await;
         match result {
             Err(e) => assert_mac_mismatch_error(e.as_ref()),
             Ok(_) => panic!("MAC verification must reject @type directive tampering"),
@@ -2182,12 +2204,23 @@ mod tests {
         let v2_on_disk = std::fs::read_to_string(&sec_file).unwrap();
         let tampered = v2_on_disk
             .lines()
-            .map(|l| if l.starts_with("DB_PASSWORD=") { old_enc.as_str() } else { l })
+            .map(|l| {
+                if l.starts_with("DB_PASSWORD=") {
+                    old_enc.as_str()
+                } else {
+                    l
+                }
+            })
             .collect::<Vec<_>>()
             .join("\n");
         std::fs::write(&sec_file, format!("{}\n", tampered)).unwrap();
 
-        let result = decrypt_sec_to_lines(&sec_file, &v3_local_engine(&key_file), &crypto::mac::empty_schema_hash()).await;
+        let result = decrypt_sec_to_lines(
+            &sec_file,
+            &v3_local_engine(&key_file),
+            &crypto::mac::empty_schema_hash(),
+        )
+        .await;
         match result {
             Err(e) => assert_mac_mismatch_error(e.as_ref()),
             Ok(_) => panic!("MAC verification must reject ENC[…] rollback"),
@@ -2241,7 +2274,12 @@ mod tests {
         swapped.swap(alpha_idx, beta_idx);
         std::fs::write(&sec_file, dotenv::lines_to_string(&swapped)).unwrap();
 
-        let result = decrypt_sec_to_lines(&sec_file, &v3_local_engine(&key_file), &crypto::mac::empty_schema_hash()).await;
+        let result = decrypt_sec_to_lines(
+            &sec_file,
+            &v3_local_engine(&key_file),
+            &crypto::mac::empty_schema_hash(),
+        )
+        .await;
         match result {
             Err(e) => {
                 // Two possible failures: AEAD trips first (key-name AAD mismatch)
@@ -2268,8 +2306,7 @@ mod tests {
         // hash changes and the MAC fails on the next load.
         let (_dir, sec_file, key_file) = v3_fixture_dir("schema-tamper");
 
-        let original_schema =
-            dotenv::parse_schema("# @type=number @max=65535\nPORT\n").unwrap();
+        let original_schema = dotenv::parse_schema("# @type=number @max=65535\nPORT\n").unwrap();
 
         let lines = vec![
             Line::Kv {
@@ -2283,9 +2320,8 @@ mod tests {
 
         // Attacker drops @max — schema canonical bytes differ → hash differs.
         let tampered_schema = dotenv::parse_schema("# @type=number\nPORT\n").unwrap();
-        let tampered_hash = crypto::mac::schema_hash(Some(&dotenv::schema_to_canonical_bytes(
-            &tampered_schema,
-        )));
+        let tampered_hash =
+            crypto::mac::schema_hash(Some(&dotenv::schema_to_canonical_bytes(&tampered_schema)));
 
         let result =
             decrypt_sec_to_lines(&sec_file, &v3_local_engine(&key_file), &tampered_hash).await;
@@ -2315,9 +2351,13 @@ mod tests {
         let on_disk = std::fs::read_to_string(&sec_file).unwrap();
         std::fs::write(&sec_file, on_disk.replace("PORT=3000", "PORT=4000")).unwrap();
 
-        let decrypted = decrypt_sec_to_lines(&sec_file, &v3_local_engine(&key_file), &crypto::mac::empty_schema_hash())
-            .await
-            .expect("plaintext edit must not invalidate MAC");
+        let decrypted = decrypt_sec_to_lines(
+            &sec_file,
+            &v3_local_engine(&key_file),
+            &crypto::mac::empty_schema_hash(),
+        )
+        .await
+        .expect("plaintext edit must not invalidate MAC");
         let port_val = decrypted.iter().find_map(|l| match l {
             Line::Kv { key, value, .. } if key == "PORT" => Some(value.clone()),
             _ => None,
@@ -2385,11 +2425,7 @@ mod tests {
 
         let on_disk = std::fs::read_to_string(&sec_file).unwrap();
         // Find the first directive line, inject right before it.
-        let injected = on_disk.replacen(
-            "# @provider",
-            "EXFIL=stolen\n# @provider",
-            1,
-        );
+        let injected = on_disk.replacen("# @provider", "EXFIL=stolen\n# @provider", 1);
         std::fs::write(&sec_file, injected).unwrap();
 
         let result = decrypt_sec_to_lines(
@@ -2435,8 +2471,8 @@ mod tests {
         std::fs::write(&sec_file, on_disk.replace("@encrypt", "@plaintext")).unwrap();
 
         // First confirm the MAC fails as expected.
-        let fail = decrypt_sec_to_lines(&sec_file, &engine, &crypto::mac::empty_schema_hash())
-            .await;
+        let fail =
+            decrypt_sec_to_lines(&sec_file, &engine, &crypto::mac::empty_schema_hash()).await;
         assert!(fail.is_err(), "MAC must fail before re-encrypt");
 
         // Simulate `dotsec encrypt`: decrypt with MAC bypass, re-encrypt.
@@ -2448,10 +2484,9 @@ mod tests {
             .expect("re-encrypt with new MAC must succeed");
 
         // Now the file decrypts cleanly and API_KEY is plaintext per the new directive.
-        let decrypted =
-            decrypt_sec_to_lines(&sec_file, &engine, &crypto::mac::empty_schema_hash())
-                .await
-                .expect("decrypt after re-encrypt must succeed");
+        let decrypted = decrypt_sec_to_lines(&sec_file, &engine, &crypto::mac::empty_schema_hash())
+            .await
+            .expect("decrypt after re-encrypt must succeed");
         let api_val = decrypted.iter().find_map(|l| match l {
             Line::Kv { key, value, .. } if key == "API_KEY" => Some(value.clone()),
             _ => None,
@@ -2582,10 +2617,8 @@ mod tests {
 
     #[test]
     fn select_target_format_v3_header_returns_recognized() {
-        let path = select_format_fixture(
-            "v3",
-            "# @dotsec(format=v3, mac=AA==, dek=AQ==)\nFOO=bar\n",
-        );
+        let path =
+            select_format_fixture("v3", "# @dotsec(format=v3, mac=AA==, dek=AQ==)\nFOO=bar\n");
         assert_eq!(select_target_format(&path), SecFormat::Recognized);
     }
 
@@ -2626,7 +2659,6 @@ mod tests {
         );
         assert_eq!(select_target_format(&path), SecFormat::Unparseable);
     }
-
 
     // --- M2: upgrade-format v2 → v3 round-trip ---
 }

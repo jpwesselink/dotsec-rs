@@ -495,12 +495,7 @@ pub async fn match_args(
 
         with_progress(
             "Encrypting...",
-            dotsec::encrypt_lines_to_sec(
-                &lines,
-                sec_file,
-                encryption_engine,
-                schema.as_ref(),
-            ),
+            dotsec::encrypt_lines_to_sec(&lines, sec_file, encryption_engine, schema.as_ref()),
         )
         .await?;
         println!("{} {} {} in {}", "✓".green(), action, key.bold(), sec_file);
