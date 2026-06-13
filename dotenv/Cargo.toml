@@ -1,6 +1,6 @@
 [package]
 name = "dotenv"
-version = "6.0.0"
+version = "7.0.0"
 edition = "2021"
 description = "Parser and validator for dotsec .env/.sec files"
 license = "MIT"
