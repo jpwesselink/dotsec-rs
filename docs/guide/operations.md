@@ -106,7 +106,7 @@ A malicious dependency ran in a CI job that had been granted KMS access, and it 
 2. **CloudTrail will show exactly which `.sec` files were decrypted** during the compromise window (via encryption-context binding).
 3. **Rotate every value that was decryptable from that role**, at its provider.
 4. **Investigate the CI compromise**: which dependency, which install step, was it a lifecycle script that ran before the dotsec call, did the runner allow outbound traffic to the attacker's exfil endpoint?
-5. **Harden the CI posture** so the same vector doesn't reopen — pin dependencies to SHA, separate the dependency-install job from the decrypt job, restrict outbound network egress where the platform supports it. See [CI/CD security posture](/guide/ci#cicd-security-posture).
+5. **Harden the CI posture** so the same vector doesn't reopen. That's your standard CI security work — pin actions, pin dependencies, separate the install job from the decrypt job — and lives in your platform docs, not dotsec's. The dotsec-specific knobs ([CI/CD → dotsec knobs](/guide/ci#dotsec-knobs-that-matter-in-ci)) cover encryption-context binding, per-env keys, and step-level secret scoping.
 
 ### A value leaked from your application at runtime
 

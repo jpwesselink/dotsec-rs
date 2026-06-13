@@ -94,45 +94,13 @@ dotsec checks `DOTSEC_PRIVATE_KEY` before looking for a `.sec.key` file, so the 
 - **Don't echo `dotsec show --reveal` into logs.** Masked-by-default `dotsec show` exists for a reason.
 - **Don't commit `.sec.key` to make CI work.** That defeats the whole model — use the env var.
 
-## CI/CD security posture
+## dotsec knobs that matter in CI
 
-dotsec gives you the plumbing — KMS, OIDC, encryption context. The *posture* is yours to design. The questions below are what a serious security review will ask before signing off on a CI/CD pipeline that decrypts secrets. They're worth answering deliberately rather than discovering at audit time.
+A few configuration items specific to dotsec are worth getting right. Everything else about CI/CD security — workflow approvals, OIDC trust policies, dependency review, action pinning — is your standard cloud-security posture and lives in your existing platform docs, not here.
 
-### Decrypt access scoping
-
-| Question | Bad answer | Good answer |
-|---|---|---|
-| Who can decrypt **prod** secrets from CI? | "Any workflow run on this repo." | "Only workflows targeting protected branches, gated by [GitHub Environment](https://docs.github.com/en/actions/deployment/targeting-different-environments) protection with required reviewers on the prod environment." |
-| Can a PR from a fork trigger a decrypt? | "We didn't think about it." | "No — `pull_request` workflows from forks don't get repo secrets and don't get the OIDC token needed to assume the prod IAM role. `pull_request_target` is reserved for vetted workflows that don't decrypt." |
-| Same KMS key for dev / staging / prod? | "Yes, simpler." | "No — one KMS key per environment, separate `.sec` files, separate IAM roles. The dev CI role's policy literally can't `kms:Decrypt` the prod key." |
-| Long-lived AWS access keys in GitHub Secrets? | "It works." | "OIDC + `aws-actions/configure-aws-credentials@v4` with `role-to-assume` and time-bounded session tokens. No static AWS creds anywhere in the workflow." |
-| Where is `DOTSEC_PRIVATE_KEY` (local provider) used? | "Workflow-level env var, available to every step." | "Step-level env var on the single step that runs `dotsec run`. Forked-PR workflows can't see it because they don't get repo secrets." |
-
-### Monitoring
-
-| Question | Bad answer | Good answer |
-|---|---|---|
-| Do you monitor CloudTrail for dotsec decrypts? | "We have CloudTrail enabled somewhere." | "We filter CloudTrail for `kms:Decrypt` events with `requestParameters.encryptionContext.dotsec:format=v3`, route to our SIEM, and alert on principals that aren't in the expected set or on calls outside expected windows." |
-| Do you know who decrypted what last week? | "We could probably reconstruct it." | "One Athena / CloudWatch Insights query against CloudTrail returns principal, time, source IP, and encryption context for every dotsec decrypt in the period." |
-
-### Workflow hygiene (orthogonal to dotsec, but matters for the layered posture)
-
-- **Pin actions to a SHA**, not `@v4`. Tag-based references can be hijacked.
-- **Pin dependencies** via lockfiles, and run dependency review before merging upstream upgrades.
-- **Don't run `kms:Decrypt` in jobs that install untrusted dependencies before the decrypt step.** A malicious `postinstall` script that runs *before* `dotsec run` and *after* `configure-aws-credentials` can call `aws kms decrypt` directly on your wrapped DEK and exfiltrate plaintext. Install dependencies in a separate prior job, or pin the dependency tree exhaustively.
-- **Restrict outbound network egress** in workflows that handle production secrets where the platform supports it (GitHub-hosted runners support [allow-listing](https://docs.github.com/en/actions/reference/secure-use-reference)).
-- **Set `permissions:` minimally** on every workflow — most don't need `write` access to anything.
-
-### The TL;DR table for the security reviewer
-
-| Layer | Mechanism | Failure mode it closes |
-|---|---|---|
-| At-rest secret storage | dotsec `.sec` file + KMS-wrapped DEK | Repo / disk / CI cache scrape |
-| Per-decrypt access control | IAM policy with `kms:EncryptionContext:dotsec:format=v3` | Wrong principal calling `kms:Decrypt` |
-| Per-decrypt audit | CloudTrail log per `kms:Decrypt` call | "Who decrypted this last week?" |
-| Approval gate | GitHub Environment protection | Untrusted PR triggering prod decrypt |
-| Identity federation | GitHub OIDC → AWS role assumption | Long-lived AWS keys getting leaked |
-| Environment separation | Per-environment KMS key | Dev role reaching prod material |
-| Dependency trust | Lockfiles + pinned actions + dependency review | Compromised package decrypting before `dotsec run` does |
-
-If you can answer "yes" to all rows for production, you've got a posture, not just a tool.
+| Knob | Why it matters |
+|---|---|
+| **Pin `kms:Decrypt` to the `dotsec:format=v3` encryption context** in your IAM policy | Without this condition, the role can decrypt *anything* that key wraps. With it, the role can only decrypt dotsec-produced wrapped DEKs. See the IAM snippet [above](#github-actions-aws-kms--oidc). |
+| **Separate KMS keys per environment** (dev / staging / prod) | A dev CI role with `kms:Decrypt` on the dev key can't reach prod material even if it tries. Single-key setups make this an IAM-condition problem instead of a structural one. |
+| **Step-level secret scoping for `DOTSEC_PRIVATE_KEY`** (local provider) | Pass it on the single step that runs `dotsec run`, not the workflow or job env. Smaller exposure window; forked-PR workflows can't see it because they never get repo secrets. |
+| **CloudTrail filter on `requestParameters.encryptionContext.dotsec:format=v3`** | One Athena / CloudWatch Insights query returns every dotsec decrypt with principal, timestamp, source IP. Useful for incident response and for compliance evidence. |

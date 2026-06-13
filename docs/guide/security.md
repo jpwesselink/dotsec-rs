@@ -10,16 +10,7 @@ What dotsec protects, what it assumes, and what it explicitly does not defend ag
 
 That's the honest one-paragraph framing. It's a real reduction in attack surface — `.env` files are the single most-harvested artifact in the 2025 npm worm wave, and a `.sec` file is worthless ciphertext to a dragnet. But "no `.env` files" is not the same as "no secret leakage." Anything that claims the second needs a runtime sandbox; dotsec doesn't.
 
-For production-grade use, treat dotsec as **one layer of a layered posture**:
-
-- Prefer **KMS** over the local provider.
-- **Least-privileged IAM** on `kms:Decrypt`, scoped to specific roles via the `dotsec:format=v3` encryption context.
-- **GitHub Environment protection** on workflows that decrypt — manual approval gate before prod secrets unlock.
-- **OIDC federation** instead of long-lived AWS access keys in CI.
-- **Separate prod / staging / dev KMS keys** so a dev role can't reach prod material even if it tries.
-- **Never run `kms:Decrypt` in jobs that execute untrusted code** (e.g. PRs from forks, dependency installs that haven't been reviewed).
-
-See [CI/CD → security posture](/guide/ci#cicd-security-posture) for a concrete checklist.
+For production use, prefer the **KMS provider** with per-environment KMS keys (dev / staging / prod separate) and least-privileged IAM pinned to the `dotsec:format=v3` encryption context. Everything else — workflow approval gates, OIDC federation, lockfile hygiene, runtime egress restrictions — is your standard cloud-security responsibility, not dotsec's.
 
 ## The core claim
 
@@ -100,22 +91,9 @@ The KMS row matters for the supply-chain attack class — when a compromised dep
 `DOTSEC_PRIVATE_KEY` is checked before any key file ([discovery order](/guide/encryption#key-file)), so any tool that can inject an env var into a child process can take over key delivery — letting you delete `.sec.key` from disk. Examples worth exploring: the [1Password CLI](https://developer.1password.com/docs/cli/) (`op run` resolves `op://` secret references), [direnv](https://direnv.net/) bound to a keychain command, or a shell function that reads from `gpg --decrypt`.
 :::
 
-## Runtime exposure dotsec does NOT solve
+## Where dotsec stops
 
-Once `dotsec run` has decrypted, plaintext secrets exist in process memory and in the child process's env vars. From that point on, dotsec is out of the loop. Things that can still leak secrets at runtime:
-
-- **Application logs** — `console.log(process.env)`, `logger.debug({ env })`, request middleware that dumps headers
-- **Crash reports** — Sentry, Bugsnag, Rollbar will happily ship `process.env` as breadcrumb context unless you scrub it
-- **Telemetry / APM agents** — many auto-instrument env vars
-- **Frontend bundles** — webpack / vite / esbuild can inline `process.env.X` into shipped JS if you reference it from frontend code
-- **Error pages** in dev mode (Next.js, Rails, Django) sometimes render env on stack traces
-- **Process dumps / coredumps** — dotsec calls `setrlimit(RLIMIT_CORE, 0)` for its own process; your application's process is its own responsibility
-- **Shell history** — `export SECRET=xxx && app` puts the secret in history
-- **`docker inspect <container>`** — shows env vars to anyone with docker socket access
-- **`kubectl get pod -o yaml`** — same for Kubernetes
-- **Compromised dependencies running in the same process** — once env vars are set, anyone in that process can read them
-
-dotsec doesn't claim to defend against any of these. They're your responsibility (or your runtime's). The mitigation patterns are well-known — scrub env from crash-report payloads, avoid `process.env.X` references in frontend bundles, prefer Kubernetes Secrets over plain env where supported, redact in your log formatter — but they live in your application and ops layer, not in dotsec.
+dotsec hands plaintext secrets to your process via env vars. From that point on, runtime exposure — application logs, crash reporters, container introspection, frontend bundles, whatever — is your application's and runtime's responsibility. dotsec doesn't claim to solve any of that, and you shouldn't expect it to.
 
 ## Entry names are visible
 
@@ -141,7 +119,6 @@ Anyone reading the file learns that you use Stripe, OpenAI, and JWTs, and they l
 - **Key compromise ends the story.** An attacker holding both the file and the private key (or `kms:Decrypt` rights) reads everything. There is no defense-in-depth below the key.
 - **`panic = "abort"` skips destructor-based memory wipe.** Two layers defend against the resulting coredump exposure: the fuzz harness keeps the input-driven panic surface closed, and `dotsec` calls `setrlimit(RLIMIT_CORE, 0)` at startup so a panic can't drop a dump containing in-flight secrets in the first place.
 - **`dotsec migrate` executes the v4 config.** A `dotsec.config.{ts,js}` is code; migrating runs it. Only migrate configs you trust — see [the migrate command](/guide/commands#dotsec-migrate).
-- **dotsec is one layer of a layered supply-chain posture.** Lockfiles, pinned action SHAs, npm provenance, dependency review, secret scanning, SBOM publication — none of those are replaced by dotsec. Treat dotsec as the encrypted-at-rest layer and own the rest of the stack separately.
 
 ## Engineering posture
 
