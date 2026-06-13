@@ -41,6 +41,10 @@
     {
       "label": "#40 fix/sanitize-kms-errors",
       "path": "/pr-40/"
+    },
+    {
+      "label": "#41 ci/nightly-fuzz",
+      "path": "/pr-41/"
     }
   ],
   "latest": "/v6.0.0/"
