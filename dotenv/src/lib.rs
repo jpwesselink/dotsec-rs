@@ -450,28 +450,50 @@ fn parse_directive(pair: Pair<Rule>) -> Vec<Line> {
     let mut output = Vec::new();
     for single in pair.into_inner() {
         if single.as_rule() == Rule::single_directive {
-            let typed = single.into_inner().next().unwrap();
+            // SAFETY: dotenv.pest guarantees single_directive has exactly one
+            // typed child — if a grammar edit ever weakens that, the fuzzer
+            // (see fuzz/fuzz_targets/parse_dotenv.rs) will catch the panic.
+            let Some(typed) = single.into_inner().next() else {
+                continue;
+            };
             match typed.as_rule() {
                 Rule::flag_directive => {
-                    let name = typed.into_inner().next().unwrap().as_str().to_string();
-                    output.push(Line::Directive { name, value: None });
+                    let Some(name_pair) = typed.into_inner().next() else {
+                        continue;
+                    };
+                    output.push(Line::Directive {
+                        name: name_pair.as_str().to_string(),
+                        value: None,
+                    });
                 }
                 Rule::push_directive => {
-                    let value = typed.as_str().strip_prefix("@push=").unwrap().to_string();
+                    let value = typed
+                        .as_str()
+                        .strip_prefix("@push=")
+                        .unwrap_or_default()
+                        .to_string();
                     output.push(Line::Directive {
                         name: "push".to_string(),
                         value: Some(value),
                     });
                 }
                 Rule::type_directive => {
-                    let value = typed.as_str().strip_prefix("@type=").unwrap().to_string();
+                    let value = typed
+                        .as_str()
+                        .strip_prefix("@type=")
+                        .unwrap_or_default()
+                        .to_string();
                     output.push(Line::Directive {
                         name: "type".to_string(),
                         value: Some(value),
                     });
                 }
                 Rule::format_directive => {
-                    let value = typed.as_str().strip_prefix("@format=").unwrap().to_string();
+                    let value = typed
+                        .as_str()
+                        .strip_prefix("@format=")
+                        .unwrap_or_default()
+                        .to_string();
                     output.push(Line::Directive {
                         name: "format".to_string(),
                         value: Some(value),
@@ -479,11 +501,12 @@ fn parse_directive(pair: Pair<Rule>) -> Vec<Line> {
                 }
                 Rule::numeric_directive => {
                     let mut inner = typed.into_inner();
-                    let name = inner.next().unwrap().as_str().to_string();
-                    let value = inner.next().unwrap().as_str().to_string();
+                    let (Some(name_pair), Some(value_pair)) = (inner.next(), inner.next()) else {
+                        continue;
+                    };
                     output.push(Line::Directive {
-                        name,
-                        value: Some(value),
+                        name: name_pair.as_str().to_string(),
+                        value: Some(value_pair.as_str().to_string()),
                     });
                 }
                 Rule::pattern_directive => {
@@ -524,11 +547,12 @@ fn parse_directive(pair: Pair<Rule>) -> Vec<Line> {
                 }
                 Rule::text_directive => {
                     let mut inner = typed.into_inner();
-                    let name = inner.next().unwrap().as_str().to_string();
-                    let value = inner.next().unwrap().as_str().trim().to_string();
+                    let (Some(name_pair), Some(value_pair)) = (inner.next(), inner.next()) else {
+                        continue;
+                    };
                     output.push(Line::Directive {
-                        name,
-                        value: Some(value),
+                        name: name_pair.as_str().to_string(),
+                        value: Some(value_pair.as_str().trim().to_string()),
                     });
                 }
                 _ => {}

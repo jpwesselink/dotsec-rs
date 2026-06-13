@@ -1009,6 +1009,13 @@ impl Schema {
         self.entries.get(key)
     }
 
+    /// Look up a schema entry by key, mutably. Useful for commands that
+    /// patch a single directive on an existing entry without rebuilding
+    /// the whole entry (e.g. `dotsec set --description`).
+    pub fn get_mut(&mut self, key: &str) -> Option<&mut SchemaEntry> {
+        self.entries.get_mut(key)
+    }
+
     /// Iterate over the keys in insertion order.
     pub fn keys(&self) -> impl Iterator<Item = &str> {
         self.entries.keys().map(|k| k.as_str())

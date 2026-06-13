@@ -13,13 +13,14 @@ Two providers are supported:
 
 dotsec uses [age](https://age-encryption.org/) for key management. Each `.sec` file has a corresponding keypair.
 
-<!-- TODO: add a "Why age?" section here. Cover: small audited library (Cure53 2021),
-multi-recipient support enables painless team key rotation later, standard interchange
-format (`age`/`rage` CLI can decrypt the wrapped DEK if dotsec ever broke), no curve or
-parameter choices to footgun, maintained Rust crate by the spec author. Contrast vs. raw
-libsodium/NaCl sealed boxes (no multi-recipient, no interchange format) and GPG (too much
-surface area, web-of-trust we don't need). -->
+### Why age?
 
+- **Small, audited surface.** age is a deliberately minimal design ([Cure53 audit, 2021](https://github.com/FiloSottile/age/tree/main/doc)) — one curve (X25519), one AEAD (ChaCha20-Poly1305), no parameter choices to footgun.
+- **Standard interchange format.** The wrapped DEK is a plain age envelope. If dotsec ever broke or disappeared, the `age`/`rage` CLI can decrypt it — your secrets are never locked into a bespoke format.
+- **Plugin protocol for hardware-backed identities.** The age plugin protocol means future support for YubiKey, Secure Enclave, TPM, and FIDO2 identities comes from the age ecosystem rather than dotsec-specific code.
+- **Maintained Rust implementation** by the spec's author.
+
+GPG was the alternative considered: too much surface area, web-of-trust we don't need.
 
 ### How it works
 
@@ -27,7 +28,7 @@ surface area, web-of-trust we don't need). -->
 2. Generate a random AES-256 DEK
 3. Wrap the DEK using age (X25519 + ChaCha20-Poly1305) with the public key
 4. Encrypt each secret value locally with AES-256-GCM using the DEK
-5. Store the age-wrapped DEK as `__DOTSEC_KEY__` in the `.sec` file
+5. Store the age-wrapped DEK in the `dek=` field of the `@dotsec(...)` directive
 
 On decryption, load the private key (from `DOTSEC_PRIVATE_KEY` env var or `.sec.key` file), unwrap the DEK, decrypt each `ENC[...]` value locally.
 
@@ -69,7 +70,7 @@ export DOTSEC_PRIVATE_KEY="AGE-SECRET-KEY-1..."
 
 ## AWS KMS
 
-For enterprise teams needing IAM-controlled access and CloudTrail audit logs.
+When you have an AWS account and want IAM-controlled access plus CloudTrail audit logs — and no local key file at all.
 
 ### How it works
 
@@ -78,7 +79,7 @@ dotsec uses AWS KMS **envelope encryption**:
 1. Request a data key from KMS (`GenerateDataKey` with AES-256)
 2. KMS returns both a plaintext DEK and a KMS-wrapped copy
 3. Encrypt each secret value locally with AES-256-GCM using the plaintext DEK
-4. Store the KMS-wrapped DEK as `__DOTSEC_KEY__` in the `.sec` file
+4. Store the KMS-wrapped DEK in the `dek=` field of the `@dotsec(...)` directive
 5. Discard the plaintext DEK
 
 On decryption, KMS unwraps the DEK first (`Decrypt`), then each `ENC[...]` value is decrypted locally. The actual secret data never leaves your machine — only the wrapped key touches KMS.
@@ -203,3 +204,7 @@ Use this periodically or after a suspected key compromise. For a full key compro
 dotsec init          # generates new .sec.key
 dotsec rotate-key    # re-wraps all values with new key
 ```
+
+---
+
+**Next:** the [Security model](/guide/security) covers what this defends against and where the honest limits sit.

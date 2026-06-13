@@ -57,4 +57,14 @@ ignore = [
     # positive for us: our workspace-internal crate is named `dotenv` too but
     # is independent. cargo-audit matches by name, not crate identity.
     "RUSTSEC-2021-0141",
+
+    # --- Transitive via testcontainers (dev-only) ---
+
+    # tokio-tar PAX header smuggling. Reached via testcontainers 0.23 →
+    # bollard 0.18 → tokio-tar 0.3.1 in [dev-dependencies] only — the
+    # production dotsec/dotsec-core binaries do not link tokio-tar. The
+    # vector requires parsing a tar stream produced by an attacker, which
+    # our LocalStack integration test does not do (it only starts a
+    # container; bollard's tar usage is for exec/copy paths we don't hit).
+    "RUSTSEC-2025-0111",
 ]

@@ -8,7 +8,7 @@ use crate::default_options::DefaultOptions;
 
 pub fn command() -> Command {
     Command::new("migrate")
-        .about("Migrate from dotsec v4 config (dotsec.config.ts) to v5 .sec format")
+        .about("Migrate from a JS-era dotsec config (dotsec.config.ts, last shipped on npm dotsec v4) to the current .sec wire format")
         .arg(
             Arg::new("env-file")
                 .help("Path to .env file with plaintext values")
@@ -72,7 +72,7 @@ pub async fn match_args(
         "→".dimmed(),
         config_file.bold()
     );
-    let v4_config = load_v4_config(config_file)?;
+    let js_config = load_js_config(config_file)?;
 
     // --- Step 2: Parse .env file ---
     let content = std::fs::read_to_string(env_file)?;
@@ -84,7 +84,7 @@ pub async fn match_args(
     }
 
     // --- Step 3: Extract settings from v4 config ---
-    let aws_plugin = v4_config
+    let aws_plugin = js_config
         .defaults
         .as_ref()
         .and_then(|d| d.plugins.as_ref())
@@ -98,14 +98,14 @@ pub async fn match_args(
     let ssm_defaults = aws_plugin.and_then(|a| a.ssm.as_ref());
     let sm_defaults = aws_plugin.and_then(|a| a.secrets_manager.as_ref());
 
-    let show_set: HashSet<&str> = v4_config
+    let show_set: HashSet<&str> = js_config
         .redaction
         .as_ref()
         .and_then(|r| r.show.as_ref())
         .map(|v| v.iter().map(|s| s.as_str()).collect())
         .unwrap_or_default();
 
-    let push_map = v4_config.push.as_ref();
+    let push_map = js_config.push.as_ref();
 
     // --- Step 4: Build file-level config ---
     let region = aws_plugin.and_then(|a| a.kms.as_ref()).and_then(|_| {
@@ -297,9 +297,27 @@ pub async fn match_args(
 }
 
 /// Load a dotsec v4 config file by shelling out to npx tsx (for TS) or node (for JS).
-fn load_v4_config(config_path: &str) -> Result<DotsecV4Config, Box<dyn std::error::Error>> {
+/// Env var used to hand the config path to the Node/tsx evaluator. Passing the
+/// path through the environment — never interpolated into the `-e` script — is
+/// what keeps a hostile path from being parsed as code. See `EVAL_SCRIPT`.
+const CONFIG_PATH_ENV: &str = "DOTSEC_MIGRATE_CONFIG_PATH";
+
+/// The evaluator script. This is a *constant* — no caller data is ever
+/// formatted into it. It reads the target path from `CONFIG_PATH_ENV` and
+/// builds the file URL with `pathToFileURL`, which correctly encodes spaces,
+/// quotes, and other characters that are legal in POSIX paths. The previous
+/// version interpolated the path into a `import('file://…')` string literal,
+/// so a path containing a single quote (legal on Unix) could break out of the
+/// literal and inject arbitrary JS into the evaluator.
+const EVAL_SCRIPT: &str = "\
+import('node:url').then(({ pathToFileURL }) => \
+import(pathToFileURL(process.env.DOTSEC_MIGRATE_CONFIG_PATH).href)).then(m => { \
+const c = m.dotsec ?? m.default?.dotsec ?? m.default; \
+process.stdout.write(JSON.stringify(c)); \
+})";
+
+fn load_js_config(config_path: &str) -> Result<DotsecJsConfig, Box<dyn std::error::Error>> {
     let abs_path = std::fs::canonicalize(config_path)?;
-    let abs_str = abs_path.to_string_lossy();
 
     // Determine runner based on file extension
     let ext = std::path::Path::new(config_path)
@@ -307,23 +325,15 @@ fn load_v4_config(config_path: &str) -> Result<DotsecV4Config, Box<dyn std::erro
         .and_then(|e| e.to_str())
         .unwrap_or("");
 
-    let eval_script = format!(
-        "import('file://{}').then(m => {{ const c = m.dotsec ?? m.default?.dotsec ?? m.default; process.stdout.write(JSON.stringify(c)); }})",
-        abs_str
-    );
-
     // Pin tsx to a known-good major to avoid pulling a "latest" that could be
     // compromised or accidentally break us. v4 is the current stable major.
-    let strategies: Vec<(&str, Vec<String>)> = match ext {
-        "ts" | "mts" | "cts" | "tsx" => vec![(
-            "npx",
-            vec!["tsx@4".into(), "-e".into(), eval_script.clone()],
-        )],
-        "js" | "mjs" | "cjs" => vec![("node", vec!["-e".into(), eval_script.clone()])],
+    let strategies: Vec<(&str, Vec<&str>)> = match ext {
+        "ts" | "mts" | "cts" | "tsx" => vec![("npx", vec!["tsx@4", "-e", EVAL_SCRIPT])],
+        "js" | "mjs" | "cjs" => vec![("node", vec!["-e", EVAL_SCRIPT])],
         _ => {
             // Try parsing as JSON directly
             let content = std::fs::read_to_string(config_path)?;
-            let config: DotsecV4Config = serde_json::from_str(&content)?;
+            let config: DotsecJsConfig = serde_json::from_str(&content)?;
             return Ok(config);
         }
     };
@@ -332,7 +342,14 @@ fn load_v4_config(config_path: &str) -> Result<DotsecV4Config, Box<dyn std::erro
     let mut output = None;
 
     for (runner, args) in &strategies {
-        match std::process::Command::new(runner).args(args).output() {
+        match std::process::Command::new(runner)
+            // The path travels through the environment, not the argv/script, so
+            // it is never subject to JS or shell parsing. `OsStr` preserves the
+            // exact bytes even for non-UTF-8 paths.
+            .env(CONFIG_PATH_ENV, abs_path.as_os_str())
+            .args(args)
+            .output()
+        {
             Ok(o) if o.status.success() => {
                 output = Some(o);
                 break;
@@ -354,7 +371,7 @@ fn load_v4_config(config_path: &str) -> Result<DotsecV4Config, Box<dyn std::erro
     })?;
 
     let json_str = String::from_utf8(output.stdout)?;
-    let config: DotsecV4Config = serde_json::from_str(&json_str).map_err(|e| {
+    let config: DotsecJsConfig = serde_json::from_str(&json_str).map_err(|e| {
         format!(
             "Failed to parse config JSON: {}. Raw output: {}",
             e,
@@ -369,9 +386,9 @@ fn load_v4_config(config_path: &str) -> Result<DotsecV4Config, Box<dyn std::erro
 /// Computes SSM/SecretsManager paths using v4 defaults (pathPrefix, changeCase).
 fn build_push_directive(
     key: &str,
-    push: &V4PushEntry,
-    ssm_defaults: Option<&V4SsmConfig>,
-    sm_defaults: Option<&V4SecretsManagerConfig>,
+    push: &JsPushEntry,
+    ssm_defaults: Option<&JsSsmConfig>,
+    sm_defaults: Option<&JsSecretsManagerConfig>,
 ) -> Option<String> {
     let aws = push.aws.as_ref()?;
     let mut targets: Vec<String> = Vec::new();
@@ -455,36 +472,36 @@ fn screaming_snake_to_camel(s: &str) -> String {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct DotsecV4Config {
-    defaults: Option<V4Defaults>,
-    redaction: Option<V4Redaction>,
-    push: Option<HashMap<String, V4PushEntry>>,
+struct DotsecJsConfig {
+    defaults: Option<JsDefaults>,
+    redaction: Option<JsRedaction>,
+    push: Option<HashMap<String, JsPushEntry>>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct V4Defaults {
+struct JsDefaults {
     #[allow(dead_code)]
     encryption_engine: Option<String>,
-    plugins: Option<V4Plugins>,
+    plugins: Option<JsPlugins>,
 }
 
 #[derive(Debug, Deserialize)]
-struct V4Plugins {
-    aws: Option<V4AwsPlugin>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct V4AwsPlugin {
-    ssm: Option<V4SsmConfig>,
-    secrets_manager: Option<V4SecretsManagerConfig>,
-    kms: Option<V4KmsConfig>,
+struct JsPlugins {
+    aws: Option<JsAwsPlugin>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct V4SsmConfig {
+struct JsAwsPlugin {
+    ssm: Option<JsSsmConfig>,
+    secrets_manager: Option<JsSecretsManagerConfig>,
+    kms: Option<JsKmsConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsSsmConfig {
     change_case: Option<String>,
     path_prefix: Option<String>,
     #[serde(rename = "type")]
@@ -494,30 +511,30 @@ struct V4SsmConfig {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct V4SecretsManagerConfig {
+struct JsSecretsManagerConfig {
     change_case: Option<String>,
     path_prefix: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct V4KmsConfig {
+struct JsKmsConfig {
     key_alias: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-struct V4Redaction {
+struct JsRedaction {
     show: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
-struct V4PushEntry {
-    aws: Option<V4AwsPush>,
+struct JsPushEntry {
+    aws: Option<JsAwsPush>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct V4AwsPush {
+struct JsAwsPush {
     ssm: Option<bool>,
     secrets_manager: Option<bool>,
 }
@@ -540,7 +557,7 @@ mod tests {
     }
 
     #[test]
-    fn test_v4_config_parsing() {
+    fn test_js_config_parsing() {
         let json = r#"{
             "defaults": {
                 "encryptionEngine": "aws",
@@ -574,7 +591,7 @@ mod tests {
             }
         }"#;
 
-        let config: DotsecV4Config = serde_json::from_str(json).unwrap();
+        let config: DotsecJsConfig = serde_json::from_str(json).unwrap();
 
         assert_eq!(
             config
@@ -630,20 +647,20 @@ mod tests {
 
     #[test]
     fn test_build_push_directive() {
-        let ssm_defaults = V4SsmConfig {
+        let ssm_defaults = JsSsmConfig {
             change_case: Some("camelCase".to_string()),
             path_prefix: Some("/pathehome/".to_string()),
             param_type: Some("String".to_string()),
         };
 
-        let sm_defaults = V4SecretsManagerConfig {
+        let sm_defaults = JsSecretsManagerConfig {
             change_case: Some("camelCase".to_string()),
             path_prefix: Some("/pathehome/".to_string()),
         };
 
         // SSM only
-        let push = V4PushEntry {
-            aws: Some(V4AwsPush {
+        let push = JsPushEntry {
+            aws: Some(JsAwsPush {
                 ssm: Some(true),
                 secrets_manager: None,
             }),
@@ -660,8 +677,8 @@ mod tests {
         );
 
         // Secrets Manager only
-        let push = V4PushEntry {
-            aws: Some(V4AwsPush {
+        let push = JsPushEntry {
+            aws: Some(JsAwsPush {
                 ssm: None,
                 secrets_manager: Some(true),
             }),
@@ -674,8 +691,8 @@ mod tests {
         );
 
         // Both
-        let push = V4PushEntry {
-            aws: Some(V4AwsPush {
+        let push = JsPushEntry {
+            aws: Some(JsAwsPush {
                 ssm: Some(true),
                 secrets_manager: Some(true),
             }),
@@ -688,7 +705,7 @@ mod tests {
     }
 
     #[test]
-    fn test_load_v4_config_from_json_file() {
+    fn test_load_js_config_from_json_file() {
         let dir = std::env::temp_dir().join("dotsec-test-migrate");
         let _ = std::fs::create_dir_all(&dir);
         let config_path = dir.join("dotsec.config.json");
@@ -711,7 +728,7 @@ mod tests {
             }
         }"#).unwrap();
 
-        let config = load_v4_config(config_path.to_str().unwrap()).unwrap();
+        let config = load_js_config(config_path.to_str().unwrap()).unwrap();
 
         // Verify config parsed correctly
         let aws = config
@@ -752,6 +769,66 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A config file whose *path* contains a single quote must still load.
+    /// Under the old string-interpolated `import('file://…')` script this path
+    /// would break out of the JS string literal; now the path travels via the
+    /// environment and is resolved with `pathToFileURL`, so a quote is inert.
+    ///
+    /// Requires Node.js on PATH, so it's ignored by default — run with
+    /// `cargo test -- --ignored` on a machine with Node installed.
+    #[test]
+    #[ignore = "requires node on PATH"]
+    fn load_js_config_handles_quote_in_path() {
+        let dir = std::env::temp_dir().join("dotsec-test-migrate-quote-'dir");
+        let _ = std::fs::create_dir_all(&dir);
+        let config_path = dir.join("dotsec.config.mjs");
+
+        std::fs::write(
+            &config_path,
+            "export const dotsec = { defaults: { encryptionEngine: \"aws\" } };\n",
+        )
+        .unwrap();
+
+        let config = load_js_config(config_path.to_str().unwrap())
+            .expect("config with a quote in its path should load");
+        assert_eq!(
+            config
+                .defaults
+                .as_ref()
+                .unwrap()
+                .encryption_engine
+                .as_deref(),
+            Some("aws")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Defense-in-depth: prove the evaluator script carries no caller data, so
+    /// there is nothing for a hostile path to inject into. If someone later
+    /// reintroduces string interpolation, this test fails and explains why.
+    #[test]
+    fn eval_script_contains_no_interpolation_markers() {
+        // The script must reference the path only via the environment, never
+        // splice it in. No `file://` literal, no format placeholders.
+        assert!(
+            EVAL_SCRIPT.contains("process.env.DOTSEC_MIGRATE_CONFIG_PATH"),
+            "path must be read from the environment"
+        );
+        assert!(
+            EVAL_SCRIPT.contains("pathToFileURL"),
+            "file URL must be built with pathToFileURL, not string concat"
+        );
+        assert!(
+            !EVAL_SCRIPT.contains("file://"),
+            "no hand-built file:// literal — that's the injection sink"
+        );
+        assert!(
+            !EVAL_SCRIPT.contains("{}"),
+            "no format placeholders should survive into the script"
+        );
+    }
+
     #[test]
     fn test_migrate_line_building_logic() {
         // Simulate the core migrate logic: v4 config + .env → output lines
@@ -760,17 +837,17 @@ mod tests {
         let show_set: std::collections::HashSet<&str> =
             ["NODE_ENV", "PORT", "LOG_LEVEL"].into_iter().collect();
 
-        let ssm_defaults = V4SsmConfig {
+        let ssm_defaults = JsSsmConfig {
             change_case: Some("camelCase".to_string()),
             path_prefix: Some("/myapp/prod/".to_string()),
             param_type: None,
         };
 
-        let push_map: HashMap<String, V4PushEntry> = [
+        let push_map: HashMap<String, JsPushEntry> = [
             (
                 "DATABASE_URL".to_string(),
-                V4PushEntry {
-                    aws: Some(V4AwsPush {
+                JsPushEntry {
+                    aws: Some(JsAwsPush {
                         ssm: Some(true),
                         secrets_manager: Some(true),
                     }),
@@ -778,8 +855,8 @@ mod tests {
             ),
             (
                 "API_KEY".to_string(),
-                V4PushEntry {
-                    aws: Some(V4AwsPush {
+                JsPushEntry {
+                    aws: Some(JsAwsPush {
                         ssm: Some(true),
                         secrets_manager: None,
                     }),
@@ -789,7 +866,7 @@ mod tests {
         .into_iter()
         .collect();
 
-        let sm_defaults = V4SecretsManagerConfig {
+        let sm_defaults = JsSecretsManagerConfig {
             change_case: Some("camelCase".to_string()),
             path_prefix: Some("/myapp/prod/".to_string()),
         };

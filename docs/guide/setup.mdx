@@ -54,6 +54,14 @@ Verify the install:
 dotsec --version
 ```
 
+### Release channels
+
+| Channel | When it updates | Install |
+|---------|-----------------|---------|
+| `latest` | Each release | `npm install -g dotsec` |
+| `beta` | Every commit on `main` | `npm install -g dotsec@beta` |
+| `<branch-slug>` | Every PR commit | `npm install -g dotsec@<branch-slug>` |
+
 ## Zero-config start
 
 No AWS account, no config file, no setup step required. The first `dotsec set` auto-creates everything:
@@ -105,26 +113,54 @@ Key discovery order:
 
 ## AWS KMS setup
 
-For teams that need IAM-controlled access and CloudTrail audit logs:
+For teams that need IAM-controlled access and CloudTrail audit logs. With KMS there is no local key file — all the key material lives in AWS's HSM. See [On-disk surface area](/guide/security#on-disk-surface-area) for the threat-model implications.
 
-1. Create a KMS key in AWS (symmetric, AES-256):
+1. Create a symmetric KMS key and give it an alias:
 
    ```bash
+   key_id=$(aws kms create-key --description "dotsec" \
+     --query KeyMetadata.KeyId --output text)
    aws kms create-alias \
      --alias-name alias/dotsec \
-     --target-key-id <your-key-id>
+     --target-key-id "$key_id"
    ```
 
 2. Initialize dotsec with AWS as the provider:
 
    ```bash
    dotsec init
-   # Choose "aws", enter your key ID and region
+   # Choose "aws", enter alias/dotsec and your region
    ```
 
 3. AWS credentials are picked up automatically from `~/.aws/credentials`, `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, or an instance role.
 
-See the [encryption guide](/guide/encryption#aws-kms) for more on how KMS envelope encryption works.
+4. Verify the round-trip:
+
+   ```bash
+   dotsec set SMOKE_TEST ok --encrypt
+   dotsec show   # SMOKE_TEST decrypts → KMS works
+   ```
+
+Principals that only need to *read* secrets (CI, runtime roles) need just `kms:Decrypt`, and you can scope it to dotsec specifically via the encryption context:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": "kms:Decrypt",
+  "Resource": "arn:aws:kms:us-east-1:123456789012:key/...",
+  "Condition": {
+    "StringEquals": { "kms:EncryptionContext:dotsec:format": "v3" }
+  }
+}
+```
+
+Writing secrets (`dotsec set`, `rotate-key`) additionally needs `kms:GenerateDataKey`.
+
+### Next steps
+
+- **Push to SSM / Secrets Manager** for runtime services that read from AWS directly — see [`@push` directives](/guide/directives#push-target-syntax) and [`dotsec push`](/guide/commands#dotsec-push).
+- **Wire CI** without long-lived AWS credentials — see [CI/CD → GitHub Actions + KMS + OIDC](/guide/ci#github-actions-aws-kms--oidc).
+- **Read the mechanics** — see [How KMS envelope encryption works](/guide/encryption#aws-kms).
 
 ## Multiple environments
 

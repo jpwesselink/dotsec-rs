@@ -1,0 +1,2 @@
+# @type=enum("dev", "prod", "staging")
+ENV=prod

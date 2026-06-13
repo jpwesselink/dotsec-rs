@@ -1,0 +1,2 @@
+# @push=aws-ssm, aws-secrets-manager(path="/app/db")
+DB=ENC[xyz]

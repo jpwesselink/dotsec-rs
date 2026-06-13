@@ -1,5 +1,16 @@
 # Commands
 
+Jump by intent:
+
+| You're doing… | Commands |
+|---|---|
+| **Daily work** | [`set`](#dotsec-set) · [`show`](#dotsec-show) · [`run`](#dotsec-run) · [`validate`](#dotsec-validate) |
+| **Getting started** | [`import`](#dotsec-import) · [`init`](#dotsec-init) · [`export`](#dotsec-export) |
+| **Schema & multi-env** | [`extract-schema`](#dotsec-extract-schema) · [`format`](#dotsec-format) · [`diff`](#dotsec-diff) · [`schema export`](#dotsec-schema-export) · [`remove-directives`](#dotsec-remove-directives) |
+| **Maintenance** | [`encrypt`](#dotsec-encrypt) · [`rotate-key`](#dotsec-rotate-key) · [`header`](#dotsec-header) |
+| **AWS** | [`push`](#dotsec-push) |
+| **Legacy migration** | [`migrate`](#dotsec-migrate) |
+
 ## `dotsec set`
 
 Add or update a single variable. On a new project with no `.sec` file, auto-creates `.sec` + keypair.
@@ -14,7 +25,15 @@ dotsec set RUNTIME_ONLY_VAR <value> --push aws-ssm              # @push only —
 dotsec set SHARED_VAR <value> --push aws-ssm --also-env         # @push + @also-env — pushed AND in local env
 ```
 
-Flags: `--encrypt` / `--plaintext` to control encryption, `--type <TYPE>` for the `@type` directive (`string`, `number`, `boolean`, `enum(...)`), `--push <TARGET>` for the `@push` directive (`aws-ssm`, `aws-secrets-manager`), `--also-env` to pair with `--push` so the value is also available via `dotsec run` / `dotsec export` (otherwise v6 excludes push-only entries from env), `-y/--yes` to skip directive prompts, `--no-gitignore` to skip the first-run auto-add of `*.key` to `.gitignore` (see [Setup](/guide/setup#sec-key-is-auto-gitignored)).
+| Flag | Effect |
+|---|---|
+| `--encrypt` / `--plaintext` | Control encryption for this variable |
+| `--type <TYPE>` | Set the `@type` directive: `string`, `number`, `boolean`, `enum(...)` |
+| `--push <TARGET>` | Set the `@push` directive: `aws-ssm`, `aws-secrets-manager` |
+| `--also-env` | Pair with `--push` so the value is *also* injected by `dotsec run` / included in `dotsec export` (v6 excludes push-only entries from env by default) |
+| `--description <TEXT>` | Set the `@description` directive (lands in the schema when one exists) |
+| `-y`, `--yes` | Skip directive prompts |
+| `--no-gitignore` | Skip the first-run auto-add of `*.key` to `.gitignore` — see [Setup](/guide/setup#sec-key-is-auto-gitignored) |
 
 When you go through the interactive prompts (`dotsec set` with no value, or with `--push` and no `-y`), choosing a push target triggers a follow-up "Also inject into local env?" prompt — default no, matching the v6 push-only semantics.
 
@@ -221,7 +240,7 @@ For local encryption: generates a new DEK wrapped with the same age key. For AWS
 
 ## `dotsec migrate`
 
-Migrate from dotsec v4 (`dotsec.config.ts` + plaintext `.env`) to v5 `.sec` format:
+Migrate from dotsec v4 (`dotsec.config.ts` + plaintext `.env`) to the current `.sec` wire format:
 
 ```bash
 dotsec migrate                                       # uses dotsec.config.ts and .env
@@ -230,6 +249,8 @@ dotsec migrate --config dotsec.config.staging.ts     # specify v4 config
 ```
 
 Arguments: positional `[env-file]` (default `.env`, also reads `ENV_FILE`) for the plaintext source, `-c, --config <FILE>` (default `dotsec.config.ts`) for the v4 config.
+
+> **Heads-up: `migrate` runs your v4 config file.** A `dotsec.config.{ts,js}` is JavaScript/TypeScript, so reading it means executing it — dotsec shells out to `node -e` (or `npx tsx@4 -e`) to load the export. Only run `dotsec migrate` on configs you trust. If you cloned a repo for the first time, treat its `dotsec.config.ts` the same way you'd treat any other untrusted `.js`: glance at it first. A `.json` config skips this entirely (parsed natively, no executor invoked).
 
 ## `dotsec schema export`
 

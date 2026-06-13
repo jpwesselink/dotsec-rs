@@ -1,8 +1,18 @@
 # dotsec
 
-`.env` files, encrypted and committed to git.
+[![npm](https://img.shields.io/npm/v/dotsec)](https://www.npmjs.com/package/dotsec)
+[![CI](https://github.com/jpwesselink/dotsec-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/jpwesselink/dotsec-rs/actions/workflows/ci.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-dotsec encrypts your secrets into a `.sec` file — committed alongside your code as the single source of truth. Decrypt at runtime with no secrets ever written to disk.
+**No more .env files.**
+
+dotsec encrypts your secrets into a `.sec` file — same shape as `.env`, but committed to git as the single source of truth, decrypted in memory only when your app runs.
+
+- **KMS-native, AWS-integrated** — `EncryptionContext` binding on every wrap and unwrap; IAM controls access, CloudTrail logs every decrypt. Push to SSM Parameter Store and Secrets Manager via `@push=aws-ssm` / `@push=aws-secrets-manager` directives, for runtime services that read from AWS directly.
+- **Built like crypto matters** — AAD-bound per-value AEAD, file-level MAC over canonical content, schema-hash binding, key commitment, zeroize on every exit path, constant-time integrity checks, cargo-fuzz harness with 4 targets.
+- **Schema-driven validation** with `@type`, `@format`, `@pattern`, `@min/@max`, `@enum`. Generate a zero-runtime-dependency TypeScript validator from your schema in one command.
+- **Works with anything** — `dotsec run -- <your command>`. No SDK per language. Node, Python, Ruby, Go, Rust, Docker, kubectl, terraform — anything that reads env vars.
+- **Standard age envelope** — no lock-in. Anyone with the private key can decrypt with the `age` or `rage` CLI directly.
 
 ## Install
 
@@ -10,7 +20,7 @@ dotsec encrypts your secrets into a `.sec` file — committed alongside your cod
 npm install -g dotsec
 ```
 
-Distribution is npm-only (the obvious crate names on crates.io are owned by unrelated projects, so dotsec ships as a binary inside the npm package). See [setup](https://jpwesselink.github.io/dotsec-rs/v6.0.0/guide/setup) for `npx` and dev-dependency install patterns.
+Distribution is npm-only (the obvious crate names on crates.io are owned by unrelated projects, so dotsec ships as a binary inside the npm package). See [setup](https://jpwesselink.github.io/dotsec-rs/guide/setup) for `npx` and dev-dependency install patterns.
 
 ## Quick start
 
@@ -27,14 +37,14 @@ No AWS account. No config file. No setup step.
 ## How it works
 
 ```
-.env (plaintext, gitignored)        .sec (encrypted, committed)
-┌────────────────────────┐          ┌──────────────────────────┐
-│ DATABASE_URL=postgres://│ encrypt │ DATABASE_URL=ENC[base64] │
-│ API_KEY=sk-live-xxx    │ ──────▶ │ API_KEY=ENC[base64]      │
-│ PORT=3000              │         │ PORT=3000                 │
-└────────────────────────┘         │ __DOTSEC_KEY__="..."     │
-                             ◀──── └──────────────────────────┘
-                            decrypt
+.env (plaintext, gitignored)         .sec (encrypted, committed)
+┌─────────────────────────┐         ┌────────────────────────────┐
+│ DATABASE_URL=postgres://│ encrypt │ # @dotsec(format=v3,       │
+│ API_KEY=sk-live-xxx     │ ──────▶ │ #   mac=..., dek=...)      │
+│ PORT=3000               │         │ DATABASE_URL=ENC[base64]   │
+└─────────────────────────┘         │ API_KEY=ENC[base64]        │
+                              ◀──── │ PORT=3000                  │
+                             decrypt└────────────────────────────┘
 ```
 
 Each secret is encrypted individually with AES-256-GCM using a data encryption key (DEK). The DEK is wrapped by your age keypair and stored in the `.sec` file. This makes `.sec` files git-mergeable — changing one secret only affects that line.
@@ -99,6 +109,10 @@ aws/               AWS KMS encryption (internal)
 | `latest` | Release PR merge | `npm install dotsec` |
 | `beta` | Every commit on `main` | `npm install dotsec@beta` |
 | `<branch-slug>` | Every PR commit | `npm install dotsec@<branch-slug>` |
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for build/test instructions, the fuzzing harness, the LocalStack KMS integration test, and the release workflow.
 
 ---
 
