@@ -27,16 +27,16 @@
       "path": "/pr-25/"
     },
     {
-      "label": "#34 docs/remove-card-wiggle",
-      "path": "/pr-34/"
-    },
-    {
       "label": "#22 release-plz-2026-05-29T11-28-03Z",
       "path": "/pr-22/"
     },
     {
       "label": "#35 feat/kms-encryption-context",
       "path": "/pr-35/"
+    },
+    {
+      "label": "#34 docs/remove-card-wiggle",
+      "path": "/pr-34/"
     }
   ],
   "latest": "/v6.0.0/"
