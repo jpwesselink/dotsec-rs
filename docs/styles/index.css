@@ -27,12 +27,15 @@
 }
 
 /* Home feature cards: rspress applies a JS-driven 3D mouse-tracking tilt
-   (rotateX/rotateY + perspective + a shine overlay) via inline styles from
-   `useCardAnimation`. Reads as a wiggle on hover. Override with `!important`
-   because the transform is inline-styled and we can't touch the JS. */
-.rp-home-feature__card,
-.rp-home-feature__card-inner {
+   via `useCardAnimation` — `perspective(...)` is set as an inline style on
+   `.rp-home-feature__item`, and `rotateX(...) rotateY(...)` on the inner
+   `.rp-home-feature__item-wrapper`. Plus `transform-style: preserve-3d` to
+   make the 3D real, and a shine overlay div. Reads as a wiggle on hover.
+   Override all of it with `!important` since the transforms are inline. */
+.rp-home-feature__item,
+.rp-home-feature__item-wrapper {
   transform: none !important;
+  transform-style: flat !important;
 }
 .rp-home-feature__item__shine {
   display: none !important;
