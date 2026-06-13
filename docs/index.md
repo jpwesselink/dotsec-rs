@@ -37,3 +37,71 @@ features:
     details: The wrapped DEK is a plain age envelope. Anyone with the private key can decrypt it with the age or rage CLI directly — your secrets are never trapped in a bespoke format.
     link: /guide/encryption#why-age
 ---
+
+## What is a `.sec` file?
+
+A `.sec` file is your `.env` file, encrypted. Same `KEY=value` shape, same workflow — except the values are AES-256-GCM encrypted and the file is safe to commit to git.
+
+Your code keeps reading `process.env.X` (or `os.environ`, or `ENV[]`, whichever applies). The plaintext only exists in memory while your app is running under `dotsec run`.
+
+### Before — `.env` (gitignored, plaintext)
+
+```bash
+DATABASE_URL=postgres://user:pass@localhost:5432/myapp
+API_KEY=sk_live_xY9abc...
+PORT=3000
+```
+
+### After — `.sec` (committed, encrypted)
+
+```bash
+# @dotsec(format=v3, mac=base64-32-bytes..., dek=base64-wrapped-dek...)
+
+# @encrypt
+DATABASE_URL=ENC[base64...]
+
+# @encrypt
+API_KEY=ENC[base64...]
+
+PORT=3000
+```
+
+`dotsec import` does the transformation in one command. Commit `.sec`, delete `.env`, run your app the same way you always have — `dotsec run -- <your command>` decrypts in memory and injects the env vars into your process. No code change, no SDK, no plaintext on disk.
+
+## …and you can have types on them
+
+Add `@type`, `@format`, `@min`/`@max`, or `@enum` directives to constrain values. `dotsec validate` enforces them on every load — and the same directives generate a TypeScript validator with zero runtime dependencies.
+
+```bash
+# @encrypt @type=string @format=url @not-empty
+DATABASE_URL=ENC[base64...]
+
+# @encrypt @type=string @min-length=32
+API_KEY=ENC[base64...]
+
+# @type=number @min=1024 @max=65535
+PORT=3000
+
+# @type=enum("development", "staging", "production")
+NODE_ENV=production
+```
+
+Then run:
+
+```bash
+dotsec schema export --format ts -o src/env.ts
+```
+
+**Like a Svelte compile: dotsec does its work and disappears.** `src/env.ts` is real, committed, dependency-free TypeScript — your app imports `parseEnv` from `./env`, never from `dotsec`. Regenerate when the schema changes; the type system catches every breakage.
+
+```ts
+import { parseEnv } from './env';
+
+const env = parseEnv();   // validates at startup, throws on error
+env.PORT;                 // number
+env.NODE_ENV;             // "development" | "staging" | "production"
+env.DATABASE_URL;         // string (validated as URL)
+env.API_KEY;              // string, 32+ chars
+```
+
+Run `grep import src/env.ts` and you'll find nothing — that's the whole point. JSON Schema export (`--format json`) works the same way.
