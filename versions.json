@@ -33,10 +33,6 @@
     {
       "label": "#42 release-plz-2026-06-13T13-54-53Z",
       "path": "/pr-42/"
-    },
-    {
-      "label": "#43 release-plz-2026-06-13T13-54-55Z",
-      "path": "/pr-43/"
     }
   ],
   "latest": "/v6.0.0/"
