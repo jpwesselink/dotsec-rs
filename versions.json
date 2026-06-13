@@ -29,10 +29,6 @@
     {
       "label": "#22 release-plz-2026-05-29T11-28-03Z",
       "path": "/pr-22/"
-    },
-    {
-      "label": "#36 docs/remove-card-wiggle",
-      "path": "/pr-36/"
     }
   ],
   "latest": "/v6.0.0/"
