@@ -41,6 +41,10 @@
     {
       "label": "#42 release-plz-2026-06-13T13-54-53Z",
       "path": "/pr-42/"
+    },
+    {
+      "label": "#49 fix/validator-false-positive-default-encrypt",
+      "path": "/pr-49/"
     }
   ],
   "latest": "/v7.0.1/"
