@@ -1,0 +1,604 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>V3 Wire Format: File-Level MAC + Structured Header Block (F1 + F6) - dotsec</title>
+<script src="/dotsec-rs/version-switcher.js" defer>
+  <script>{;const saved = localStorage.getItem('rspress-theme-appearance');const preferDark = window.matchMedia('(prefers-color-scheme: dark)').matches;const isDark = !saved || saved === 'auto' ? preferDark : saved === 'dark';document.documentElement.classList.toggle('dark', isDark);document.documentElement.classList.toggle('rp-dark', isDark);document.documentElement.style.colorScheme = isDark ? 'dark' : 'light';}</script>
+<link href="/dotsec-rs/pr-50/static/css/styles.eb28f81c80.css" rel="stylesheet">
+<script defer src="/dotsec-rs/pr-50/static/js/styles.35a12ac0d5.js"></script>
+<script defer src="/dotsec-rs/pr-50/static/js/lib-react.a054607913.js"></script>
+<script defer src="/dotsec-rs/pr-50/static/js/lib-router.b2c64079c3.js"></script>
+<script defer src="/dotsec-rs/pr-50/static/js/613.d46e225703.js"></script>
+<script defer src="/dotsec-rs/pr-50/static/js/index.400a3ff25a.js"></script>
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="generator" content="Rspress v2.0.5">
+<meta property="og:type" content="website">
+<meta property="og:title" content="V3 Wire Format: File-Level MAC + Structured Header Block (F1 + F6) - dotsec">
+<meta name="description" content="Status: Implemented on feat/v3-format-mac-header. Two refinements landed mid-implementation — read those before treating this doc as the source of truth.Refinement 1 — MAC scope tightened. The plan below describes including plain:<value> in the canonical bytes. That broke the dev loop (hand-editing a plaintext PORT=3000 → PORT=4000 would invalidate the MAC). The shipped implementation drops plaintext values from canonical bytes; entry names and ENC[…] ciphertexts are still covered. See docs/guide/encryption.md § File-level MAC for the final scope.Refinement 2 — Schema hash canonicalized. The plan below hashes raw schema file bytes. That made cosmetic edits (@description, reordering) invalidate every teammate's MACs. The shipped implementation hashes a canonical form via dotenv::schema_to_canonical_bytes (sorted directives, descriptions/whitespace stripped). Only semantic schema changes (@type, @encrypt, @push, @max, …) flip the hash.Refinement 3 — dotsec encrypt is required, not deferred. The plan listed dotsec re-mac as &quot;defer unless users ask.&quot; The MAC-mismatch error path needs an obvious recovery command, so dotsec encrypt shipped as part of the v3 work. For agentic workers: REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking. Source: Findings F1 (file-level MAC over directives) and F6 (structured header block) from the 2026-05-12 external security review of PR #13. F1 is the S1 (critical) finding; F6 pairs naturally so we bump the wire format only once. Goal: Authenticate all .sec file content (directives, key names, encrypted-value bindings, schema reference) under the DEK so that tampering with any plaintext metadata — @push targets, @key-id, @type constraints — invalidates the file. Restructure the file envelope into a dedicated header block to make the on-disk model legible and forward-compatible. Non-goals: AWS EncryptionContext (F2 — separate plan, gates on V3). Multi-recipient support (F3 — separate plan). Local key-file location changes (F5 — separate plan). Architecture summary: New wire format V3, detected via a #!dotsec format=v3 header line. V2 files remain readable forever, with a deprecation warning on every read.File envelope moves out of dotenv KV space into a #!dotsec key=value header block parsed before any KV.__DOTSEC_KEY__ (Kv line) → #!dotsec key=<base64> (header line). Same wrapped DEK bytes.New #!dotsec mac=<base64> = HMAC-SHA256(DEK, canonical_serialization(file)). Covers directives, key ordering, plaintext values, and the ENC[...] markers themselves (so ciphertext-to-key bindings are MAC-authenticated, not just the AAD-protected plaintext).New dotsec upgrade-format CLI command for opt-in V2→V3 migration.Schema interaction: if dotsec.schema exists, its SHA-256 content hash is mixed into the MAC's AAD. Schema content is git-tracked; this makes schema-tamper detection a side effect of file-MAC verification. Tech stack: Rust, hmac (already a dep via crypto crate), sha2, base64. No new dependencies. Threat model recap: F1 closes three concrete attacks documented in the security review — push redirection, KMS hijack on next rotate, and type-validation bypass. See section &quot;Attack scenarios&quot; below for the test cases each scenario produces.">
+<meta property="og:description" content="Status: Implemented on feat/v3-format-mac-header. Two refinements landed mid-implementation — read those before treating this doc as the source of truth.Refinement 1 — MAC scope tightened. The plan below describes including plain:<value> in the canonical bytes. That broke the dev loop (hand-editing a plaintext PORT=3000 → PORT=4000 would invalidate the MAC). The shipped implementation drops plaintext values from canonical bytes; entry names and ENC[…] ciphertexts are still covered. See docs/guide/encryption.md § File-level MAC for the final scope.Refinement 2 — Schema hash canonicalized. The plan below hashes raw schema file bytes. That made cosmetic edits (@description, reordering) invalidate every teammate's MACs. The shipped implementation hashes a canonical form via dotenv::schema_to_canonical_bytes (sorted directives, descriptions/whitespace stripped). Only semantic schema changes (@type, @encrypt, @push, @max, …) flip the hash.Refinement 3 — dotsec encrypt is required, not deferred. The plan listed dotsec re-mac as &quot;defer unless users ask.&quot; The MAC-mismatch error path needs an obvious recovery command, so dotsec encrypt shipped as part of the v3 work. For agentic workers: REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking. Source: Findings F1 (file-level MAC over directives) and F6 (structured header block) from the 2026-05-12 external security review of PR #13. F1 is the S1 (critical) finding; F6 pairs naturally so we bump the wire format only once. Goal: Authenticate all .sec file content (directives, key names, encrypted-value bindings, schema reference) under the DEK so that tampering with any plaintext metadata — @push targets, @key-id, @type constraints — invalidates the file. Restructure the file envelope into a dedicated header block to make the on-disk model legible and forward-compatible. Non-goals: AWS EncryptionContext (F2 — separate plan, gates on V3). Multi-recipient support (F3 — separate plan). Local key-file location changes (F5 — separate plan). Architecture summary: New wire format V3, detected via a #!dotsec format=v3 header line. V2 files remain readable forever, with a deprecation warning on every read.File envelope moves out of dotenv KV space into a #!dotsec key=value header block parsed before any KV.__DOTSEC_KEY__ (Kv line) → #!dotsec key=<base64> (header line). Same wrapped DEK bytes.New #!dotsec mac=<base64> = HMAC-SHA256(DEK, canonical_serialization(file)). Covers directives, key ordering, plaintext values, and the ENC[...] markers themselves (so ciphertext-to-key bindings are MAC-authenticated, not just the AAD-protected plaintext).New dotsec upgrade-format CLI command for opt-in V2→V3 migration.Schema interaction: if dotsec.schema exists, its SHA-256 content hash is mixed into the MAC's AAD. Schema content is git-tracked; this makes schema-tamper detection a side effect of file-MAC verification. Tech stack: Rust, hmac (already a dep via crypto crate), sha2, base64. No new dependencies. Threat model recap: F1 closes three concrete attacks documented in the security review — push redirection, KMS hijack on next rotate, and type-validation bypass. See section &quot;Attack scenarios&quot; below for the test cases each scenario produces."></head>
+
+  <body>
+    <div id="__rspress_root"><header class="rp-nav"><div class="rp-nav__left"><div class="rp-nav__title"><a href="/dotsec-rs/pr-50/" class="rp-nav__title__link rp-link"><span>dotsec</span></a></div></div><div class="rp-nav__right"><button class="rp-search-button"><div class="rp-search-button__content"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" fill="none" viewBox="0 0 20 21" class="rp-search-button__icon"><path fill="currentColor" d="M8.333 1.913A6.667 6.667 0 0 1 15 8.58c0 1.54-.525 2.957-1.402 4.085l4.49 4.492a.834.834 0 0 1-1.177 1.178l-4.491-4.49a6.64 6.64 0 0 1-4.087 1.402 6.667 6.667 0 0 1 0-13.334m0 1.667a5 5 0 1 0 0 10 5 5 0 0 0 0-10"></path></svg><span class="rp-search-button__word">Search</span></div><div class="rp-search-button__hotkey" style="opacity:0"><span></span><span>K</span></div></button><div class="rp-search-button--mobile"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" fill="none" viewBox="0 0 20 21"><path fill="currentColor" d="M8.333 1.913A6.667 6.667 0 0 1 15 8.58c0 1.54-.525 2.957-1.402 4.085l4.49 4.492a.834.834 0 0 1-1.177 1.178l-4.491-4.49a6.64 6.64 0 0 1-4.087 1.402 6.667 6.667 0 0 1 0-13.334m0 1.667a5 5 0 1 0 0 10 5 5 0 0 0 0-10"></path></svg></div><div class="rp-nav__others"><div class="rp-nav-menu__divider"></div><div class="rp-switch-appearance"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" class="rp-switch-appearance__icon rp-switch-appearance__icon--sun"><path fill="currentColor" d="m7.001 15.848-1.226 1.226a.58.58 0 0 0 0 .818.58.58 0 0 0 .818 0l1.226-1.226a.58.58 0 0 0 0-.818.58.58 0 0 0-.818 0m-.352-8.735a.584.584 0 0 0 .825-.825L6.237 5.051a.584.584 0 0 0-.825.825zM5.011 11.07h-1.75a.584.584 0 0 0 0 1.167h1.75c.324 0 .584-.26.584-.583a.585.585 0 0 0-.584-.584m7.003-5.835c.324 0 .584-.26.584-.584V2.9a.58.58 0 0 0-.584-.584.58.58 0 0 0-.583.583V4.65c0 .323.262.584.583.584m5.616 1.621 1.226-1.225a.58.58 0 0 0 0-.818.58.58 0 0 0-.818 0l-1.226 1.225a.58.58 0 0 0 0 .818.576.576 0 0 0 .818 0m3.138 4.214h-1.75a.58.58 0 0 0-.584.584c0 .324.26.584.583.584h1.751a.584.584 0 1 0 0-1.167m-3.389 5.124a.584.584 0 0 0-.825.825l1.238 1.238a.584.584 0 0 0 .825-.826zm-5.365-9.795a5.256 5.256 0 0 0-5.257 5.258 5.256 5.256 0 0 0 5.257 5.257 5.256 5.256 0 0 0 5.257-5.257 5.256 5.256 0 0 0-5.257-5.258m0 11.675a.58.58 0 0 0-.583.583v1.751a.582.582 0 1 0 1.167 0v-1.75a.584.584 0 0 0-.584-.584"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="19" height="19" fill="currentColor" viewBox="0 0 19 19" class="rp-switch-appearance__icon rp-switch-appearance__icon--moon"><path fill="currentColor" d="M9.166 0a9.2 9.2 0 0 1 1.857.188.834.834 0 0 1 .042 1.623 4.47 4.47 0 1 0 5.457 5.457l.048-.135a.834.834 0 0 1 1.575.177q.186.902.188 1.856A9.168 9.168 0 1 1 9.166 0"></path></svg></div><div class="rp-social-links"><a href="https://github.com/jpwesselink/dotsec-rs" target="_blank" rel="noopener noreferrer" class="rp-social-links__item"><div class="rp-social-links__icon"><div class="rp-social-links__icon"><svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 24 24"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12c0 5.303 3.438 9.8 8.205 11.385c.6.113.82-.258.82-.577c0-.285-.01-1.04-.015-2.04c-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729c1.205.084 1.838 1.236 1.838 1.236c1.07 1.835 2.809 1.305 3.495.998c.108-.776.417-1.305.76-1.605c-2.665-.3-5.466-1.332-5.466-5.93c0-1.31.465-2.38 1.235-3.22c-.135-.303-.54-1.523.105-3.176c0 0 1.005-.322 3.3 1.23c.96-.267 1.98-.399 3-.405c1.02.006 2.04.138 3 .405c2.28-1.552 3.285-1.23 3.285-1.23c.645 1.653.24 2.873.12 3.176c.765.84 1.23 1.91 1.23 3.22c0 4.61-2.805 5.625-5.475 5.92c.42.36.81 1.096.81 2.22c0 1.606-.015 2.896-.015 3.286c0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></div></div></a><ul class="rp-hover-group rp-hover-group--hidden rp-hover-group--right"></ul></div></div><button aria-label="mobile hamburger" class="rp-nav-hamburger rp-nav-hamburger__sm"><svg xmlns="http://www.w3.org/2000/svg" width="21" height="21" fill="none" viewBox="0 0 21 21"><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.667" d="M3.645 5.225h13.333M3.645 10.225h13.333M3.645 15.225h13.333"></path></svg></button><button aria-label="mobile hamburger" class="rp-nav-hamburger rp-nav-hamburger__md"><svg xmlns="http://www.w3.org/2000/svg" width="21" height="21" fill="none" viewBox="0 0 21 21"><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.667" d="M3.645 5.225h13.333M3.645 10.225h13.333M3.645 15.225h13.333"></path></svg><ul class="rp-hover-group rp-hover-group--hidden rp-hover-group--right"><div class="rp-nav-menu__others-mobile__container"><div class="rp-nav-hamburger__md__hover-group"><div class="rp-nav-screen-appearance"><div class="rp-nav-screen-appearance__left">Theme</div><div class="rp-nav-screen-appearance__right"></div></div><div class="rp-nav-screen-divider"></div><div class="rp-social-links"><a href="https://github.com/jpwesselink/dotsec-rs" target="_blank" rel="noopener noreferrer" class="rp-social-links__item"><div class="rp-social-links__icon"><div class="rp-social-links__icon"><svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 24 24"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12c0 5.303 3.438 9.8 8.205 11.385c.6.113.82-.258.82-.577c0-.285-.01-1.04-.015-2.04c-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729c1.205.084 1.838 1.236 1.838 1.236c1.07 1.835 2.809 1.305 3.495.998c.108-.776.417-1.305.76-1.605c-2.665-.3-5.466-1.332-5.466-5.93c0-1.31.465-2.38 1.235-3.22c-.135-.303-.54-1.523.105-3.176c0 0 1.005-.322 3.3 1.23c.96-.267 1.98-.399 3-.405c1.02.006 2.04.138 3 .405c2.28-1.552 3.285-1.23 3.285-1.23c.645 1.653.24 2.873.12 3.176c.765.84 1.23 1.91 1.23 3.22c0 4.61-2.805 5.625-5.475 5.92c.42.36.81 1.096.81 2.22c0 1.606-.015 2.896-.015 3.286c0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></div></div></a><ul class="rp-hover-group rp-hover-group--hidden rp-hover-group--right"></ul></div></div></div></ul></button></div></header><div class="rp-doc-layout__menu"><div class="rp-sidebar-menu"><button type="button" class="rp-sidebar-menu__left"><svg width="1em" height="1em" viewBox="0 0 32 32"><path fill="currentColor" d="M4 6h24v2H4zm0 18h24v2H4zm0-12h24v2H4zm0 6h24v2H4z"></path></svg><span>Menu</span></button><button type="button" class="rp-sidebar-menu__right"><span class="rp-sidebar-menu__right__text">ON THIS PAGE</span><svg width="14" height="14" class="rp-progress-circle"><circle cx="7" cy="7" r="6" stroke-linecap="round" fill="none" stroke="var(--rp-c-divider-light)" stroke-width="2"></circle><circle cx="7" cy="7" r="6" stroke-linecap="round" fill="none" stroke="var(--rp-c-brand)" stroke-width="2" stroke-dasharray="37.69911184307752" stroke-dashoffset="37.69911184307752" transform="rotate(-90 7 7)" style="transition:stroke-dashoffset 0.3s"></circle></svg><svg width="1em" height="1em" viewBox="0 0 32 32" class="rp-sidebar-menu__right__icon" style="transform:rotate(0deg);transition:transform 0.2s ease-out"><path fill="currentColor" d="M22 16 12 26l-1.4-1.4 8.6-8.6-8.6-8.6L12 6z"></path></svg></button></div></div><div class="rp-doc-layout__container"><aside class="rp-doc-layout__sidebar rp-scrollbar"><a href="/dotsec-rs/pr-50/guide/index.html" class="rp-sidebar-item rp-sidebar-group rp-link" style="padding-left:12px" data-depth="0"><div class="rp-sidebar-item__left"><span>Guide</span></div><div class="rp-sidebar-item__right"><div style="cursor:pointer;transition:transform 0.2s ease-out;transform:rotate(90deg)"><svg width="1em" height="1em" viewBox="0 0 32 32"><path fill="currentColor" d="M22 16 12 26l-1.4-1.4 8.6-8.6-8.6-8.6L12 6z"></path></svg></div></div></a><div style="display:grid;grid-template-rows:1fr;transition:grid-template-rows 0.2s ease-out"><div style="overflow:hidden"><a href="/dotsec-rs/pr-50/guide/index.html" class="rp-sidebar-item rp-sidebar-item--group-item rp-link" style="padding-left:calc(12px * 1 + 12px)" data-depth="1"><div class="rp-sidebar-item__left"><span>Getting Started</span></div><div class="rp-sidebar-item__right"></div></a><a href="/dotsec-rs/pr-50/guide/setup.html" class="rp-sidebar-item rp-sidebar-item--group-item rp-link" style="padding-left:calc(12px * 1 + 12px)" data-depth="1"><div class="rp-sidebar-item__left"><span>Setup</span></div><div class="rp-sidebar-item__right"></div></a><a href="/dotsec-rs/pr-50/guide/commands.html" class="rp-sidebar-item rp-sidebar-item--group-item rp-link" style="padding-left:calc(12px * 1 + 12px)" data-depth="1"><div class="rp-sidebar-item__left"><span>Commands</span></div><div class="rp-sidebar-item__right"></div></a><a href="/dotsec-rs/pr-50/guide/directives.html" class="rp-sidebar-item rp-sidebar-item--group-item rp-link" style="padding-left:calc(12px * 1 + 12px)" data-depth="1"><div class="rp-sidebar-item__left"><span>Directives</span></div><div class="rp-sidebar-item__right"></div></a><a href="/dotsec-rs/pr-50/guide/ci.html" class="rp-sidebar-item rp-sidebar-item--group-item rp-link" style="padding-left:calc(12px * 1 + 12px)" data-depth="1"><div class="rp-sidebar-item__left"><span>CI/CD</span></div><div class="rp-sidebar-item__right"></div></a><a href="/dotsec-rs/pr-50/guide/encryption.html" class="rp-sidebar-item rp-sidebar-item--group-item rp-link" style="padding-left:calc(12px * 1 + 12px)" data-depth="1"><div class="rp-sidebar-item__left"><span>How Encryption Works</span></div><div class="rp-sidebar-item__right"></div></a><a href="/dotsec-rs/pr-50/guide/security.html" class="rp-sidebar-item rp-sidebar-item--group-item rp-link" style="padding-left:calc(12px * 1 + 12px)" data-depth="1"><div class="rp-sidebar-item__left"><span>Security Model</span></div><div class="rp-sidebar-item__right"></div></a><a href="/dotsec-rs/pr-50/guide/operations.html" class="rp-sidebar-item rp-sidebar-item--group-item rp-link" style="padding-left:calc(12px * 1 + 12px)" data-depth="1"><div class="rp-sidebar-item__left"><span>Operations: Rotation &amp; Incident Response</span></div><div class="rp-sidebar-item__right"></div></a><a href="/dotsec-rs/pr-50/guide/library.html" class="rp-sidebar-item rp-sidebar-item--group-item rp-link" style="padding-left:calc(12px * 1 + 12px)" data-depth="1"><div class="rp-sidebar-item__left"><span>Library Usage</span></div><div class="rp-sidebar-item__right"></div></a><a href="/dotsec-rs/pr-50/guide/troubleshooting.html" class="rp-sidebar-item rp-sidebar-item--group-item rp-link" style="padding-left:calc(12px * 1 + 12px)" data-depth="1"><div class="rp-sidebar-item__left"><span>Troubleshooting</span></div><div class="rp-sidebar-item__right"></div></a></div></div></aside><div class="rp-doc-layout__doc"><main class="rp-doc-layout__doc-container"><div class="rp-doc rspress-doc"><!--$--><h1 class="rp-toc-include" id="v3-wire-format-file-level-mac--structured-header-block-f1--f6"><a href="#v3-wire-format-file-level-mac--structured-header-block-f1--f6" class="rp-header-anchor rp-link" aria-hidden="true">#</a>V3 Wire Format: File-Level MAC + Structured Header Block (F1 + F6)<!-- --> </h1>
+<blockquote>
+<p><strong>Status:</strong> Implemented on <code>feat/v3-format-mac-header</code>. Two refinements landed mid-implementation — read those before treating this doc as the source of truth.</p>
+<p><strong>Refinement 1 — MAC scope tightened.</strong> The plan below describes including <code>plain:&lt;value&gt;</code> in the canonical bytes. That broke the dev loop (hand-editing a plaintext <code>PORT=3000</code> → <code>PORT=4000</code> would invalidate the MAC). The shipped implementation drops plaintext values from canonical bytes; entry names and <code>ENC[…]</code> ciphertexts are still covered. See <code>docs/guide/encryption.md</code> § File-level MAC for the final scope.</p>
+<p><strong>Refinement 2 — Schema hash canonicalized.</strong> The plan below hashes raw schema file bytes. That made cosmetic edits (<code>@description</code>, reordering) invalidate every teammate&#x27;s MACs. The shipped implementation hashes a canonical form via <code>dotenv::schema_to_canonical_bytes</code> (sorted directives, descriptions/whitespace stripped). Only semantic schema changes (<code>@type</code>, <code>@encrypt</code>, <code>@push</code>, <code>@max</code>, …) flip the hash.</p>
+<p><strong>Refinement 3 — <code>dotsec encrypt</code> is required, not deferred.</strong> The plan listed <code>dotsec re-mac</code> as &quot;defer unless users ask.&quot; The MAC-mismatch error path needs an obvious recovery command, so <code>dotsec encrypt</code> shipped as part of the v3 work.</p>
+</blockquote>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Source:</strong> Findings F1 (file-level MAC over directives) and F6 (structured header block) from the 2026-05-12 external security review of PR #13. F1 is the S1 (critical) finding; F6 pairs naturally so we bump the wire format only once.</p>
+<p><strong>Goal:</strong> Authenticate all <code>.sec</code> file content (directives, key names, encrypted-value bindings, schema reference) under the DEK so that tampering with any plaintext metadata — <code>@push</code> targets, <code>@key-id</code>, <code>@type</code> constraints — invalidates the file. Restructure the file envelope into a dedicated header block to make the on-disk model legible and forward-compatible.</p>
+<p><strong>Non-goals:</strong> AWS <code>EncryptionContext</code> (F2 — separate plan, gates on V3). Multi-recipient support (F3 — separate plan). Local key-file location changes (F5 — separate plan).</p>
+<p><strong>Architecture summary:</strong></p>
+<ul>
+<li>New wire format <strong>V3</strong>, detected via a <code>#!dotsec format=v3</code> header line. V2 files remain readable forever, with a deprecation warning on every read.</li>
+<li>File envelope moves out of dotenv KV space into a <code>#!dotsec key=value</code> header block parsed before any KV.</li>
+<li><strong><code>__DOTSEC_KEY__</code></strong> (Kv line) → <strong><code>#!dotsec key=&lt;base64&gt;</code></strong> (header line). Same wrapped DEK bytes.</li>
+<li>New <strong><code>#!dotsec mac=&lt;base64&gt;</code></strong> = HMAC-SHA256(DEK, canonical_serialization(file)). Covers directives, key ordering, plaintext values, and the <code>ENC[...]</code> markers themselves (so ciphertext-to-key bindings are MAC-authenticated, not just the AAD-protected plaintext).</li>
+<li>New <strong><code>dotsec upgrade-format</code></strong> CLI command for opt-in V2→V3 migration.</li>
+<li>Schema interaction: if <code>dotsec.schema</code> exists, its SHA-256 content hash is mixed into the MAC&#x27;s AAD. Schema content is git-tracked; this makes schema-tamper detection a side effect of file-MAC verification.</li>
+</ul>
+<p><strong>Tech stack:</strong> Rust, <code>hmac</code> (already a dep via <code>crypto</code> crate), <code>sha2</code>, <code>base64</code>. No new dependencies.</p>
+<p><strong>Threat model recap:</strong> F1 closes three concrete attacks documented in the security review — push redirection, KMS hijack on next rotate, and type-validation bypass. See <a href="#attack-scenarios" class="rp-link">section &quot;Attack scenarios&quot;</a> below for the test cases each scenario produces.</p>
+<hr/>
+<h2 class="rp-toc-include" id="file-structure"><a href="#file-structure" class="rp-header-anchor rp-link" aria-hidden="true">#</a>File Structure</h2>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="rp-table-scroll-container rp-scrollbar"><table><thead><tr><th>File</th><th>Action</th><th>Responsibility</th></tr></thead><tbody><tr><td><code>crypto/src/lib.rs</code></td><td>Modify</td><td>Add <code>compute_file_mac</code> / <code>verify_file_mac</code> using HMAC-SHA256</td></tr><tr><td><code>crypto/src/mac.rs</code></td><td>Create</td><td>Canonical serialization helpers for MAC input</td></tr><tr><td><code>dotsec-core/src/lib.rs</code></td><td>Modify</td><td>V3 detection, header parsing, MAC compute/verify on encrypt/decrypt, threading schema hash</td></tr><tr><td><code>dotsec-core/src/format.rs</code></td><td>Create</td><td><code>SecFormat</code> enum (V1/V2/V3), header block parser/writer</td></tr><tr><td><code>dotenv/src/lib.rs</code></td><td>Modify</td><td>Recognize <code>#!dotsec</code> header lines (parsed separately from comments)</td></tr><tr><td><code>dotsec/src/cli/commands/upgrade_format.rs</code></td><td>Create</td><td>New <code>dotsec upgrade-format</code> command</td></tr><tr><td><code>dotsec/src/cli/commands/mod.rs</code></td><td>Modify</td><td>Register <code>upgrade-format</code> subcommand</td></tr><tr><td><code>dotsec/src/cli/commands/set.rs</code></td><td>Modify</td><td>Write V3 for new files; warn on V2 writes</td></tr><tr><td><code>dotsec/src/cli/commands/rotate_key.rs</code></td><td>Modify</td><td>Re-MAC after DEK rotation</td></tr><tr><td><code>dotsec/src/cli/commands/format.rs</code></td><td>Modify</td><td>Re-MAC after reorder</td></tr><tr><td><code>dotsec/src/cli/commands/remove_directives.rs</code></td><td>Modify</td><td>Re-MAC after directive strip</td></tr><tr><td><code>docs/guide/encryption.md</code></td><td>Modify</td><td>Document V3 format, MAC scope, upgrade flow</td></tr><tr><td><code>docs/guide/commands.md</code></td><td>Modify</td><td>Document <code>upgrade-format</code></td></tr><tr><td><code>docs/superpowers/specs/2026-05-13-v3-format.md</code></td><td>Create</td><td>Wire format spec doc (separate from this plan)</td></tr></tbody></table></div>
+<hr/>
+<h2 class="rp-toc-include" id="wire-format-v3"><a href="#wire-format-v3" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Wire format V3</h2>
+<p>A V3 <code>.sec</code> file has three regions in order: <strong>header block</strong>, <strong>directive block</strong> (existing <code># @directive</code> comments), <strong>KV block</strong> (existing <code>KEY=value</code> lines).</p>
+<div class="rp-codeblock language-txt"><div class="rp-codeblock__content"><div class="rp-codeblock__content__scroll-container rp-scrollbar rp-scrollbar--always"><pre class="shiki css-variables" style="background-color:var(--shiki-background);color:var(--shiki-foreground)" tabindex="0" data-lang="txt"><code><span class="line"><span>#!dotsec format=v3</span></span>
+<span class="line"><span>#!dotsec key=AQIDAH...base64...</span></span>
+<span class="line"><span>#!dotsec mac=base64...</span></span>
+<span class="line"><span></span></span>
+<span class="line"><span># @provider=aws @key-id=alias/dotsec @region=eu-west-1 @default-encrypt</span></span>
+<span class="line"><span></span></span>
+<span class="line"><span># @encrypt @type=string</span></span>
+<span class="line"><span>DATABASE_URL=ENC[...]</span></span>
+<span class="line"><span></span></span>
+<span class="line"><span>PORT=3000</span></span></code></pre></div><div class="rp-code-button-group"><button class="rp-code-button-group__button rp-code-wrap-button" title="Toggle code wrap"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-button-group__icon--wrapped"><path fill="#22a041" d="M21 5H3v2h18zM3 19h7v-2H3zm0-6h15c1 0 2 .43 2 2s-1 2-2 2h-2v-2l-4 3 4 3v-2h2c2.95 0 4-1.27 4-4 0-2.72-1-4-4-4H3z"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-button-group__icon--wrap"><path fill="currentColor" d="M16 7H3V5h13zM3 19h13v-2H3zm19-7-4-3v2H3v2h15v2z"></path></svg></button><button class="rp-code-button-group__button rp-code-copy-button" title="Copy code"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-copy-button__icon rp-code-copy-button__icon--copy"><path fill="currentColor" d="M20 8v12H8V8zm0-2H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2"></path><path fill="currentColor" d="M4 16H2V4a2 2 0 0 1 2-2h12v2H4Z"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-copy-button__icon rp-code-copy-button__icon--success"><path fill="#49cd37" d="m9.55 18-5.7-5.7 1.425-1.425L9.55 15.15l9.175-9.175L20.15 7.4z"></path></svg></button></div></div></div>
+<h3 class="rp-toc-include" id="header-line-grammar"><a href="#header-line-grammar" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Header line grammar</h3>
+<div class="rp-codeblock language-txt"><div class="rp-codeblock__content"><div class="rp-codeblock__content__scroll-container rp-scrollbar rp-scrollbar--always"><pre class="shiki css-variables" style="background-color:var(--shiki-background);color:var(--shiki-foreground)" tabindex="0" data-lang="txt"><code><span class="line"><span>header_line = &quot;#!dotsec&quot; SP key &quot;=&quot; value NL</span></span>
+<span class="line"><span>key         = [a-z][a-z0-9-]*</span></span>
+<span class="line"><span>value       = printable bytes except NL</span></span></code></pre></div><div class="rp-code-button-group"><button class="rp-code-button-group__button rp-code-wrap-button" title="Toggle code wrap"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-button-group__icon--wrapped"><path fill="#22a041" d="M21 5H3v2h18zM3 19h7v-2H3zm0-6h15c1 0 2 .43 2 2s-1 2-2 2h-2v-2l-4 3 4 3v-2h2c2.95 0 4-1.27 4-4 0-2.72-1-4-4-4H3z"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-button-group__icon--wrap"><path fill="currentColor" d="M16 7H3V5h13zM3 19h13v-2H3zm19-7-4-3v2H3v2h15v2z"></path></svg></button><button class="rp-code-button-group__button rp-code-copy-button" title="Copy code"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-copy-button__icon rp-code-copy-button__icon--copy"><path fill="currentColor" d="M20 8v12H8V8zm0-2H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2"></path><path fill="currentColor" d="M4 16H2V4a2 2 0 0 1 2-2h12v2H4Z"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-copy-button__icon rp-code-copy-button__icon--success"><path fill="#49cd37" d="m9.55 18-5.7-5.7 1.425-1.425L9.55 15.15l9.175-9.175L20.15 7.4z"></path></svg></button></div></div></div>
+<p>Header lines must precede any directive comment or KV line. First non-header line terminates the header block.</p>
+<p><strong>Recognized header keys</strong> (V3 baseline):</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="rp-table-scroll-container rp-scrollbar"><table><thead><tr><th>Key</th><th>Required</th><th>Format</th><th>Notes</th></tr></thead><tbody><tr><td><code>format</code></td><td>yes</td><td><code>v3</code> (literal)</td><td>Format discriminator</td></tr><tr><td><code>key</code></td><td>yes</td><td>base64</td><td>Wrapped DEK (replaces <code>__DOTSEC_KEY__</code>)</td></tr><tr><td><code>mac</code></td><td>yes</td><td>base64</td><td>HMAC-SHA256(DEK, canonical)</td></tr></tbody></table></div>
+<p>Unknown header keys are preserved on write and ignored on read (forward compatibility). Reserved future keys: <code>kms-context</code> (F2), <code>recipients</code> (F3).</p>
+<h3 class="rp-toc-include" id="mac-input--canonical-serialization"><a href="#mac-input--canonical-serialization" class="rp-header-anchor rp-link" aria-hidden="true">#</a>MAC input — canonical serialization</h3>
+<p>The canonical serialization is the bytes that go into <code>HMAC-SHA256(DEK, ·)</code>. It must be deterministic across encrypts of equivalent content and must cover every piece of plaintext that influences runtime behavior.</p>
+<p><strong>Pseudocode:</strong></p>
+<div class="rp-codeblock language-txt"><div class="rp-codeblock__content"><div class="rp-codeblock__content__scroll-container rp-scrollbar rp-scrollbar--always"><pre class="shiki css-variables" style="background-color:var(--shiki-background);color:var(--shiki-foreground)" tabindex="0" data-lang="txt"><code><span class="line"><span>canonical = b&quot;&quot;</span></span>
+<span class="line"><span>canonical += b&quot;dotsec-mac-v3\n&quot;                         # domain-separation tag</span></span>
+<span class="line"><span>canonical += b&quot;schema-sha256=&quot; + hex(schema_hash) + b&quot;\n&quot;</span></span>
+<span class="line"><span>for directive in file_level_directives_sorted:           # @provider, @key-id, @region, ...</span></span>
+<span class="line"><span>    canonical += b&quot;file-directive:&quot; + directive.name + b&quot;=&quot; + directive.value.unwrap_or(&quot;&quot;) + b&quot;\n&quot;</span></span>
+<span class="line"><span>for entry in entries_in_file_order:                      # preserves order; ordering is part of the MAC</span></span>
+<span class="line"><span>    canonical += b&quot;entry:&quot; + entry.key + b&quot;\n&quot;</span></span>
+<span class="line"><span>    for directive in entry.directives_sorted:</span></span>
+<span class="line"><span>        canonical += b&quot;  directive:&quot; + directive.name + b&quot;=&quot; + directive.value.unwrap_or(&quot;&quot;) + b&quot;\n&quot;</span></span>
+<span class="line"><span>    if entry.value.starts_with(&quot;ENC[&quot;):</span></span>
+<span class="line"><span>        canonical += b&quot;  enc:&quot; + entry.value + b&quot;\n&quot;     # binds ciphertext-to-key</span></span>
+<span class="line"><span>    else:</span></span>
+<span class="line"><span>        canonical += b&quot;  plain:&quot; + entry.value + b&quot;\n&quot;   # plaintext values get MAC&#x27;d too</span></span></code></pre></div><div class="rp-code-button-group"><button class="rp-code-button-group__button rp-code-wrap-button" title="Toggle code wrap"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-button-group__icon--wrapped"><path fill="#22a041" d="M21 5H3v2h18zM3 19h7v-2H3zm0-6h15c1 0 2 .43 2 2s-1 2-2 2h-2v-2l-4 3 4 3v-2h2c2.95 0 4-1.27 4-4 0-2.72-1-4-4-4H3z"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-button-group__icon--wrap"><path fill="currentColor" d="M16 7H3V5h13zM3 19h13v-2H3zm19-7-4-3v2H3v2h15v2z"></path></svg></button><button class="rp-code-button-group__button rp-code-copy-button" title="Copy code"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-copy-button__icon rp-code-copy-button__icon--copy"><path fill="currentColor" d="M20 8v12H8V8zm0-2H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2"></path><path fill="currentColor" d="M4 16H2V4a2 2 0 0 1 2-2h12v2H4Z"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-copy-button__icon rp-code-copy-button__icon--success"><path fill="#49cd37" d="m9.55 18-5.7-5.7 1.425-1.425L9.55 15.15l9.175-9.175L20.15 7.4z"></path></svg></button></div></div></div>
+<p>Notes:</p>
+<ul>
+<li>The domain-separation tag <code>dotsec-mac-v3</code> prevents cross-format MAC reuse if we ever introduce v4.</li>
+<li><code>schema_hash</code> = SHA-256(schema file bytes) or SHA-256(b&quot;&quot;) if no schema. Deterministic in both cases.</li>
+<li>Per-entry directives are sorted by name within an entry; entries themselves stay in file order (because file order matters — <code>dotsec format</code> reorders, and we MAC that reordering).</li>
+<li>Comments, blank lines, and non-<code>@</code> whitespace are explicitly <strong>not</strong> included. Reformatting whitespace must not invalidate the MAC.</li>
+</ul>
+<hr/>
+<h2 class="rp-toc-include" id="migration-v2--v3"><a href="#migration-v2--v3" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Migration: V2 → V3</h2>
+<p>V2→V3 is a lossless transformation. Per-value <code>ENC[...]</code> ciphertexts are unchanged. Wrapped DEK bytes are unchanged (for local provider). For AWS-provider files, upgrade is also DEK-preserving in this PR (AWS <code>EncryptionContext</code> rewrap lands in F2).</p>
+<h3 class="rp-toc-include" id="dotsec-upgrade-format"><a href="#dotsec-upgrade-format" class="rp-header-anchor rp-link" aria-hidden="true">#</a><code>dotsec upgrade-format</code></h3>
+<div class="rp-codeblock language-bash"><div class="rp-codeblock__content"><div class="rp-codeblock__content__scroll-container rp-scrollbar rp-scrollbar--always"><pre class="shiki css-variables" style="background-color:var(--shiki-background);color:var(--shiki-foreground)" tabindex="0" data-lang="bash"><code><span class="line"><span style="color:var(--shiki-token-function)">dotsec</span><span style="color:var(--shiki-token-string)"> upgrade-format</span><span style="color:var(--shiki-token-comment)">                    # upgrade --sec-file (default .sec)</span></span>
+<span class="line"><span style="color:var(--shiki-token-function)">dotsec</span><span style="color:var(--shiki-token-string)"> upgrade-format</span><span style="color:var(--shiki-token-string)"> .sec.prod</span><span style="color:var(--shiki-token-comment)">          # explicit file</span></span>
+<span class="line"><span style="color:var(--shiki-token-function)">dotsec</span><span style="color:var(--shiki-token-string)"> upgrade-format</span><span style="color:var(--shiki-token-string)"> --all</span><span style="color:var(--shiki-token-comment)">              # upgrade every .sec* in cwd</span></span>
+<span class="line"><span style="color:var(--shiki-token-function)">dotsec</span><span style="color:var(--shiki-token-string)"> upgrade-format</span><span style="color:var(--shiki-token-string)"> --dry-run</span><span style="color:var(--shiki-token-comment)">          # show V3 output, write nothing</span></span></code></pre></div><div class="rp-code-button-group"><button class="rp-code-button-group__button rp-code-wrap-button" title="Toggle code wrap"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-button-group__icon--wrapped"><path fill="#22a041" d="M21 5H3v2h18zM3 19h7v-2H3zm0-6h15c1 0 2 .43 2 2s-1 2-2 2h-2v-2l-4 3 4 3v-2h2c2.95 0 4-1.27 4-4 0-2.72-1-4-4-4H3z"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-button-group__icon--wrap"><path fill="currentColor" d="M16 7H3V5h13zM3 19h13v-2H3zm19-7-4-3v2H3v2h15v2z"></path></svg></button><button class="rp-code-button-group__button rp-code-copy-button" title="Copy code"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-copy-button__icon rp-code-copy-button__icon--copy"><path fill="currentColor" d="M20 8v12H8V8zm0-2H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2"></path><path fill="currentColor" d="M4 16H2V4a2 2 0 0 1 2-2h12v2H4Z"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-copy-button__icon rp-code-copy-button__icon--success"><path fill="#49cd37" d="m9.55 18-5.7-5.7 1.425-1.425L9.55 15.15l9.175-9.175L20.15 7.4z"></path></svg></button></div></div></div>
+<p>Mechanical steps:</p>
+<ol>
+<li>Read V2 file; refuse if format is V1 (legacy) with a message pointing to migration.</li>
+<li>Resolve provider config from inline directives.</li>
+<li>Unwrap DEK using current provider (requires private key for local, <code>kms:Decrypt</code> for AWS).</li>
+<li>Compute schema content hash if <code>dotsec.schema</code> discovered.</li>
+<li>Compute MAC over canonical serialization of the current directive + entry state.</li>
+<li>Emit V3 layout: header block first (<code>format=v3</code>, <code>key=&lt;unchanged&gt;</code>, <code>mac=&lt;new&gt;</code>), then existing directive comments and KV lines verbatim.</li>
+<li>Atomic write via temp file + rename. Refuse if file changed under us.</li>
+</ol>
+<h3 class="rp-toc-include" id="read-side-compatibility"><a href="#read-side-compatibility" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Read-side compatibility</h3>
+<p><code>detect_format()</code> extends to three variants:</p>
+<ul>
+<li><strong>V1</strong>: legacy single-blob format. Already errors with migration message.</li>
+<li><strong>V2</strong>: <code>__DOTSEC_KEY__</code> Kv line present, no <code>#!dotsec format=</code> header. Continues to work; one warning per invocation.</li>
+<li><strong>V3</strong>: <code>#!dotsec format=v3</code> header present. MAC required; mismatch is fatal.</li>
+</ul>
+<p>V2 deprecation warning:</p>
+<div class="rp-codeblock language-txt"><div class="rp-codeblock__content"><div class="rp-codeblock__content__scroll-container rp-scrollbar rp-scrollbar--always"><pre class="shiki css-variables" style="background-color:var(--shiki-background);color:var(--shiki-foreground)" tabindex="0" data-lang="txt"><code><span class="line"><span>⚠ .sec.prod uses legacy V2 format — directives are not authenticated.</span></span>
+<span class="line"><span>  Run: dotsec upgrade-format    (no re-encryption needed)</span></span>
+<span class="line"><span>  Silence: export DOTSEC_SILENCE_FORMAT_WARNING=1</span></span></code></pre></div><div class="rp-code-button-group"><button class="rp-code-button-group__button rp-code-wrap-button" title="Toggle code wrap"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-button-group__icon--wrapped"><path fill="#22a041" d="M21 5H3v2h18zM3 19h7v-2H3zm0-6h15c1 0 2 .43 2 2s-1 2-2 2h-2v-2l-4 3 4 3v-2h2c2.95 0 4-1.27 4-4 0-2.72-1-4-4-4H3z"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-button-group__icon--wrap"><path fill="currentColor" d="M16 7H3V5h13zM3 19h13v-2H3zm19-7-4-3v2H3v2h15v2z"></path></svg></button><button class="rp-code-button-group__button rp-code-copy-button" title="Copy code"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-copy-button__icon rp-code-copy-button__icon--copy"><path fill="currentColor" d="M20 8v12H8V8zm0-2H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2"></path><path fill="currentColor" d="M4 16H2V4a2 2 0 0 1 2-2h12v2H4Z"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-copy-button__icon rp-code-copy-button__icon--success"><path fill="#49cd37" d="m9.55 18-5.7-5.7 1.425-1.425L9.55 15.15l9.175-9.175L20.15 7.4z"></path></svg></button></div></div></div>
+<p>Warning fires once per CLI invocation per file. Silenceable for CI.</p>
+<h3 class="rp-toc-include" id="what-we-explicitly-do-not-do"><a href="#what-we-explicitly-do-not-do" class="rp-header-anchor rp-link" aria-hidden="true">#</a>What we explicitly do not do</h3>
+<ul>
+<li>No silent format bump on write. A V2 <code>dotsec set</code> writes V2; the user runs <code>upgrade-format</code> when they&#x27;re ready to commit the V3 diff.</li>
+<li>No <code>dotsec downgrade-format</code>. V2 is reachable by manual file edit if absolutely needed; we don&#x27;t ship a footgun.</li>
+<li>No re-encryption of values during upgrade. Speed and atomicity matter for adoption.</li>
+</ul>
+<hr/>
+<h2 class="rp-toc-include" id="attack-scenarios-test-cases-f1-must-defeat"><a href="#attack-scenarios-test-cases-f1-must-defeat" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Attack scenarios (test cases F1 must defeat)</h2>
+<p>These map 1:1 to the security review&#x27;s documented attacks. Each gets a regression test.</p>
+<h3 class="rp-toc-include" id="attack-1-push-redirection"><a href="#attack-1-push-redirection" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Attack 1: push redirection</h3>
+<div class="rp-codeblock language-diff"><div class="rp-codeblock__content"><div class="rp-codeblock__content__scroll-container rp-scrollbar rp-scrollbar--always"><pre class="shiki css-variables" style="background-color:var(--shiki-background);color:var(--shiki-foreground)" tabindex="0" data-lang="diff"><code><span class="line"><span style="color:var(--shiki-token-deleted)">- # @push=aws-ssm(path=&quot;/myapp/prod/db-password&quot;)</span></span>
+<span class="line"><span style="color:var(--shiki-token-inserted)">+ # @push=aws-ssm(path=&quot;/attacker-owned/db-password-mirror&quot;)</span></span>
+<span class="line"><span style="color:var(--shiki-foreground)">  DB_PASSWORD=ENC[...unchanged...]</span></span></code></pre></div><div class="rp-code-button-group"><button class="rp-code-button-group__button rp-code-wrap-button" title="Toggle code wrap"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-button-group__icon--wrapped"><path fill="#22a041" d="M21 5H3v2h18zM3 19h7v-2H3zm0-6h15c1 0 2 .43 2 2s-1 2-2 2h-2v-2l-4 3 4 3v-2h2c2.95 0 4-1.27 4-4 0-2.72-1-4-4-4H3z"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-button-group__icon--wrap"><path fill="currentColor" d="M16 7H3V5h13zM3 19h13v-2H3zm19-7-4-3v2H3v2h15v2z"></path></svg></button><button class="rp-code-button-group__button rp-code-copy-button" title="Copy code"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-copy-button__icon rp-code-copy-button__icon--copy"><path fill="currentColor" d="M20 8v12H8V8zm0-2H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2"></path><path fill="currentColor" d="M4 16H2V4a2 2 0 0 1 2-2h12v2H4Z"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-copy-button__icon rp-code-copy-button__icon--success"><path fill="#49cd37" d="m9.55 18-5.7-5.7 1.425-1.425L9.55 15.15l9.175-9.175L20.15 7.4z"></path></svg></button></div></div></div>
+<p><strong>Test:</strong> Encrypt + MAC, then mutate the <code>@push</code> directive in-place, then <code>dotsec push --dry-run</code> → MAC verify fails. Test name: <code>v3_push_directive_tamper_fails_mac</code>.</p>
+<h3 class="rp-toc-include" id="attack-2-kms-hijack-on-next-rotate"><a href="#attack-2-kms-hijack-on-next-rotate" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Attack 2: KMS hijack on next rotate</h3>
+<div class="rp-codeblock language-diff"><div class="rp-codeblock__content"><div class="rp-codeblock__content__scroll-container rp-scrollbar rp-scrollbar--always"><pre class="shiki css-variables" style="background-color:var(--shiki-background);color:var(--shiki-foreground)" tabindex="0" data-lang="diff"><code><span class="line"><span style="color:var(--shiki-token-deleted)">- # @provider=aws @key-id=alias/dotsec @region=eu-west-1 @default-encrypt</span></span>
+<span class="line"><span style="color:var(--shiki-token-inserted)">+ # @provider=aws @key-id=arn:aws:kms:eu-west-1:ATTACKER:key/abc @region=eu-west-1 @default-encrypt</span></span></code></pre></div><div class="rp-code-button-group"><button class="rp-code-button-group__button rp-code-wrap-button" title="Toggle code wrap"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-button-group__icon--wrapped"><path fill="#22a041" d="M21 5H3v2h18zM3 19h7v-2H3zm0-6h15c1 0 2 .43 2 2s-1 2-2 2h-2v-2l-4 3 4 3v-2h2c2.95 0 4-1.27 4-4 0-2.72-1-4-4-4H3z"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-button-group__icon--wrap"><path fill="currentColor" d="M16 7H3V5h13zM3 19h13v-2H3zm19-7-4-3v2H3v2h15v2z"></path></svg></button><button class="rp-code-button-group__button rp-code-copy-button" title="Copy code"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-copy-button__icon rp-code-copy-button__icon--copy"><path fill="currentColor" d="M20 8v12H8V8zm0-2H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2"></path><path fill="currentColor" d="M4 16H2V4a2 2 0 0 1 2-2h12v2H4Z"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-copy-button__icon rp-code-copy-button__icon--success"><path fill="#49cd37" d="m9.55 18-5.7-5.7 1.425-1.425L9.55 15.15l9.175-9.175L20.15 7.4z"></path></svg></button></div></div></div>
+<p><strong>Test:</strong> Encrypt + MAC, mutate <code>@key-id</code>, run <code>dotsec rotate-key</code> → MAC verify fails before any KMS call. Test name: <code>v3_keyid_tamper_blocks_rotate_key</code>. Critical that rotate-key isn&#x27;t a silent path around the MAC.</p>
+<h3 class="rp-toc-include" id="attack-3-type-validation-bypass"><a href="#attack-3-type-validation-bypass" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Attack 3: type-validation bypass</h3>
+<div class="rp-codeblock language-diff"><div class="rp-codeblock__content"><div class="rp-codeblock__content__scroll-container rp-scrollbar rp-scrollbar--always"><pre class="shiki css-variables" style="background-color:var(--shiki-background);color:var(--shiki-foreground)" tabindex="0" data-lang="diff"><code><span class="line"><span style="color:var(--shiki-token-deleted)">- # @encrypt @type=enum(&quot;development&quot;,&quot;staging&quot;,&quot;production&quot;)</span></span>
+<span class="line"><span style="color:var(--shiki-token-inserted)">+ # @encrypt @type=string</span></span>
+<span class="line"><span style="color:var(--shiki-foreground)">  NODE_ENV=ENC[...]</span></span></code></pre></div><div class="rp-code-button-group"><button class="rp-code-button-group__button rp-code-wrap-button" title="Toggle code wrap"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-button-group__icon--wrapped"><path fill="#22a041" d="M21 5H3v2h18zM3 19h7v-2H3zm0-6h15c1 0 2 .43 2 2s-1 2-2 2h-2v-2l-4 3 4 3v-2h2c2.95 0 4-1.27 4-4 0-2.72-1-4-4-4H3z"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-button-group__icon--wrap"><path fill="currentColor" d="M16 7H3V5h13zM3 19h13v-2H3zm19-7-4-3v2H3v2h15v2z"></path></svg></button><button class="rp-code-button-group__button rp-code-copy-button" title="Copy code"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-copy-button__icon rp-code-copy-button__icon--copy"><path fill="currentColor" d="M20 8v12H8V8zm0-2H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2"></path><path fill="currentColor" d="M4 16H2V4a2 2 0 0 1 2-2h12v2H4Z"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-copy-button__icon rp-code-copy-button__icon--success"><path fill="#49cd37" d="m9.55 18-5.7-5.7 1.425-1.425L9.55 15.15l9.175-9.175L20.15 7.4z"></path></svg></button></div></div></div>
+<p><strong>Test:</strong> Encrypt with enum, mutate to string, <code>dotsec validate</code> → MAC verify fails before any validation logic runs. Test name: <code>v3_type_directive_tamper_fails_mac</code>.</p>
+<h3 class="rp-toc-include" id="attack-4-cross-key-ciphertext-swap-already-covered-regression-test"><a href="#attack-4-cross-key-ciphertext-swap-already-covered-regression-test" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Attack 4: cross-key ciphertext swap (already covered, regression test)</h3>
+<p>This is the AAD attack from the existing implementation (key-name-as-AAD). V3 adds a second defense (the <code>enc:</code> line in MAC input binds ciphertext literal to key name), so swapping <code>ENC[...]</code> between keys now fails at MAC verification too, before reaching AES-GCM. Test name: <code>v3_enc_swap_between_keys_fails_mac</code>.</p>
+<h3 class="rp-toc-include" id="attack-5-entry-reorder"><a href="#attack-5-entry-reorder" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Attack 5: entry reorder</h3>
+<div class="rp-codeblock language-diff"><div class="rp-codeblock__content"><div class="rp-codeblock__content__scroll-container rp-scrollbar rp-scrollbar--always"><pre class="shiki css-variables" style="background-color:var(--shiki-background);color:var(--shiki-foreground)" tabindex="0" data-lang="diff"><code><span class="line"><span style="color:var(--shiki-foreground)">  DATABASE_URL=ENC[...A...]</span></span>
+<span class="line"><span style="color:var(--shiki-token-deleted)">- LOG_LEVEL=ENC[...B...]</span></span>
+<span class="line"><span style="color:var(--shiki-token-inserted)">+ LOG_LEVEL=ENC[...B...]</span></span>
+<span class="line"><span style="color:var(--shiki-foreground)">  DATABASE_URL=ENC[...A...]</span></span></code></pre></div><div class="rp-code-button-group"><button class="rp-code-button-group__button rp-code-wrap-button" title="Toggle code wrap"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-button-group__icon--wrapped"><path fill="#22a041" d="M21 5H3v2h18zM3 19h7v-2H3zm0-6h15c1 0 2 .43 2 2s-1 2-2 2h-2v-2l-4 3 4 3v-2h2c2.95 0 4-1.27 4-4 0-2.72-1-4-4-4H3z"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-button-group__icon--wrap"><path fill="currentColor" d="M16 7H3V5h13zM3 19h13v-2H3zm19-7-4-3v2H3v2h15v2z"></path></svg></button><button class="rp-code-button-group__button rp-code-copy-button" title="Copy code"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-copy-button__icon rp-code-copy-button__icon--copy"><path fill="currentColor" d="M20 8v12H8V8zm0-2H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2"></path><path fill="currentColor" d="M4 16H2V4a2 2 0 0 1 2-2h12v2H4Z"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-copy-button__icon rp-code-copy-button__icon--success"><path fill="#49cd37" d="m9.55 18-5.7-5.7 1.425-1.425L9.55 15.15l9.175-9.175L20.15 7.4z"></path></svg></button></div></div></div>
+<p><strong>Test:</strong> Reorder entries with <code>dotsec format</code> (legitimate) → MAC is recomputed and verifies. Reorder by hand without recomputing → MAC fails. Test name: <code>v3_manual_reorder_fails_mac</code>.</p>
+<h3 class="rp-toc-include" id="attack-6-schema-tamper"><a href="#attack-6-schema-tamper" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Attack 6: schema tamper</h3>
+<div class="rp-codeblock language-diff"><div class="rp-codeblock__content"><div class="rp-codeblock__content__scroll-container rp-scrollbar rp-scrollbar--always"><pre class="shiki css-variables" style="background-color:var(--shiki-background);color:var(--shiki-foreground)" tabindex="0" data-lang="diff"><code><span class="line"><span style="color:var(--shiki-token-deleted)">- @encrypt @type=enum(&quot;development&quot;,&quot;production&quot;)</span></span>
+<span class="line"><span style="color:var(--shiki-token-inserted)">+ @encrypt @type=string</span></span></code></pre></div><div class="rp-code-button-group"><button class="rp-code-button-group__button rp-code-wrap-button" title="Toggle code wrap"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-button-group__icon--wrapped"><path fill="#22a041" d="M21 5H3v2h18zM3 19h7v-2H3zm0-6h15c1 0 2 .43 2 2s-1 2-2 2h-2v-2l-4 3 4 3v-2h2c2.95 0 4-1.27 4-4 0-2.72-1-4-4-4H3z"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-button-group__icon--wrap"><path fill="currentColor" d="M16 7H3V5h13zM3 19h13v-2H3zm19-7-4-3v2H3v2h15v2z"></path></svg></button><button class="rp-code-button-group__button rp-code-copy-button" title="Copy code"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-copy-button__icon rp-code-copy-button__icon--copy"><path fill="currentColor" d="M20 8v12H8V8zm0-2H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2"></path><path fill="currentColor" d="M4 16H2V4a2 2 0 0 1 2-2h12v2H4Z"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-copy-button__icon rp-code-copy-button__icon--success"><path fill="#49cd37" d="m9.55 18-5.7-5.7 1.425-1.425L9.55 15.15l9.175-9.175L20.15 7.4z"></path></svg></button></div></div></div>
+<p>(in <code>dotsec.schema</code>, not the <code>.sec</code> file)</p>
+<p><strong>Test:</strong> Encrypt a <code>.sec</code> with schema present, mutate schema, <code>dotsec validate</code> → MAC fails because schema hash in AAD changed. Test name: <code>v3_schema_tamper_invalidates_file_mac</code>.</p>
+<hr/>
+<h2 class="rp-toc-include" id="open-questions-need-user-ratification-before-task-1"><a href="#open-questions-need-user-ratification-before-task-1" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Open questions (need user ratification before Task 1)</h2>
+<p>From section 6 of the security review:</p>
+<ol>
+<li><strong>V2→V3 forced or opt-in?</strong> <strong>Recommendation: opt-in via <code>dotsec upgrade-format</code>.</strong> Forced silent upgrade churns every consumer&#x27;s git history on first contact with V3-capable dotsec.</li>
+<li><strong>Schema MAC scope?</strong> <strong>Recommendation: schema content hash in the file MAC&#x27;s AAD.</strong> Schema tamper invalidates every file MAC — correct blast radius, schema is the cross-file source of truth.</li>
+<li><strong>Multi-recipient files (mixing AWS + local) in V3?</strong> <strong>Recommendation: forbid in V3.</strong> Premature complexity; revisit in V4 if anyone asks.</li>
+<li><strong><code>EncryptionContext</code> key naming (case sensitivity, ordering)?</strong> Confirmed against AWS docs — keys are case-sensitive, IAM conditions match exact key. Lock in <code>dotsec:file</code>, <code>dotsec:repo</code>, <code>dotsec:format</code>. Out of scope for this plan; documented for the F2 follow-up.</li>
+</ol>
+<hr/>
+<h2 class="rp-toc-include" id="tasks"><a href="#tasks" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Tasks</h2>
+<h3 class="rp-toc-include" id="task-1-canonical-serialization--mac-primitives"><a href="#task-1-canonical-serialization--mac-primitives" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Task 1: Canonical serialization + MAC primitives</h3>
+<p><strong>Files:</strong></p>
+<ul class="contains-task-list">
+<li>
+<p>Create: <code>crypto/src/mac.rs</code></p>
+</li>
+<li>
+<p>Modify: <code>crypto/src/lib.rs</code></p>
+</li>
+<li class="task-list-item">
+<p><input type="checkbox" disabled=""/> <strong>Step 1: Create <code>crypto/src/mac.rs</code> with the canonical serializer.</strong></p>
+<ul>
+<li>Function signature: <code>pub fn canonical_serialize(file_directives: &amp;[Directive], entries: &amp;[Entry], schema_hash: &amp;[u8; 32]) -&gt; Vec&lt;u8&gt;</code>.</li>
+<li>Pure function, no I/O. Deterministic.</li>
+<li>Internal helper <code>sort_directives_by_name(...)</code> for the per-entry directive sort.</li>
+<li>Domain-separation tag is <code>b&quot;dotsec-mac-v3\n&quot;</code> as the first bytes.</li>
+</ul>
+</li>
+<li class="task-list-item">
+<p><input type="checkbox" disabled=""/> <strong>Step 2: Add <code>compute_file_mac</code> / <code>verify_file_mac</code> to <code>crypto/src/lib.rs</code>.</strong></p>
+<ul>
+<li><code>pub fn compute_file_mac(dek: &amp;[u8], canonical: &amp;[u8]) -&gt; [u8; 32]</code></li>
+<li><code>pub fn verify_file_mac(dek: &amp;[u8], canonical: &amp;[u8], mac: &amp;[u8]) -&gt; Result&lt;(), CryptoError&gt;</code></li>
+<li>Verify uses constant-time compare via <code>subtle::ConstantTimeEq</code>.</li>
+<li>New error variant: <code>CryptoError::MacMismatch</code>.</li>
+</ul>
+</li>
+<li class="task-list-item">
+<p><input type="checkbox" disabled=""/> <strong>Step 3: Unit tests.</strong></p>
+<ul>
+<li>Round-trip: compute then verify succeeds.</li>
+<li>Tamper: flip one byte of canonical input → verify fails.</li>
+<li>Wrong DEK: verify fails.</li>
+<li>Deterministic: same inputs → same MAC bytes across calls.</li>
+<li>Sort stability: per-entry directives in different orders produce identical canonical output.</li>
+</ul>
+</li>
+</ul>
+<h3 class="rp-toc-include" id="task-2-schema-content-hashing"><a href="#task-2-schema-content-hashing" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Task 2: Schema content hashing</h3>
+<p><strong>Files:</strong></p>
+<ul class="contains-task-list">
+<li>
+<p>Create: <code>dotenv/src/schema_hash.rs</code></p>
+</li>
+<li>
+<p>Modify: <code>dotenv/src/schema.rs</code></p>
+</li>
+<li class="task-list-item">
+<p><input type="checkbox" disabled=""/> <strong>Step 1: <code>pub fn hash_schema_file(path: &amp;Path) -&gt; std::io::Result&lt;[u8; 32]&gt;</code>.</strong> SHA-256 of the file bytes. No normalization — comments and whitespace are part of the hash. Rationale: simplest possible semantics; if users want schema reformat to not invalidate, they re-MAC after.</p>
+</li>
+<li class="task-list-item">
+<p><input type="checkbox" disabled=""/> <strong>Step 2: <code>pub fn empty_schema_hash() -&gt; [u8; 32]</code>.</strong> SHA-256 of empty bytes. Used when no schema discovered.</p>
+</li>
+<li class="task-list-item">
+<p><input type="checkbox" disabled=""/> <strong>Step 3: Unit tests.</strong></p>
+<ul>
+<li>Identical file → identical hash.</li>
+<li>Modified file → different hash.</li>
+<li>Missing file → caller responsibility (returns <code>io::Error</code>); empty hash is opt-in via <code>empty_schema_hash()</code>.</li>
+</ul>
+</li>
+</ul>
+<h3 class="rp-toc-include" id="task-3-format-detection--header-parser"><a href="#task-3-format-detection--header-parser" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Task 3: Format detection + header parser</h3>
+<p><strong>Files:</strong></p>
+<ul class="contains-task-list">
+<li>
+<p>Create: <code>dotsec-core/src/format.rs</code></p>
+</li>
+<li>
+<p>Modify: <code>dotsec-core/src/lib.rs</code></p>
+</li>
+<li>
+<p>Modify: <code>dotenv/src/lib.rs</code></p>
+</li>
+<li class="task-list-item">
+<p><input type="checkbox" disabled=""/> <strong>Step 1: <code>SecFormat</code> enum gains <code>V3</code> variant.</strong> Update <code>detect_format()</code> to recognize <code>#!dotsec format=v3</code> in the header block.</p>
+</li>
+<li class="task-list-item">
+<p><input type="checkbox" disabled=""/> <strong>Step 2: Header parser.</strong> <code>pub fn parse_header(content: &amp;str) -&gt; Result&lt;(Header, &amp;str), HeaderError&gt;</code> returns the parsed header and the remainder of the file. Header struct:</p>
+<div class="rp-codeblock language-rust"><div class="rp-codeblock__content"><div class="rp-codeblock__content__scroll-container rp-scrollbar rp-scrollbar--always"><pre class="shiki css-variables" style="background-color:var(--shiki-background);color:var(--shiki-foreground)" tabindex="0" data-lang="rust"><code><span class="line"><span style="color:var(--shiki-token-keyword)">pub</span><span style="color:var(--shiki-token-keyword)"> struct</span><span style="color:var(--shiki-token-function)"> Header</span><span style="color:var(--shiki-foreground)"> {</span></span>
+<span class="line"><span style="color:var(--shiki-token-keyword)">    pub</span><span style="color:var(--shiki-foreground)"> format</span><span style="color:var(--shiki-token-keyword)">:</span><span style="color:var(--shiki-token-function)"> String</span><span style="color:var(--shiki-foreground)">,           </span><span style="color:var(--shiki-token-comment)">// &quot;v3&quot;</span></span>
+<span class="line"><span style="color:var(--shiki-token-keyword)">    pub</span><span style="color:var(--shiki-foreground)"> wrapped_dek</span><span style="color:var(--shiki-token-keyword)">:</span><span style="color:var(--shiki-token-function)"> Vec</span><span style="color:var(--shiki-foreground)">&lt;</span><span style="color:var(--shiki-token-function)">u8</span><span style="color:var(--shiki-foreground)">&gt;,     </span><span style="color:var(--shiki-token-comment)">// base64-decoded</span></span>
+<span class="line"><span style="color:var(--shiki-token-keyword)">    pub</span><span style="color:var(--shiki-foreground)"> mac</span><span style="color:var(--shiki-token-keyword)">:</span><span style="color:var(--shiki-token-function)"> Vec</span><span style="color:var(--shiki-foreground)">&lt;</span><span style="color:var(--shiki-token-function)">u8</span><span style="color:var(--shiki-foreground)">&gt;,             </span><span style="color:var(--shiki-token-comment)">// base64-decoded, must be 32 bytes</span></span>
+<span class="line"><span style="color:var(--shiki-token-keyword)">    pub</span><span style="color:var(--shiki-foreground)"> extras</span><span style="color:var(--shiki-token-keyword)">:</span><span style="color:var(--shiki-token-function)"> BTreeMap</span><span style="color:var(--shiki-foreground)">&lt;</span><span style="color:var(--shiki-token-function)">String</span><span style="color:var(--shiki-foreground)">, </span><span style="color:var(--shiki-token-function)">String</span><span style="color:var(--shiki-foreground)">&gt;,  </span><span style="color:var(--shiki-token-comment)">// unknown keys preserved verbatim</span></span>
+<span class="line"><span style="color:var(--shiki-foreground)">}</span></span></code></pre></div><div class="rp-code-button-group"><button class="rp-code-button-group__button rp-code-wrap-button" title="Toggle code wrap"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-button-group__icon--wrapped"><path fill="#22a041" d="M21 5H3v2h18zM3 19h7v-2H3zm0-6h15c1 0 2 .43 2 2s-1 2-2 2h-2v-2l-4 3 4 3v-2h2c2.95 0 4-1.27 4-4 0-2.72-1-4-4-4H3z"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-button-group__icon--wrap"><path fill="currentColor" d="M16 7H3V5h13zM3 19h13v-2H3zm19-7-4-3v2H3v2h15v2z"></path></svg></button><button class="rp-code-button-group__button rp-code-copy-button" title="Copy code"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-copy-button__icon rp-code-copy-button__icon--copy"><path fill="currentColor" d="M20 8v12H8V8zm0-2H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2"></path><path fill="currentColor" d="M4 16H2V4a2 2 0 0 1 2-2h12v2H4Z"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-copy-button__icon rp-code-copy-button__icon--success"><path fill="#49cd37" d="m9.55 18-5.7-5.7 1.425-1.425L9.55 15.15l9.175-9.175L20.15 7.4z"></path></svg></button></div></div></div>
+</li>
+<li class="task-list-item">
+<p><input type="checkbox" disabled=""/> <strong>Step 3: Header writer.</strong> <code>pub fn write_header(header: &amp;Header) -&gt; String</code> emits the <code>#!dotsec</code> lines in a fixed order (<code>format</code> first, then <code>key</code>, then <code>mac</code>, then alphabetical extras). Order stability matters for git diffs.</p>
+</li>
+<li class="task-list-item">
+<p><input type="checkbox" disabled=""/> <strong>Step 4: Update <code>dotenv::parse_dotenv</code> to skip header lines without treating them as comments.</strong> Header lines must not appear in <code>Line::Comment</code> or anywhere in the standard parse output — they&#x27;re consumed by the format layer above.</p>
+</li>
+<li class="task-list-item">
+<p><input type="checkbox" disabled=""/> <strong>Step 5: Unit tests.</strong></p>
+<ul>
+<li>V3 round-trip: parse then write produces byte-identical output.</li>
+<li>Unknown header key preserved through round-trip.</li>
+<li>Malformed header (missing required key, invalid base64, wrong MAC length) → clear error.</li>
+<li>V2 file (no header) → <code>parse_header</code> returns sentinel &quot;no header&quot; indicator, not an error.</li>
+</ul>
+</li>
+</ul>
+<h3 class="rp-toc-include" id="task-4-wire-mac-into-encrypt--decrypt-paths"><a href="#task-4-wire-mac-into-encrypt--decrypt-paths" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Task 4: Wire MAC into encrypt + decrypt paths</h3>
+<p><strong>Files:</strong></p>
+<ul class="contains-task-list">
+<li>
+<p>Modify: <code>dotsec-core/src/lib.rs</code></p>
+</li>
+<li class="task-list-item">
+<p><input type="checkbox" disabled=""/> <strong>Step 1: <code>encrypt_lines_to_sec</code> for V3.</strong></p>
+<ul>
+<li>After encrypting all values and generating wrapped DEK:
+<ol>
+<li>Compute <code>schema_hash</code> (call <code>hash_schema_file</code> or <code>empty_schema_hash</code>).</li>
+<li>Build canonical serialization input from final directive + entry state.</li>
+<li>Compute MAC.</li>
+<li>Emit V3 file with header block.</li>
+</ol>
+</li>
+<li>Default behavior for <strong>new</strong> files: write V3. Default for <strong>existing V2 files</strong>: write V2 (user must opt-in via <code>upgrade-format</code>).</li>
+</ul>
+</li>
+<li class="task-list-item">
+<p><input type="checkbox" disabled=""/> <strong>Step 2: <code>decrypt_sec_to_lines</code> for V3.</strong></p>
+<ul>
+<li>Detect format → dispatch.</li>
+<li>For V3: parse header, unwrap DEK, recompute canonical from on-disk state, compare MAC. Mismatch → <code>Err(&quot;MAC verification failed: directives or values modified after encryption. If intentional, run \</code>dotsec upgrade-format` to re-MAC.&quot;)`.</li>
+<li>For V2: existing decrypt path + emit deprecation warning once per invocation (use a <code>OnceLock</code> or thread-local).</li>
+</ul>
+</li>
+<li class="task-list-item">
+<p><input type="checkbox" disabled=""/> <strong>Step 3: Integration tests.</strong></p>
+<ul>
+<li>V3 round-trip: encrypt + decrypt succeeds.</li>
+<li>All six attack scenarios above produce <code>MacMismatch</code> errors.</li>
+<li>V2 decrypt continues to work (regression test for back-compat).</li>
+<li>V2 read emits warning to stderr (capture stderr; assert substring).</li>
+<li><code>DOTSEC_SILENCE_FORMAT_WARNING=1</code> suppresses warning.</li>
+</ul>
+</li>
+</ul>
+<h3 class="rp-toc-include" id="task-5-dotsec-upgrade-format-command"><a href="#task-5-dotsec-upgrade-format-command" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Task 5: <code>dotsec upgrade-format</code> command</h3>
+<p><strong>Files:</strong></p>
+<ul class="contains-task-list">
+<li>
+<p>Create: <code>dotsec/src/cli/commands/upgrade_format.rs</code></p>
+</li>
+<li>
+<p>Modify: <code>dotsec/src/cli/commands/mod.rs</code></p>
+</li>
+<li class="task-list-item">
+<p><input type="checkbox" disabled=""/> <strong>Step 1: Subcommand registration.</strong></p>
+<div class="rp-codeblock language-rust"><div class="rp-codeblock__content"><div class="rp-codeblock__content__scroll-container rp-scrollbar rp-scrollbar--always"><pre class="shiki css-variables" style="background-color:var(--shiki-background);color:var(--shiki-foreground)" tabindex="0" data-lang="rust"><code><span class="line"><span style="color:var(--shiki-token-keyword)">pub</span><span style="color:var(--shiki-token-keyword)"> fn</span><span style="color:var(--shiki-token-function)"> command</span><span style="color:var(--shiki-foreground)">() </span><span style="color:var(--shiki-token-keyword)">-&gt;</span><span style="color:var(--shiki-token-function)"> Command</span><span style="color:var(--shiki-foreground)"> {</span></span>
+<span class="line"><span style="color:var(--shiki-token-function)">    Command</span><span style="color:var(--shiki-token-keyword)">::</span><span style="color:var(--shiki-token-function)">new</span><span style="color:var(--shiki-foreground)">(</span><span style="color:var(--shiki-token-string-expression)">&quot;upgrade-format&quot;</span><span style="color:var(--shiki-foreground)">)</span></span>
+<span class="line"><span style="color:var(--shiki-token-keyword)">        .</span><span style="color:var(--shiki-token-function)">about</span><span style="color:var(--shiki-foreground)">(</span><span style="color:var(--shiki-token-string-expression)">&quot;Upgrade .sec file from V2 to V3 (no re-encryption)&quot;</span><span style="color:var(--shiki-foreground)">)</span></span>
+<span class="line"><span style="color:var(--shiki-token-keyword)">        .</span><span style="color:var(--shiki-token-function)">arg</span><span style="color:var(--shiki-foreground)">(Arg</span><span style="color:var(--shiki-token-keyword)">::</span><span style="color:var(--shiki-token-function)">new</span><span style="color:var(--shiki-foreground)">(</span><span style="color:var(--shiki-token-string-expression)">&quot;files&quot;</span><span style="color:var(--shiki-foreground)">)</span><span style="color:var(--shiki-token-keyword)">.</span><span style="color:var(--shiki-token-function)">num_args</span><span style="color:var(--shiki-foreground)">(</span><span style="color:var(--shiki-token-constant)">0</span><span style="color:var(--shiki-token-keyword)">..</span><span style="color:var(--shiki-foreground)">))</span></span>
+<span class="line"><span style="color:var(--shiki-token-keyword)">        .</span><span style="color:var(--shiki-token-function)">arg</span><span style="color:var(--shiki-foreground)">(Arg</span><span style="color:var(--shiki-token-keyword)">::</span><span style="color:var(--shiki-token-function)">new</span><span style="color:var(--shiki-foreground)">(</span><span style="color:var(--shiki-token-string-expression)">&quot;all&quot;</span><span style="color:var(--shiki-foreground)">)</span><span style="color:var(--shiki-token-keyword)">.</span><span style="color:var(--shiki-token-function)">long</span><span style="color:var(--shiki-foreground)">(</span><span style="color:var(--shiki-token-string-expression)">&quot;all&quot;</span><span style="color:var(--shiki-foreground)">)</span><span style="color:var(--shiki-token-keyword)">.</span><span style="color:var(--shiki-token-function)">action</span><span style="color:var(--shiki-foreground)">(</span><span style="color:var(--shiki-token-function)">SetTrue</span><span style="color:var(--shiki-foreground)">))</span></span>
+<span class="line"><span style="color:var(--shiki-token-keyword)">        .</span><span style="color:var(--shiki-token-function)">arg</span><span style="color:var(--shiki-foreground)">(Arg</span><span style="color:var(--shiki-token-keyword)">::</span><span style="color:var(--shiki-token-function)">new</span><span style="color:var(--shiki-foreground)">(</span><span style="color:var(--shiki-token-string-expression)">&quot;dry-run&quot;</span><span style="color:var(--shiki-foreground)">)</span><span style="color:var(--shiki-token-keyword)">.</span><span style="color:var(--shiki-token-function)">long</span><span style="color:var(--shiki-foreground)">(</span><span style="color:var(--shiki-token-string-expression)">&quot;dry-run&quot;</span><span style="color:var(--shiki-foreground)">)</span><span style="color:var(--shiki-token-keyword)">.</span><span style="color:var(--shiki-token-function)">action</span><span style="color:var(--shiki-foreground)">(</span><span style="color:var(--shiki-token-function)">SetTrue</span><span style="color:var(--shiki-foreground)">))</span></span>
+<span class="line"><span style="color:var(--shiki-foreground)">}</span></span></code></pre></div><div class="rp-code-button-group"><button class="rp-code-button-group__button rp-code-wrap-button" title="Toggle code wrap"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-button-group__icon--wrapped"><path fill="#22a041" d="M21 5H3v2h18zM3 19h7v-2H3zm0-6h15c1 0 2 .43 2 2s-1 2-2 2h-2v-2l-4 3 4 3v-2h2c2.95 0 4-1.27 4-4 0-2.72-1-4-4-4H3z"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-button-group__icon--wrap"><path fill="currentColor" d="M16 7H3V5h13zM3 19h13v-2H3zm19-7-4-3v2H3v2h15v2z"></path></svg></button><button class="rp-code-button-group__button rp-code-copy-button" title="Copy code"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-copy-button__icon rp-code-copy-button__icon--copy"><path fill="currentColor" d="M20 8v12H8V8zm0-2H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2"></path><path fill="currentColor" d="M4 16H2V4a2 2 0 0 1 2-2h12v2H4Z"></path></svg><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" class="rp-code-button-group__icon rp-code-copy-button__icon rp-code-copy-button__icon--success"><path fill="#49cd37" d="m9.55 18-5.7-5.7 1.425-1.425L9.55 15.15l9.175-9.175L20.15 7.4z"></path></svg></button></div></div></div>
+</li>
+<li class="task-list-item">
+<p><input type="checkbox" disabled=""/> <strong>Step 2: Execution.</strong></p>
+<ul>
+<li>Resolve target files: explicit args, then <code>--all</code> glob (<code>*.sec*</code> in cwd), then default <code>--sec-file</code>.</li>
+<li>For each file:
+<ol>
+<li>Detect format. V1 → error with migration pointer. V3 → &quot;already V3, skipping.&quot; V2 → proceed.</li>
+<li>Resolve provider config from inline directives.</li>
+<li>Unwrap DEK.</li>
+<li>Compute MAC.</li>
+<li>Emit V3 layout (preserve all existing comments, directives, blank lines verbatim; only the envelope changes).</li>
+<li>Atomic write (temp file + <code>rename</code>), unless <code>--dry-run</code>.</li>
+</ol>
+</li>
+<li>Print per-file status: <code>✓ .sec — V2 → V3</code> or <code>→ .sec.prod — already V3</code>.</li>
+<li>Summary line: &quot;Upgraded N files. Commit: git add ... &amp;&amp; git commit -m &#x27;...&#x27;&quot;.</li>
+</ul>
+</li>
+<li class="task-list-item">
+<p><input type="checkbox" disabled=""/> <strong>Step 3: Tests.</strong></p>
+<ul>
+<li>Upgrade a V2 local file: V3 file decrypts identically, same wrapped DEK, new MAC.</li>
+<li>Upgrade a V2 AWS file: same wrapped DEK (F2 rewrap is later), new MAC.</li>
+<li><code>--dry-run</code>: file unchanged, V3 layout printed to stdout.</li>
+<li><code>--all</code> with mixed V2/V3 files: V3 files skipped with informational message.</li>
+<li>Missing key for local: clean error pointing to <code>DOTSEC_PRIVATE_KEY</code> or <code>.sec.key</code>.</li>
+<li>V1 file: refuses with migration message.</li>
+</ul>
+</li>
+</ul>
+<h3 class="rp-toc-include" id="task-6-re-mac-on-mutating-commands"><a href="#task-6-re-mac-on-mutating-commands" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Task 6: Re-MAC on mutating commands</h3>
+<p><strong>Files:</strong></p>
+<ul class="contains-task-list">
+<li>
+<p>Modify: <code>dotsec/src/cli/commands/set.rs</code></p>
+</li>
+<li>
+<p>Modify: <code>dotsec/src/cli/commands/rotate_key.rs</code></p>
+</li>
+<li>
+<p>Modify: <code>dotsec/src/cli/commands/format.rs</code></p>
+</li>
+<li>
+<p>Modify: <code>dotsec/src/cli/commands/remove_directives.rs</code></p>
+</li>
+<li>
+<p>Modify: <code>dotsec/src/cli/commands/import.rs</code></p>
+</li>
+<li class="task-list-item">
+<p><input type="checkbox" disabled=""/> <strong>Step 1: Every command that writes back to the <code>.sec</code> file must recompute MAC for V3 files.</strong></p>
+<ul>
+<li>Centralize the write logic so each command goes through a single <code>write_sec_with_mac(...)</code> helper rather than duplicating the encrypt+canonical+MAC dance.</li>
+<li>V2 files keep V2-style writes (no MAC) — opt-in only.</li>
+</ul>
+</li>
+<li class="task-list-item">
+<p><input type="checkbox" disabled=""/> <strong>Step 2: Tests per command.</strong></p>
+<ul>
+<li>For each mutating command: after running it, decrypt and verify MAC. Regression target: a forgotten re-MAC site silently produces V3 files with stale MACs.</li>
+</ul>
+</li>
+</ul>
+<h3 class="rp-toc-include" id="task-7-documentation"><a href="#task-7-documentation" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Task 7: Documentation</h3>
+<p><strong>Files:</strong></p>
+<ul class="contains-task-list">
+<li>
+<p>Modify: <code>docs/guide/encryption.md</code></p>
+</li>
+<li>
+<p>Modify: <code>docs/guide/commands.md</code></p>
+</li>
+<li>
+<p>Create: <code>docs/superpowers/specs/2026-05-13-v3-format.md</code></p>
+</li>
+<li class="task-list-item">
+<p><input type="checkbox" disabled=""/> <strong>Step 1: Encryption guide — add &quot;Format versions&quot; section.</strong></p>
+<ul>
+<li>V2 vs V3 table: what each protects, why V3 exists.</li>
+<li>Resolves the existing <code>&lt;!-- TODO: &quot;Why age?&quot; --&gt;</code> block while we&#x27;re in this file; cover the &quot;Why age?&quot; rationale per the prior TODO note.</li>
+</ul>
+</li>
+<li class="task-list-item">
+<p><input type="checkbox" disabled=""/> <strong>Step 2: Commands guide — document <code>upgrade-format</code>.</strong></p>
+<ul>
+<li>Flags, examples, what to expect in the git diff.</li>
+<li>Cross-link from <code>set</code> / <code>rotate-key</code> / <code>format</code> sections so users discover it.</li>
+</ul>
+</li>
+<li class="task-list-item">
+<p><input type="checkbox" disabled=""/> <strong>Step 3: Wire format spec.</strong></p>
+<ul>
+<li>Stable reference document under <code>docs/superpowers/specs/</code> describing V3 header grammar, MAC canonical input format, schema-hash semantics, reserved keys.</li>
+<li>Doubles as the input for any future third-party implementations.</li>
+</ul>
+</li>
+</ul>
+<hr/>
+<h2 class="rp-toc-include" id="test-fixtures"><a href="#test-fixtures" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Test fixtures</h2>
+<p>Create under <code>dotsec-core/tests/fixtures/</code>:</p>
+<ul>
+<li><code>v2-local.sec</code> — V2 file encrypted with a known age keypair; decrypts cleanly.</li>
+<li><code>v2-local.sec.key</code> — matching key file.</li>
+<li><code>v3-local.sec</code> — V3 file with valid MAC.</li>
+<li><code>v3-local-tampered-push.sec</code> — V3 file with <code>@push</code> directive mutated post-MAC.</li>
+<li><code>v3-local-tampered-keyid.sec</code> — <code>@key-id</code> mutated.</li>
+<li><code>v3-local-tampered-type.sec</code> — <code>@type</code> enum→string.</li>
+<li><code>v3-local-tampered-enc-swap.sec</code> — <code>ENC[...]</code> values swapped between keys.</li>
+<li><code>v3-local-tampered-reorder.sec</code> — entries reordered without re-MAC.</li>
+<li><code>v3-local-with-schema.sec</code> + <code>dotsec.schema</code> — for the schema-tamper test (modify schema, decrypt fails).</li>
+</ul>
+<p>Fixture generation: a <code>dev/scripts/generate-v3-fixtures.sh</code> script that uses the dotsec CLI to produce known-good V3 files, then a Python or Rust tampering helper for the post-write mutations. Commit both the script and the fixtures; CI regenerates on demand to catch drift.</p>
+<hr/>
+<h2 class="rp-toc-include" id="risks-and-mitigations"><a href="#risks-and-mitigations" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Risks and mitigations</h2>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="rp-table-scroll-container rp-scrollbar"><table><thead><tr><th>Risk</th><th>Mitigation</th></tr></thead><tbody><tr><td>Adoption stall — users ignore the V2 warning forever</td><td>Set a removal date for V2 support (e.g., &quot;V2 read support removed in dotsec 7.0, scheduled for 2027&quot;); land that line in CHANGELOG now</td></tr><tr><td>Diff churn from V3 upgrade in big repos</td><td><code>dotsec upgrade-format --all</code> upgrades atomically per file; users commit one batch per repo</td></tr><tr><td>MAC recomputation forgotten on a new mutating command added later</td><td>Centralize via <code>write_sec_with_mac</code> helper (Task 6 Step 1); add a <code>// FIXME: must re-MAC</code> clippy lint or a comment-based audit checklist in the spec</td></tr><tr><td>Schema-hash semantics surprise users (formatting schema breaks MAC)</td><td>Document loudly in the spec; offer <code>dotsec re-mac</code> as a one-command fix without rotating the DEK</td></tr><tr><td>Atomic write race on Windows</td><td>Use <code>tempfile::NamedTempFile::persist</code>; document the failure mode if the user has the file open elsewhere</td></tr></tbody></table></div>
+<hr/>
+<h2 class="rp-toc-include" id="out-of-scope-follow-up-prs"><a href="#out-of-scope-follow-up-prs" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Out of scope (follow-up PRs)</h2>
+<ul>
+<li><strong>F2</strong>: AWS <code>EncryptionContext</code> rewrap on upgrade. Gates on V3 landing. Separate plan.</li>
+<li><strong>F3</strong>: Multi-recipient. Reserves <code>#!dotsec recipients=</code> header key but doesn&#x27;t implement.</li>
+<li><strong>F5</strong>: Local key file location enforcement. Independent of format.</li>
+<li><strong><code>dotsec re-mac</code></strong>: Convenience command to recompute MAC after intentional directive edits without going through <code>upgrade-format</code> or <code>set</code>. Useful but not strictly required — <code>dotsec set &lt;key&gt;</code> on any existing key triggers a full re-MAC. Defer unless users ask.</li>
+</ul>
+<hr/>
+<h2 class="rp-toc-include" id="definition-of-done"><a href="#definition-of-done" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Definition of done</h2>
+<ul class="contains-task-list">
+<li class="task-list-item"><input type="checkbox" disabled=""/> All seven tasks completed with passing tests.</li>
+<li class="task-list-item"><input type="checkbox" disabled=""/> <code>cargo test --workspace</code> and <code>cargo clippy --workspace --all-targets -- -D warnings</code> clean.</li>
+<li class="task-list-item"><input type="checkbox" disabled=""/> Manual end-to-end smoke test: encrypt → tamper → decrypt fails for each of the six attack scenarios.</li>
+<li class="task-list-item"><input type="checkbox" disabled=""/> V2 deprecation warning verified on every read path (<code>run</code>, <code>show</code>, <code>validate</code>, <code>export</code>).</li>
+<li class="task-list-item"><input type="checkbox" disabled=""/> Wire format spec doc committed.</li>
+<li class="task-list-item"><input type="checkbox" disabled=""/> Encryption guide updated with V2/V3 section and resolves the existing &quot;Why age?&quot; TODO.</li>
+<li class="task-list-item"><input type="checkbox" disabled=""/> <code>dotsec upgrade-format</code> documented with examples.</li>
+<li class="task-list-item"><input type="checkbox" disabled=""/> CHANGELOG entry under conventional-commits <code>feat:</code> with <code>BREAKING CHANGE:</code> footer if V2 deprecation date is published.</li>
+</ul><!--/$--></div><footer class="rp-doc-footer"><div class="rp-doc-footer__edit"></div><div class="rp-doc-footer__divider"></div><div class="rp-prev-next-page"><div class="rp-prev-next-page__placeholder"></div><a href="/dotsec-rs/pr-50/guide/index.html" class="rp-prev-next-page__item rp-prev-next-page__next rp-link"><span class="rp-prev-next-page__item__desc">Next page</span><span class="rp-prev-next-page__item__title"><span>Guide</span><svg width="1em" height="1em" viewBox="0 0 32 32" class="rp-prev-next-page__icon"><path fill="currentColor" d="M22 16 12 26l-1.4-1.4 8.6-8.6-8.6-8.6L12 6z"></path></svg></span></a></div></footer></main></div><aside class="rp-doc-layout__outline rp-scrollbar"><div class="rp-outline"><div class="rp-outline__title">ON THIS PAGE<svg width="14" height="14" class="rp-progress-circle"><circle cx="7" cy="7" r="6" stroke-linecap="round" fill="none" stroke="var(--rp-c-divider-light)" stroke-width="2"></circle><circle cx="7" cy="7" r="6" stroke-linecap="round" fill="none" stroke="var(--rp-c-brand)" stroke-width="2" stroke-dasharray="37.69911184307752" stroke-dashoffset="37.69911184307752" transform="rotate(-90 7 7)" style="transition:stroke-dashoffset 0.3s"></circle></svg></div><nav class="rp-outline__toc rp-scrollbar"><a href="#file-structure" class="rp-toc-item rp-link" title="File Structure" style="padding-left:0" data-depth="0"><span class="rp-toc-item__text rp-doc">File Structure</span></a><a href="#wire-format-v3" class="rp-toc-item rp-link" title="Wire format V3" style="padding-left:0" data-depth="0"><span class="rp-toc-item__text rp-doc">Wire format V3</span></a><a href="#header-line-grammar" class="rp-toc-item rp-link" title="Header line grammar" style="padding-left:12px" data-depth="1"><span class="rp-toc-item__text rp-doc">Header line grammar</span></a><a href="#mac-input--canonical-serialization" class="rp-toc-item rp-link" title="MAC input — canonical serialization" style="padding-left:12px" data-depth="1"><span class="rp-toc-item__text rp-doc">MAC input — canonical serialization</span></a><a href="#migration-v2--v3" class="rp-toc-item rp-link" title="Migration: V2 → V3" style="padding-left:0" data-depth="0"><span class="rp-toc-item__text rp-doc">Migration: V2 → V3</span></a><a href="#dotsec-upgrade-format" class="rp-toc-item rp-link" title="dotsec upgrade-format" style="padding-left:12px" data-depth="1"><span class="rp-toc-item__text rp-doc"><code>dotsec upgrade-format</code></span></a><a href="#read-side-compatibility" class="rp-toc-item rp-link" title="Read-side compatibility" style="padding-left:12px" data-depth="1"><span class="rp-toc-item__text rp-doc">Read-side compatibility</span></a><a href="#what-we-explicitly-do-not-do" class="rp-toc-item rp-link" title="What we explicitly do not do" style="padding-left:12px" data-depth="1"><span class="rp-toc-item__text rp-doc">What we explicitly do not do</span></a><a href="#attack-scenarios-test-cases-f1-must-defeat" class="rp-toc-item rp-link" title="Attack scenarios (test cases F1 must defeat)" style="padding-left:0" data-depth="0"><span class="rp-toc-item__text rp-doc">Attack scenarios (test cases F1 must defeat)</span></a><a href="#attack-1-push-redirection" class="rp-toc-item rp-link" title="Attack 1: push redirection" style="padding-left:12px" data-depth="1"><span class="rp-toc-item__text rp-doc">Attack 1: push redirection</span></a><a href="#attack-2-kms-hijack-on-next-rotate" class="rp-toc-item rp-link" title="Attack 2: KMS hijack on next rotate" style="padding-left:12px" data-depth="1"><span class="rp-toc-item__text rp-doc">Attack 2: KMS hijack on next rotate</span></a><a href="#attack-3-type-validation-bypass" class="rp-toc-item rp-link" title="Attack 3: type-validation bypass" style="padding-left:12px" data-depth="1"><span class="rp-toc-item__text rp-doc">Attack 3: type-validation bypass</span></a><a href="#attack-4-cross-key-ciphertext-swap-already-covered-regression-test" class="rp-toc-item rp-link" title="Attack 4: cross-key ciphertext swap (already covered, regression test)" style="padding-left:12px" data-depth="1"><span class="rp-toc-item__text rp-doc">Attack 4: cross-key ciphertext swap (already covered, regression test)</span></a><a href="#attack-5-entry-reorder" class="rp-toc-item rp-link" title="Attack 5: entry reorder" style="padding-left:12px" data-depth="1"><span class="rp-toc-item__text rp-doc">Attack 5: entry reorder</span></a><a href="#attack-6-schema-tamper" class="rp-toc-item rp-link" title="Attack 6: schema tamper" style="padding-left:12px" data-depth="1"><span class="rp-toc-item__text rp-doc">Attack 6: schema tamper</span></a><a href="#open-questions-need-user-ratification-before-task-1" class="rp-toc-item rp-link" title="Open questions (need user ratification before Task 1)" style="padding-left:0" data-depth="0"><span class="rp-toc-item__text rp-doc">Open questions (need user ratification before Task 1)</span></a><a href="#tasks" class="rp-toc-item rp-link" title="Tasks" style="padding-left:0" data-depth="0"><span class="rp-toc-item__text rp-doc">Tasks</span></a><a href="#task-1-canonical-serialization--mac-primitives" class="rp-toc-item rp-link" title="Task 1: Canonical serialization + MAC primitives" style="padding-left:12px" data-depth="1"><span class="rp-toc-item__text rp-doc">Task 1: Canonical serialization + MAC primitives</span></a><a href="#task-2-schema-content-hashing" class="rp-toc-item rp-link" title="Task 2: Schema content hashing" style="padding-left:12px" data-depth="1"><span class="rp-toc-item__text rp-doc">Task 2: Schema content hashing</span></a><a href="#task-3-format-detection--header-parser" class="rp-toc-item rp-link" title="Task 3: Format detection + header parser" style="padding-left:12px" data-depth="1"><span class="rp-toc-item__text rp-doc">Task 3: Format detection + header parser</span></a><a href="#task-4-wire-mac-into-encrypt--decrypt-paths" class="rp-toc-item rp-link" title="Task 4: Wire MAC into encrypt + decrypt paths" style="padding-left:12px" data-depth="1"><span class="rp-toc-item__text rp-doc">Task 4: Wire MAC into encrypt + decrypt paths</span></a><a href="#task-5-dotsec-upgrade-format-command" class="rp-toc-item rp-link" title="Task 5: dotsec upgrade-format command" style="padding-left:12px" data-depth="1"><span class="rp-toc-item__text rp-doc">Task 5: <code>dotsec upgrade-format</code> command</span></a><a href="#task-6-re-mac-on-mutating-commands" class="rp-toc-item rp-link" title="Task 6: Re-MAC on mutating commands" style="padding-left:12px" data-depth="1"><span class="rp-toc-item__text rp-doc">Task 6: Re-MAC on mutating commands</span></a><a href="#task-7-documentation" class="rp-toc-item rp-link" title="Task 7: Documentation" style="padding-left:12px" data-depth="1"><span class="rp-toc-item__text rp-doc">Task 7: Documentation</span></a><a href="#test-fixtures" class="rp-toc-item rp-link" title="Test fixtures" style="padding-left:0" data-depth="0"><span class="rp-toc-item__text rp-doc">Test fixtures</span></a><a href="#risks-and-mitigations" class="rp-toc-item rp-link" title="Risks and mitigations" style="padding-left:0" data-depth="0"><span class="rp-toc-item__text rp-doc">Risks and mitigations</span></a><a href="#out-of-scope-follow-up-prs" class="rp-toc-item rp-link" title="Out of scope (follow-up PRs)" style="padding-left:0" data-depth="0"><span class="rp-toc-item__text rp-doc">Out of scope (follow-up PRs)</span></a><a href="#definition-of-done" class="rp-toc-item rp-link" title="Definition of done" style="padding-left:0" data-depth="0"><span class="rp-toc-item__text rp-doc">Definition of done</span></a></nav><div class="rp-outline__divider"></div><div class="rp-outline__bottom"></div></div></aside></div></div>
+    <div id="__rspress_modal_container"></div>
+  </body>
+</html>
