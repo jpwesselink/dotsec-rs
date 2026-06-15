@@ -45,6 +45,10 @@
     {
       "label": "#49 fix/validator-false-positive-default-encrypt",
       "path": "/pr-49/"
+    },
+    {
+      "label": "#50 fix/mac-failure-diagnostic",
+      "path": "/pr-50/"
     }
   ],
   "latest": "/v7.0.1/"
