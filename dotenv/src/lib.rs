@@ -2411,7 +2411,9 @@ mod tests {
         let file_config = extract_file_config(&parse_dotenv(sec_src).unwrap());
         let errors = validate_entries_against_schema(&entries, &schema, &file_config);
         assert!(
-            errors.iter().any(|e| e.message.contains("inline @plaintext")),
+            errors
+                .iter()
+                .any(|e| e.message.contains("inline @plaintext")),
             "user-written inline @plaintext must still error: {:?}",
             errors
         );
@@ -3190,10 +3192,11 @@ mod tests {
         let sec_src = "PORT=999\n";
         let sec_lines = parse_dotenv(sec_src).unwrap();
         let sec_entries = lines_to_entries(&sec_lines);
-        let schema_errors: Vec<_> = validate_entries_against_schema(&sec_entries, &schema, &FileConfig::default())
-            .into_iter()
-            .filter(|e| e.severity == Severity::Error)
-            .collect();
+        let schema_errors: Vec<_> =
+            validate_entries_against_schema(&sec_entries, &schema, &FileConfig::default())
+                .into_iter()
+                .filter(|e| e.severity == Severity::Error)
+                .collect();
 
         // Both should produce the same number of errors with the same key
         assert!(!inline_errors.is_empty(), "inline should produce errors");
@@ -3221,10 +3224,11 @@ mod tests {
         let sec_src = "PORT=50\n";
         let sec_lines = parse_dotenv(sec_src).unwrap();
         let sec_entries = lines_to_entries(&sec_lines);
-        let schema_errors: Vec<_> = validate_entries_against_schema(&sec_entries, &schema, &FileConfig::default())
-            .into_iter()
-            .filter(|e| e.severity == Severity::Error)
-            .collect();
+        let schema_errors: Vec<_> =
+            validate_entries_against_schema(&sec_entries, &schema, &FileConfig::default())
+                .into_iter()
+                .filter(|e| e.severity == Severity::Error)
+                .collect();
 
         assert!(
             inline_errors.is_empty(),
@@ -3341,10 +3345,11 @@ mod tests {
         // Re-parse and validate -- should still pass
         let reparsed = parse_dotenv(&formatted_str).unwrap();
         let entries = lines_to_entries(&reparsed);
-        let errors: Vec<_> = validate_entries_against_schema(&entries, &schema, &FileConfig::default())
-            .into_iter()
-            .filter(|e| e.severity == Severity::Error)
-            .collect();
+        let errors: Vec<_> =
+            validate_entries_against_schema(&entries, &schema, &FileConfig::default())
+                .into_iter()
+                .filter(|e| e.severity == Severity::Error)
+                .collect();
         assert!(
             errors.is_empty(),
             "roundtrip should still validate: {:?}",
