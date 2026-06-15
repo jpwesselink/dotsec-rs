@@ -40,7 +40,9 @@ pub async fn match_args(
 
         // Validate entries against schema and warn (non-blocking)
         let entries = dotenv::lines_to_entries(&lines);
-        let validation_errors = dotenv::validate_entries_against_schema(&entries, &schema);
+        let file_config = dotenv::extract_file_config(&lines);
+        let validation_errors =
+            dotenv::validate_entries_against_schema(&entries, &schema, &file_config);
         if !validation_errors.is_empty() {
             let warning_count = validation_errors.len();
             eprintln!(

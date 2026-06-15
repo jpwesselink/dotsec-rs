@@ -186,7 +186,18 @@ pub fn validate_entries_with_env(entries: &[Entry]) -> Vec<ValidationError> {
 }
 
 /// Validate entries against an external schema.
-pub fn validate_entries_against_schema(entries: &[Entry], schema: &Schema) -> Vec<ValidationError> {
+///
+/// `file_config` carries file-level config (`@default-encrypt`, `@provider`,
+/// etc.) parsed via `extract_file_config`. It exists so the validator can
+/// recognize directives that `lines_to_entries` synthesized from file-level
+/// defaults and skip them when checking for "inline" directives that conflict
+/// with the schema. Without it, a clean `.sec` carrying `# @default-encrypt`
+/// would produce one false-positive inline-`@encrypt` error per key.
+pub fn validate_entries_against_schema(
+    entries: &[Entry],
+    schema: &Schema,
+    file_config: &FileConfig,
+) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
     let entry_keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
@@ -215,10 +226,26 @@ pub fn validate_entries_against_schema(entries: &[Entry], schema: &Schema) -> Ve
         }
     }
 
-    // Error on ANY inline schema directives — mixed state is not allowed
+    // Error on ANY inline schema directives — mixed state is not allowed.
+    //
+    // `lines_to_entries` synthesizes `@encrypt`/`@plaintext` from the
+    // file-level `@default-encrypt`/`@default-plaintext` directives, so we
+    // must not blame the entry for inheriting them. The synthetic case is
+    // identified by: (a) the directive matches the file-level default, AND
+    // (b) the entry has no explicit override of the opposite kind. If the
+    // user wrote a real override (e.g. inline `@plaintext` under file-level
+    // `@default-encrypt`), `has_explicit` would be true and the synthetic
+    // injection wouldn't have happened — so we'd still see the user's
+    // directive and flag it.
     for entry in entries {
         for (name, _) in &entry.directives {
             if SCHEMA_DIRECTIVES.contains(&name.as_str()) {
+                let is_synthetic_default = (name == "encrypt"
+                    && file_config.default_encrypt == Some(true))
+                    || (name == "plaintext" && file_config.default_encrypt == Some(false));
+                if is_synthetic_default {
+                    continue;
+                }
                 errors.push(ValidationError::error(
                     &entry.key,
                     format!("inline @{} directive not allowed when schema exists, run `dotsec remove-directives`", name),
@@ -2292,7 +2319,7 @@ mod tests {
         let sec_src = "PORT=3000\n";
         let schema = parse_schema(schema_src).unwrap();
         let entries = lines_to_entries(&parse_dotenv(sec_src).unwrap());
-        let errors = validate_entries_against_schema(&entries, &schema);
+        let errors = validate_entries_against_schema(&entries, &schema, &FileConfig::default());
         assert!(errors
             .iter()
             .any(|e| e.key == "DATABASE_URL" && e.severity == Severity::Error));
@@ -2304,7 +2331,7 @@ mod tests {
         let sec_src = "PORT=3000\n";
         let schema = parse_schema(schema_src).unwrap();
         let entries = lines_to_entries(&parse_dotenv(sec_src).unwrap());
-        let errors = validate_entries_against_schema(&entries, &schema);
+        let errors = validate_entries_against_schema(&entries, &schema, &FileConfig::default());
         assert!(!errors
             .iter()
             .any(|e| e.key == "SENTRY_DSN" && e.severity == Severity::Error));
@@ -2316,7 +2343,7 @@ mod tests {
         let sec_src = "PORT=3000\nEXTRA=foo\n";
         let schema = parse_schema(schema_src).unwrap();
         let entries = lines_to_entries(&parse_dotenv(sec_src).unwrap());
-        let errors = validate_entries_against_schema(&entries, &schema);
+        let errors = validate_entries_against_schema(&entries, &schema, &FileConfig::default());
         assert!(errors
             .iter()
             .any(|e| e.key == "EXTRA" && e.severity == Severity::Warning));
@@ -2328,7 +2355,7 @@ mod tests {
         let sec_src = "PORT=hello\n";
         let schema = parse_schema(schema_src).unwrap();
         let entries = lines_to_entries(&parse_dotenv(sec_src).unwrap());
-        let errors = validate_entries_against_schema(&entries, &schema);
+        let errors = validate_entries_against_schema(&entries, &schema, &FileConfig::default());
         assert!(errors
             .iter()
             .any(|e| e.key == "PORT" && e.message.contains("expected number")));
@@ -2340,10 +2367,54 @@ mod tests {
         let sec_src = "# @type=number\nFOO=\"bar\"\n";
         let schema = parse_schema(schema_src).unwrap();
         let entries = lines_to_entries(&parse_dotenv(sec_src).unwrap());
-        let errors = validate_entries_against_schema(&entries, &schema);
+        let errors = validate_entries_against_schema(&entries, &schema, &FileConfig::default());
         assert!(errors.iter().any(|e| e.key == "FOO"
             && e.severity == Severity::Error
             && e.message.contains("inline @type directive not allowed")));
+    }
+
+    // Regression: a .sec with file-level `@default-encrypt` and NO per-key
+    // inline directives should validate clean against an external schema.
+    // `lines_to_entries` synthesizes `("encrypt", None)` onto every entry
+    // when the file declares `@default-encrypt`; the validator must not
+    // mistake those synthetic directives for user-written inline ones.
+    // See the Pathé Thuis report (2026-06-15): 221-error false positive
+    // on a freshly-extracted .sec.prod that was actually clean.
+    #[test]
+    fn schema_validation_ignores_synthetic_default_encrypt() {
+        let schema_src = "# @encrypt\nAWS_ACCOUNT_ID\n\n# @encrypt\nAWS_REGION\n";
+        let sec_src = "# @provider=aws @key-id=alias/dotsec @default-encrypt\n\n# AWS account\nAWS_ACCOUNT_ID=\"123\"\n\n# AWS region\nAWS_REGION=\"eu-west-1\"\n";
+        let schema = parse_schema(schema_src).unwrap();
+        let entries = lines_to_entries(&parse_dotenv(sec_src).unwrap());
+        let file_config = extract_file_config(&parse_dotenv(sec_src).unwrap());
+        let errors = validate_entries_against_schema(&entries, &schema, &file_config);
+        let inline_errors: Vec<_> = errors
+            .iter()
+            .filter(|e| e.message.contains("inline @encrypt"))
+            .collect();
+        assert!(
+            inline_errors.is_empty(),
+            "synthetic @encrypt from file-level @default-encrypt must not surface as an inline-directive error: {:?}",
+            inline_errors
+        );
+    }
+
+    // Counter-test: a TRUE user-written inline `# @plaintext` on a Kv in a
+    // file with `@default-encrypt` must still error — that's a real override
+    // the user wrote, and the schema owns these decisions when it exists.
+    #[test]
+    fn schema_validation_user_inline_plaintext_still_errors_with_default_encrypt() {
+        let schema_src = "# @encrypt\nFOO\n";
+        let sec_src = "# @default-encrypt\n\n# @plaintext\nFOO=\"bar\"\n";
+        let schema = parse_schema(schema_src).unwrap();
+        let entries = lines_to_entries(&parse_dotenv(sec_src).unwrap());
+        let file_config = extract_file_config(&parse_dotenv(sec_src).unwrap());
+        let errors = validate_entries_against_schema(&entries, &schema, &file_config);
+        assert!(
+            errors.iter().any(|e| e.message.contains("inline @plaintext")),
+            "user-written inline @plaintext must still error: {:?}",
+            errors
+        );
     }
 
     // --- File-level default-encrypt tests ---
@@ -3119,7 +3190,7 @@ mod tests {
         let sec_src = "PORT=999\n";
         let sec_lines = parse_dotenv(sec_src).unwrap();
         let sec_entries = lines_to_entries(&sec_lines);
-        let schema_errors: Vec<_> = validate_entries_against_schema(&sec_entries, &schema)
+        let schema_errors: Vec<_> = validate_entries_against_schema(&sec_entries, &schema, &FileConfig::default())
             .into_iter()
             .filter(|e| e.severity == Severity::Error)
             .collect();
@@ -3150,7 +3221,7 @@ mod tests {
         let sec_src = "PORT=50\n";
         let sec_lines = parse_dotenv(sec_src).unwrap();
         let sec_entries = lines_to_entries(&sec_lines);
-        let schema_errors: Vec<_> = validate_entries_against_schema(&sec_entries, &schema)
+        let schema_errors: Vec<_> = validate_entries_against_schema(&sec_entries, &schema, &FileConfig::default())
             .into_iter()
             .filter(|e| e.severity == Severity::Error)
             .collect();
@@ -3175,7 +3246,7 @@ mod tests {
         let sec_src = "FOO=\"hello\"\nBAR=\"world\"\n";
         let sec_lines = parse_dotenv(sec_src).unwrap();
         let sec_entries = lines_to_entries(&sec_lines);
-        let errors = validate_entries_against_schema(&sec_entries, &schema);
+        let errors = validate_entries_against_schema(&sec_entries, &schema, &FileConfig::default());
         let missing: Vec<_> = errors
             .iter()
             .filter(|e| e.key == "BAZ" && e.severity == Severity::Error)
@@ -3194,7 +3265,7 @@ mod tests {
         let sec_src = "FOO=\"hello\"\nBAR=\"extra\"\n";
         let sec_lines = parse_dotenv(sec_src).unwrap();
         let sec_entries = lines_to_entries(&sec_lines);
-        let errors = validate_entries_against_schema(&sec_entries, &schema);
+        let errors = validate_entries_against_schema(&sec_entries, &schema, &FileConfig::default());
         let extra: Vec<_> = errors
             .iter()
             .filter(|e| e.key == "BAR" && e.severity == Severity::Warning)
@@ -3212,7 +3283,7 @@ mod tests {
         let sec_src = "# @type=string\nPORT=3000\n";
         let sec_lines = parse_dotenv(sec_src).unwrap();
         let sec_entries = lines_to_entries(&sec_lines);
-        let errors = validate_entries_against_schema(&sec_entries, &schema);
+        let errors = validate_entries_against_schema(&sec_entries, &schema, &FileConfig::default());
 
         // Should error about inline directive — mixed state not allowed
         let inline_errors: Vec<_> = errors
@@ -3234,7 +3305,7 @@ mod tests {
         let sec_src = "PORT=3000\n";
         let sec_lines = parse_dotenv(sec_src).unwrap();
         let sec_entries = lines_to_entries(&sec_lines);
-        let errors = validate_entries_against_schema(&sec_entries, &schema);
+        let errors = validate_entries_against_schema(&sec_entries, &schema, &FileConfig::default());
         // SENTRY_DSN should NOT be reported as missing
         let sentry_errors: Vec<_> = errors
             .iter()
@@ -3270,7 +3341,7 @@ mod tests {
         // Re-parse and validate -- should still pass
         let reparsed = parse_dotenv(&formatted_str).unwrap();
         let entries = lines_to_entries(&reparsed);
-        let errors: Vec<_> = validate_entries_against_schema(&entries, &schema)
+        let errors: Vec<_> = validate_entries_against_schema(&entries, &schema, &FileConfig::default())
             .into_iter()
             .filter(|e| e.severity == Severity::Error)
             .collect();

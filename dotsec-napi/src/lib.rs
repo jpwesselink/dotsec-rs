@@ -79,9 +79,11 @@ pub fn validate_against_schema(
     let lines = dotsec_core::dotenv::parse_dotenv(&source)
         .map_err(|e| napi::Error::from_reason(format!("Parse error: {e}")))?;
     let entries = dotsec_core::dotenv::lines_to_entries(&lines);
+    let file_config = dotsec_core::dotenv::extract_file_config(&lines);
     let schema = dotsec_core::dotenv::parse_schema(&schema_source)
         .map_err(|e| napi::Error::from_reason(format!("Schema parse error: {e}")))?;
-    let errors = dotsec_core::dotenv::validate_entries_against_schema(&entries, &schema);
+    let errors =
+        dotsec_core::dotenv::validate_entries_against_schema(&entries, &schema, &file_config);
 
     Ok(errors
         .into_iter()

@@ -35,7 +35,9 @@ pub async fn match_args(
             debug!("Validating against schema: {}", schema_path);
             let schema_content = std::fs::read_to_string(schema_path)?;
             let schema = dotenv::parse_schema(&schema_content)?;
-            let schema_errors = dotenv::validate_entries_against_schema(&entries, &schema);
+            let file_config = dotenv::extract_file_config(&lines);
+            let schema_errors =
+                dotenv::validate_entries_against_schema(&entries, &schema, &file_config);
             errors.extend(schema_errors);
         }
 
