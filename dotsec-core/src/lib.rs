@@ -1,5 +1,6 @@
 pub use dotenv;
 use dotenv::{lines_to_entries, Line, Schema};
+use std::path::Path;
 
 mod configuration;
 pub use configuration::*;
@@ -185,6 +186,202 @@ What DOESN'T trip this error:\n\
 \n\
 If your edit was strictly one of those and you still see this message, \
 please report it as a bug.";
+
+/// On MAC failure, try to localize the drift by diffing the current file's
+/// MAC inputs against the version at `git show HEAD:<sec_file>`. Returns
+/// `Some(report)` when a meaningful diff was produced, `None` when the file
+/// isn't in git, git isn't available, the HEAD copy doesn't parse, or there
+/// is no detectable difference (which is itself a real signal — the file
+/// matches HEAD bit-for-bit but the MAC still fails, meaning the *schema*
+/// drifted; we surface that too).
+///
+/// All git invocations are read-only. Any error or non-zero exit is treated
+/// as "no comparison available" and yields `None`, so the diagnostic stays
+/// an additive enhancement: callers append its output to `MAC_FAILURE_MESSAGE`
+/// when present, fall back to today's message otherwise.
+pub fn diagnose_mac_drift_against_git_head(sec_file: &str) -> Option<String> {
+    use std::process::Command;
+    use std::process::Stdio;
+
+    fn run(args: &[&str], cwd: Option<&Path>) -> Option<Vec<u8>> {
+        let mut cmd = Command::new("git");
+        cmd.args(args).stdin(Stdio::null()).stderr(Stdio::null());
+        if let Some(d) = cwd {
+            cmd.current_dir(d);
+        }
+        let out = cmd.output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        Some(out.stdout)
+    }
+
+    let abs = std::fs::canonicalize(sec_file).ok()?;
+    let cwd = abs.parent()?;
+    // Repo root, so we can compute the path git knows.
+    let toplevel_bytes = run(&["rev-parse", "--show-toplevel"], Some(cwd))?;
+    let toplevel = std::str::from_utf8(&toplevel_bytes).ok()?.trim();
+    let toplevel = Path::new(toplevel);
+    let rel = abs.strip_prefix(toplevel).ok()?;
+    let rel_str = rel.to_str()?;
+
+    // Confirm the file is actually tracked at HEAD before pulling content.
+    run(
+        &["ls-tree", "--name-only", "HEAD", "--", rel_str],
+        Some(toplevel),
+    )?;
+    let head_bytes = run(&["show", &format!("HEAD:{rel_str}")], Some(toplevel))?;
+    let head_str = std::str::from_utf8(&head_bytes).ok()?;
+    let head_lines = dotenv::parse_dotenv(head_str).ok()?;
+
+    let current_str = std::fs::read_to_string(sec_file).ok()?;
+    let current_lines = dotenv::parse_dotenv(&current_str).ok()?;
+
+    let mut bullets: Vec<String> = Vec::new();
+    diff_file_level_directives(&head_lines, &current_lines, &mut bullets);
+    diff_entries(&head_lines, &current_lines, &mut bullets);
+
+    if bullets.is_empty() {
+        // No detectable diff in MAC inputs means the schema (or schema_hash arg)
+        // is the offender. Tell the user where to look without pretending we
+        // know which schema file changed.
+        return Some(
+            "\n\nSpecific drift vs git HEAD: no per-entry changes detected. \
+            The schema referenced when encrypting has changed (or a different \
+            schema is being used now). Compare your current `dotsec.schema` \
+            against HEAD with `git diff HEAD -- dotsec.schema` (or whatever \
+            path your `DOTSEC_SCHEMA` points at)."
+                .to_string(),
+        );
+    }
+
+    let mut out = String::from("\n\nSpecific drift vs git HEAD:\n");
+    for b in bullets {
+        out.push_str(&format!("  \u{2022} {b}\n"));
+    }
+    Some(out)
+}
+
+fn diff_file_level_directives(head: &[Line], current: &[Line], bullets: &mut Vec<String>) {
+    fn first_kv_directives(lines: &[Line]) -> Vec<(String, Option<String>)> {
+        let mut out = Vec::new();
+        for line in lines {
+            match line {
+                Line::Kv { .. } => break,
+                Line::Directive { name, value } if name != header_v3::HEADER_DIRECTIVE_NAME => {
+                    out.push((name.clone(), value.clone()));
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+    let head_dirs = first_kv_directives(head);
+    let cur_dirs = first_kv_directives(current);
+    if head_dirs == cur_dirs {
+        return;
+    }
+    let render = |d: &(String, Option<String>)| match &d.1 {
+        Some(v) => format!("@{}={}", d.0, v),
+        None => format!("@{}", d.0),
+    };
+    // Simple per-name diff — gives readable output even when both sides reorder.
+    use std::collections::BTreeSet;
+    let head_names: BTreeSet<&String> = head_dirs.iter().map(|(n, _)| n).collect();
+    let cur_names: BTreeSet<&String> = cur_dirs.iter().map(|(n, _)| n).collect();
+    for added in cur_names.difference(&head_names) {
+        if let Some(d) = cur_dirs.iter().find(|(n, _)| &n == added) {
+            bullets.push(format!("file-level directive added: {}", render(d)));
+        }
+    }
+    for removed in head_names.difference(&cur_names) {
+        if let Some(d) = head_dirs.iter().find(|(n, _)| &n == removed) {
+            bullets.push(format!("file-level directive removed: {}", render(d)));
+        }
+    }
+    for shared in head_names.intersection(&cur_names) {
+        let h = head_dirs.iter().find(|(n, _)| &n == shared);
+        let c = cur_dirs.iter().find(|(n, _)| &n == shared);
+        if let (Some(h), Some(c)) = (h, c) {
+            if h.1 != c.1 {
+                bullets.push(format!(
+                    "file-level directive changed: {} → {}",
+                    render(h),
+                    render(c)
+                ));
+            }
+        }
+    }
+}
+
+fn diff_entries(head: &[Line], current: &[Line], bullets: &mut Vec<String>) {
+    use std::collections::BTreeMap;
+    let head_entries = dotenv::lines_to_entries(head);
+    let cur_entries = dotenv::lines_to_entries(current);
+    let head_map: BTreeMap<&str, &dotenv::Entry> =
+        head_entries.iter().map(|e| (e.key.as_str(), e)).collect();
+    let cur_map: BTreeMap<&str, &dotenv::Entry> =
+        cur_entries.iter().map(|e| (e.key.as_str(), e)).collect();
+
+    for key in cur_map.keys() {
+        if !head_map.contains_key(key) {
+            bullets.push(format!("entry added: {key}"));
+        }
+    }
+    for key in head_map.keys() {
+        if !cur_map.contains_key(key) {
+            bullets.push(format!("entry removed: {key}"));
+        }
+    }
+    for (key, head_e) in &head_map {
+        let cur_e = match cur_map.get(key) {
+            Some(e) => e,
+            None => continue,
+        };
+        // Per-entry directive diff (name set + per-name value).
+        let head_dir_set: BTreeMap<&str, Option<&str>> = head_e
+            .directives
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.as_deref()))
+            .collect();
+        let cur_dir_set: BTreeMap<&str, Option<&str>> = cur_e
+            .directives
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.as_deref()))
+            .collect();
+        if head_dir_set != cur_dir_set {
+            bullets.push(format!(
+                "directives on {key} changed: was {} → now {}",
+                fmt_dir_set(&head_dir_set),
+                fmt_dir_set(&cur_dir_set)
+            ));
+        }
+        // Value diff — only meaningful for entries whose on-disk value is part
+        // of the MAC, which is the encrypted ones (ENC[…]). Plaintext value
+        // edits don't trip MAC, so don't report them as drift.
+        let head_enc = head_e.value.starts_with("ENC[");
+        let cur_enc = cur_e.value.starts_with("ENC[");
+        if (head_enc || cur_enc) && head_e.value != cur_e.value {
+            bullets.push(format!(
+                "ENC[\u{2026}] value of {key} changed (ciphertext differs from HEAD)"
+            ));
+        }
+    }
+}
+
+fn fmt_dir_set(dirs: &std::collections::BTreeMap<&str, Option<&str>>) -> String {
+    if dirs.is_empty() {
+        return "(none)".to_string();
+    }
+    let parts: Vec<String> = dirs
+        .iter()
+        .map(|(n, v)| match v {
+            Some(v) => format!("@{n}={v}"),
+            None => format!("@{n}"),
+        })
+        .collect();
+    parts.join(" ")
+}
 
 /// Wrap a per-value `CryptoError` with the key name + a concrete recovery
 /// hint. Without this, a malformed `ENC[abc]c]`-style envelope bubbles up
@@ -664,8 +861,13 @@ async fn decrypt_v3(
         // `build_canonical_bytes` (it would otherwise be self-referencing —
         // the MAC can't include itself).
         let canonical = build_canonical_bytes(lines, schema_hash);
-        crypto::verify_file_mac(&dek, &canonical, &parsed.mac)
-            .map_err(|_| Box::<dyn std::error::Error>::from(MAC_FAILURE_MESSAGE))?;
+        crypto::verify_file_mac(&dek, &canonical, &parsed.mac).map_err(|_| {
+            let mut msg = MAC_FAILURE_MESSAGE.to_string();
+            if let Some(diag) = diagnose_mac_drift_against_git_head(sec_file) {
+                msg.push_str(&diag);
+            }
+            Box::<dyn std::error::Error>::from(msg)
+        })?;
     }
 
     let mut resolved: Vec<Line> = Vec::new();
@@ -2703,4 +2905,219 @@ mod tests {
     }
 
     // --- M2: upgrade-format v2 → v3 round-trip ---
+
+    // --- MAC-failure diagnostic against git HEAD ---
+
+    use std::process::{Command, Stdio};
+
+    fn git_init_repo(dir: &Path) {
+        let ok = Command::new("git")
+            .args(["init", "-q", "-b", "main"])
+            .current_dir(dir)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .stdout(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !ok {
+            // Older git without -b: fall back.
+            let _ = Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(dir)
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .stdout(Stdio::null())
+                .status();
+        }
+        for (k, v) in [
+            ("user.email", "test@example.com"),
+            ("user.name", "Test"),
+            ("commit.gpgsign", "false"),
+        ] {
+            let _ = Command::new("git")
+                .args(["config", k, v])
+                .current_dir(dir)
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .stdout(Stdio::null())
+                .status();
+        }
+    }
+
+    fn git_commit_all(dir: &Path) {
+        let _ = Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(dir)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .stdout(Stdio::null())
+            .status();
+        let _ = Command::new("git")
+            .args(["commit", "-q", "-m", "snap"])
+            .current_dir(dir)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .stdout(Stdio::null())
+            .status();
+    }
+
+    fn write(p: &Path, content: &str) {
+        std::fs::write(p, content).unwrap();
+    }
+
+    fn fixture_sec() -> &'static str {
+        "# dotsec v7.0.0 — encrypted environment file\n\
+         # @dotsec(format=v3, mac=irrelevant, dek=irrelevant)\n\
+         # @provider=local @default-encrypt\n\
+         FOO=\"ENC[abc]\"\n\
+         BAR=\"ENC[def]\"\n"
+    }
+
+    #[test]
+    fn diagnose_returns_none_outside_git_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join(".sec");
+        write(&p, fixture_sec());
+        let out = diagnose_mac_drift_against_git_head(p.to_str().unwrap());
+        assert!(
+            out.is_none(),
+            "expected None outside a git repo, got {:?}",
+            out
+        );
+    }
+
+    #[test]
+    fn diagnose_returns_none_when_file_untracked() {
+        let dir = tempfile::tempdir().unwrap();
+        git_init_repo(dir.path());
+        // make initial commit so HEAD exists
+        write(&dir.path().join("README"), "x");
+        git_commit_all(dir.path());
+
+        let p = dir.path().join(".sec");
+        write(&p, fixture_sec());
+        let out = diagnose_mac_drift_against_git_head(p.to_str().unwrap());
+        assert!(out.is_none(), "expected None for untracked file");
+    }
+
+    #[test]
+    fn diagnose_detects_added_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        git_init_repo(dir.path());
+        let p = dir.path().join(".sec");
+        write(&p, fixture_sec());
+        git_commit_all(dir.path());
+
+        // Add a new entry.
+        let mut tampered = String::from(fixture_sec());
+        tampered.push_str("BAZ=\"ENC[xyz]\"\n");
+        write(&p, &tampered);
+
+        let report = diagnose_mac_drift_against_git_head(p.to_str().unwrap())
+            .expect("diagnostic should produce output");
+        assert!(report.contains("entry added: BAZ"), "report:\n{report}");
+    }
+
+    #[test]
+    fn diagnose_detects_removed_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        git_init_repo(dir.path());
+        let p = dir.path().join(".sec");
+        write(&p, fixture_sec());
+        git_commit_all(dir.path());
+
+        // Remove BAR.
+        let tampered = fixture_sec().replace("BAR=\"ENC[def]\"\n", "");
+        write(&p, &tampered);
+
+        let report = diagnose_mac_drift_against_git_head(p.to_str().unwrap())
+            .expect("diagnostic should produce output");
+        assert!(report.contains("entry removed: BAR"), "report:\n{report}");
+    }
+
+    #[test]
+    fn diagnose_detects_changed_ciphertext() {
+        let dir = tempfile::tempdir().unwrap();
+        git_init_repo(dir.path());
+        let p = dir.path().join(".sec");
+        write(&p, fixture_sec());
+        git_commit_all(dir.path());
+
+        // Mutate FOO's ciphertext.
+        let tampered = fixture_sec().replace("FOO=\"ENC[abc]\"", "FOO=\"ENC[ZZZ]\"");
+        write(&p, &tampered);
+
+        let report = diagnose_mac_drift_against_git_head(p.to_str().unwrap())
+            .expect("diagnostic should produce output");
+        assert!(
+            report.contains("ENC[\u{2026}] value of FOO changed"),
+            "report:\n{report}"
+        );
+    }
+
+    #[test]
+    fn diagnose_detects_per_entry_directive_change() {
+        let dir = tempfile::tempdir().unwrap();
+        git_init_repo(dir.path());
+        let p = dir.path().join(".sec");
+        let original = "# dotsec v7.0.0\n\
+                        # @dotsec(format=v3, mac=x, dek=x)\n\
+                        # @type=string\n\
+                        FOO=\"hello\"\n";
+        write(&p, original);
+        git_commit_all(dir.path());
+
+        let tampered = "# dotsec v7.0.0\n\
+                        # @dotsec(format=v3, mac=x, dek=x)\n\
+                        # @type=number\n\
+                        FOO=\"hello\"\n";
+        write(&p, tampered);
+
+        let report = diagnose_mac_drift_against_git_head(p.to_str().unwrap())
+            .expect("diagnostic should produce output");
+        assert!(
+            report.contains("directives on FOO changed"),
+            "report:\n{report}"
+        );
+        assert!(report.contains("@type=string"), "report:\n{report}");
+        assert!(report.contains("@type=number"), "report:\n{report}");
+    }
+
+    #[test]
+    fn diagnose_detects_file_level_directive_change() {
+        let dir = tempfile::tempdir().unwrap();
+        git_init_repo(dir.path());
+        let p = dir.path().join(".sec");
+        write(&p, fixture_sec());
+        git_commit_all(dir.path());
+
+        let tampered = fixture_sec().replace("@provider=local", "@provider=aws");
+        write(&p, &tampered);
+
+        let report = diagnose_mac_drift_against_git_head(p.to_str().unwrap())
+            .expect("diagnostic should produce output");
+        assert!(
+            report.contains("file-level directive changed"),
+            "report:\n{report}"
+        );
+    }
+
+    #[test]
+    fn diagnose_reports_schema_when_no_per_entry_drift() {
+        let dir = tempfile::tempdir().unwrap();
+        git_init_repo(dir.path());
+        let p = dir.path().join(".sec");
+        write(&p, fixture_sec());
+        git_commit_all(dir.path());
+
+        // Don't touch .sec at all — file matches HEAD bit-for-bit, but
+        // MAC still failed (in real life that means schema_hash changed).
+        let report = diagnose_mac_drift_against_git_head(p.to_str().unwrap())
+            .expect("diagnostic should produce output");
+        assert!(
+            report.contains("schema referenced when encrypting has changed"),
+            "report:\n{report}"
+        );
+    }
 }
