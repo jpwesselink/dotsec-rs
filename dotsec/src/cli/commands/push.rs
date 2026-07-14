@@ -64,7 +64,9 @@ pub async fn match_args(
     if let Some(ref schema_path) = default_options.schema_path {
         let schema_content = std::fs::read_to_string(schema_path)?;
         let schema = dotenv::parse_schema(&schema_content)?;
-        let validation_errors = dotenv::validate_entries_against_schema(&entries, &schema);
+        let file_config = dotenv::extract_file_config(&lines);
+        let validation_errors =
+            dotenv::validate_entries_against_schema(&entries, &schema, &file_config);
         if !validation_errors.is_empty() {
             let warning_count = validation_errors.len();
             eprintln!(
