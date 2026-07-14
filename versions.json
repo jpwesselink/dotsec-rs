@@ -41,10 +41,6 @@
     {
       "label": "#42 release-plz-2026-06-13T13-54-53Z",
       "path": "/pr-42/"
-    },
-    {
-      "label": "#50 fix/mac-failure-diagnostic",
-      "path": "/pr-50/"
     }
   ],
   "latest": "/v7.0.1/"
