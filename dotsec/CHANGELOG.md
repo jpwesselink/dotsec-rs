@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.0.2](https://github.com/jpwesselink/dotsec-rs/compare/dotsec-v0.1.0...dotsec-v7.0.2) - 2026-07-14
+
+### Fixed
+
+- *(validate)* file-level @default-encrypt no longer triggers false 'inline @encrypt' errors ([#49](https://github.com/jpwesselink/dotsec-rs/pull/49))
+
 ## [7.0.1](https://github.com/jpwesselink/dotsec-rs/compare/dotsec-v0.1.0...dotsec-v7.0.1) - 2026-06-13
 
 ### Fixed
