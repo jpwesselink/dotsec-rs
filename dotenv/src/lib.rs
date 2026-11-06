@@ -597,11 +597,15 @@ pub fn parse_dotenv(source: &str) -> Result<Vec<Line>, Box<pest::error::Error<Ru
         Ok(p) => p,
         Err(e) => {
             // Check if the error might be caused by a bare @directive (missing # prefix)
+            // `split_inclusive` keeps the terminator in `line`, so offsets stay
+            // exact for `\r\n` too (a `lines()` + 1 count drifts and can land
+            // mid-UTF-8 char, making `Position::new` return None).
             let mut offset = 0;
-            for line in source.lines() {
+            for line in source.split_inclusive('\n') {
                 let trimmed = line.trim();
                 if trimmed.starts_with('@') && !trimmed.contains('=') {
-                    let pos = pest::Position::new(source, offset).unwrap();
+                    let pos = pest::Position::new(source, offset)
+                        .unwrap_or_else(|| pest::Position::from_start(source));
                     let err = pest::error::Error::<Rule>::new_from_pos(
                         pest::error::ErrorVariant::CustomError {
                             message: format!(
@@ -613,7 +617,7 @@ pub fn parse_dotenv(source: &str) -> Result<Vec<Line>, Box<pest::error::Error<Ru
                     );
                     return Err(Box::new(err));
                 }
-                offset += line.len() + 1; // +1 for newline
+                offset += line.len();
             }
             return Err(Box::new(e));
         }
@@ -624,8 +628,11 @@ pub fn parse_dotenv(source: &str) -> Result<Vec<Line>, Box<pest::error::Error<Ru
                 output.push(Line::Newline);
             }
             Rule::COMMENT => {
+                // Same trailing-`\r` normalization as unquoted values (see
+                // `Rule::var` in parse_kv): `#x\r\r\n` would otherwise parse
+                // as `#x\r` and lose one `\r` per render/parse cycle.
                 output.push(Line::Comment {
-                    text: pair.as_str().to_string(),
+                    text: pair.as_str().trim_end_matches('\r').to_string(),
                 });
             }
             Rule::directive => {
@@ -1276,7 +1283,12 @@ fn parse_kv(pair: Pair<Rule>) -> Option<(String, String, QuoteType)> {
     if pair.as_rule() != Rule::kv {
         return None;
     }
-    let mut inner = pair.into_inner();
+    // `kv` is non-atomic, so pest interleaves implicit WHITESPACE pairs
+    // (`export FOO=bar`, `FOO= bar`, `FOO =bar`). Skip them — otherwise the
+    // whitespace pair is taken as key/value and the whole kv is dropped.
+    let mut inner = pair
+        .into_inner()
+        .filter(|p| !matches!(p.as_rule(), Rule::WHITESPACE | Rule::export));
     let key = inner.next()?.as_str().to_string();
     // Value is optional: KEY= (empty) is valid
     match inner.next() {
@@ -1413,7 +1425,7 @@ mod tests {
         assert!(
             matches!(&lines[0], Line::Kv { key, value, quote_type: QuoteType::None } if key == "FOO" && value == "bar"),
             "expected value=\"bar\" with all trailing \\r stripped, got {:?}",
-            &lines[0]
+            lines[0]
         );
     }
 
@@ -1441,7 +1453,7 @@ mod tests {
         assert!(
             matches!(&lines[0], Line::Kv { key, value, quote_type: QuoteType::Double } if key == "FOO" && value == "bar\r"),
             "expected quoted value to preserve trailing \\r, got {:?}",
-            &lines[0]
+            lines[0]
         );
     }
 
@@ -1486,6 +1498,109 @@ mod tests {
         assert!(
             matches!(&lines[2], Line::Kv { value, quote_type: QuoteType::Single, .. } if value == "world")
         );
+    }
+
+    #[test]
+    fn bare_directive_hint_with_crlf_and_multibyte_does_not_panic() {
+        // Fuzz-found: CRLF line endings made the offset drift onto a
+        // non-char-boundary (inside U+00A0), and Position::new(..).unwrap()
+        // panicked.
+        let result = parse_dotenv("\r\n\r\n\u{a0}\n@");
+        assert!(result.is_err());
+
+        let err = parse_dotenv("A=1\r\nB=2\r\n@encrypt\r\n")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("bare directive"), "got: {err}");
+        assert!(
+            err.contains(" --> 3:1"),
+            "should point at line 3, got: {err}"
+        );
+    }
+
+    #[test]
+    fn whitespace_around_kv_parts_does_not_drop_the_kv() {
+        // Fuzz-found (roundtrip): pest emits implicit WHITESPACE pairs inside
+        // the non-atomic `kv` rule, and parse_kv used to treat them as the
+        // key/value — silently dropping the whole entry.
+        for src in [
+            "export FOO=bar\n",
+            "FOO= bar\n",
+            "FOO =bar\n",
+            "FOO = \"bar\"\n",
+        ] {
+            let lines = parse_dotenv(src).unwrap();
+            assert!(
+                matches!(&lines[0], Line::Kv { key, value, .. } if key == "FOO" && value == "bar"),
+                "{src:?} parsed as {lines:?}"
+            );
+        }
+        let lines = parse_dotenv("A=\"\nR= \\\nA=\"\"").unwrap();
+        let r1 = lines_to_string(&lines);
+        let r2 = lines_to_string(&parse_dotenv(&r1).expect("render must re-parse"));
+        assert_eq!(r1, r2);
+    }
+
+    #[test]
+    fn export_prefix_needs_a_word_boundary() {
+        // Fuzz-found (roundtrip): `exportexport=` parsed as export + key
+        // `export`, rendered as `export=`, which no longer parsed.
+        let key_of = |src: &str| match &parse_dotenv(src).unwrap()[0] {
+            Line::Kv { key, .. } => key.clone(),
+            other => panic!("{src:?} => {other:?}"),
+        };
+        assert_eq!(key_of("exportFOO=bar"), "exportFOO");
+        assert_eq!(key_of("export=bar"), "export");
+        assert_eq!(key_of("exportexport=x"), "exportexport");
+        assert_eq!(key_of("export export=x"), "export");
+        assert_eq!(key_of("export\tFOO=bar"), "FOO");
+    }
+
+    #[test]
+    fn comment_like_unquoted_values_are_kept() {
+        // Fuzz-found (roundtrip): pest's implicit COMMENT insertion inside the
+        // non-atomic `kv` rule swallowed values starting with `#` or `//` and
+        // the whole entry was silently dropped.
+        for (src, want) in [
+            ("COLOR=#ff0000\n", "#ff0000"),
+            ("URL=//cdn.example.com\n", "//cdn.example.com"),
+            ("B= #x\n", "#x"),
+            ("B=a#x\n", "a#x"),
+        ] {
+            let lines = parse_dotenv(src).unwrap();
+            assert!(
+                matches!(&lines[0], Line::Kv { value, .. } if value == want),
+                "{src:?} parsed as {lines:?}"
+            );
+        }
+        // Comment after a quoted value is still a separate comment.
+        let lines = parse_dotenv("A=\"x\" # note\n").unwrap();
+        assert!(matches!(&lines[0], Line::Kv { value, .. } if value == "x"));
+        assert!(lines
+            .iter()
+            .any(|l| matches!(l, Line::Comment { text } if text == "# note")));
+    }
+
+    #[test]
+    fn trailing_cr_in_comment_round_trips() {
+        // Fuzz-found (roundtrip): `#\r` + CRLF rendered as `#\r\n`, which
+        // re-parsed as `#` + CRLF. Every input that parses must round-trip.
+        for src in [
+            "#\r\r\n",
+            "// x\r\r\r\n",
+            "A=b\r\r\nC=d",
+            "A='b\r\r\n'",
+            "# @owner=x\r\r\n",
+        ] {
+            if let Ok(lines) = parse_dotenv(src) {
+                let r1 = lines_to_string(&lines);
+                let r2 = lines_to_string(&parse_dotenv(&r1).expect("render must re-parse"));
+                assert_eq!(r1, r2, "not idempotent for {src:?}");
+            }
+        }
+        // Plain CRLF files and mid-value CRs still parse.
+        assert!(parse_dotenv("# c\r\nA=b\r\n").is_ok());
+        assert!(parse_dotenv("A=b\rc\n").is_ok());
     }
 
     #[test]

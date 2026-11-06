@@ -117,7 +117,9 @@ text_directive_name = @{
 text_directive_value = @{ (!(NEW_LINE | " @") ~ ANY)+ }
 
 // === KV pairs ===
-export     = _{ "export" }
+// Atomic so the trailing blank is a real word boundary (`exportFOO=` is key
+// `exportFOO`, `export=` is key `export`). Skipped in parse_kv.
+export     = @{ "export" ~ (" " | "\t") }
 key        = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_" | "-" | ".")* }
 value      = @{ string }
 escaped_dq =  { "\"" }
@@ -140,7 +142,11 @@ char_bt    =  { !(escaped_bt) ~ ANY }
 var        = @{ var_char+ }
 var_char   =  { !(NEW_LINE) ~ ANY }
 
-kv  =  { export? ~ key ~ "=" ~ value? }
+// Compound-atomic: pest otherwise inserts implicit WHITESPACE *and COMMENT*
+// between the parts, so `COLOR=#fff` / `URL=//cdn` had the value eaten as a
+// comment and the whole kv was dropped. Blanks are spelled out explicitly.
+// A comment after a quoted value (`A="x" # c`) is still picked up at `env`.
+kv  = ${ export? ~ WHITESPACE* ~ key ~ WHITESPACE* ~ "=" ~ WHITESPACE* ~ value? }
 line = _{ directive | kv | COMMENT }
 env  = _{ SOI ~ NEW_LINE* ~ (line ~ NEW_LINE+)* ~ line? ~ EOI }
 
