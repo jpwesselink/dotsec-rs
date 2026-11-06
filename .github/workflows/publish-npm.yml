@@ -90,7 +90,7 @@ jobs:
             npm_pkg: dotsec-darwin-x64
             binary: dotsec
           - target: aarch64-apple-darwin
-            runner: macos-14
+            runner: macos-latest  # arm64; macos-14 image was retired
             npm_pkg: dotsec-darwin-arm64
             binary: dotsec
             can_test: true
