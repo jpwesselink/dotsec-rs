@@ -579,7 +579,15 @@ fn parse_directive(pair: Pair<Rule>) -> Vec<Line> {
                     };
                     output.push(Line::Directive {
                         name: name_pair.as_str().to_string(),
-                        value: Some(value_pair.as_str().trim().to_string()),
+                        // Trim exactly the blanks the grammar treats as blank
+                        // (not Unicode whitespace like `\x0b`), so a value the
+                        // grammar accepted can never trim down to "".
+                        value: Some(
+                            value_pair
+                                .as_str()
+                                .trim_matches([' ', '\t', '\r'])
+                                .to_string(),
+                        ),
                     });
                 }
                 _ => {}
@@ -1579,6 +1587,25 @@ mod tests {
         assert!(lines
             .iter()
             .any(|l| matches!(l, Line::Comment { text } if text == "# note")));
+    }
+
+    #[test]
+    fn blank_text_directive_value_is_rejected() {
+        // Fuzz-found (roundtrip): `# @region= ` trimmed to an empty value and
+        // rendered as `# @region=`, which no longer parsed.
+        for src in [
+            "#@region= ",
+            "# @region=\t\n",
+            "# @region= \r\n",
+            "# @region=\r",
+        ] {
+            assert!(parse_dotenv(src).is_err(), "{src:?} should be rejected");
+        }
+        let lines = parse_dotenv("# @region= eu-west-1 \nA=b\n").unwrap();
+        assert!(matches!(
+            &lines[0],
+            Line::Directive { name, value: Some(v) } if name == "region" && v == "eu-west-1"
+        ));
     }
 
     #[test]
