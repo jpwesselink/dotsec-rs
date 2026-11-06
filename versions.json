@@ -47,10 +47,6 @@
       "path": "/pr-56/"
     },
     {
-      "label": "#59 chore/ci-runners-and-audit",
-      "path": "/pr-59/"
-    },
-    {
       "label": "#60 fix/empty-text-directive",
       "path": "/pr-60/"
     }
