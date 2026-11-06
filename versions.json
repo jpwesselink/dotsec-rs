@@ -45,6 +45,10 @@
     {
       "label": "#56 release-plz-2026-07-14T09-03-14Z",
       "path": "/pr-56/"
+    },
+    {
+      "label": "#58 fix/fuzz-findings",
+      "path": "/pr-58/"
     }
   ],
   "latest": "/v7.0.1/"
