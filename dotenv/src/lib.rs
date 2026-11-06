@@ -1398,7 +1398,7 @@ mod tests {
         assert!(
             matches!(&lines[0], Line::Kv { key, value, quote_type: QuoteType::None } if key == "FOO" && value == "bar"),
             "expected value=\"bar\" with all trailing \\r stripped, got {:?}",
-            &lines[0]
+            lines[0]
         );
     }
 
@@ -1426,7 +1426,7 @@ mod tests {
         assert!(
             matches!(&lines[0], Line::Kv { key, value, quote_type: QuoteType::Double } if key == "FOO" && value == "bar\r"),
             "expected quoted value to preserve trailing \\r, got {:?}",
-            &lines[0]
+            lines[0]
         );
     }
 
