@@ -20,23 +20,23 @@ clap = { version = "4.4.14", features = [
     "error-context",
     "suggestions",
 ] }
-comfy-table = "7.1.0"
+comfy-table = "8"
 env_logger = { features = [
     "regex",
     "humantime",
 ], default-features = false, version = "0.11.2" }
 libc = "0.2"
 portable-pty = "0.9"
-inquire = "0.7"
+inquire = "0.9"
 log = { workspace = true }
-signal-hook = "0.3"
+signal-hook = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tempfile = "3.20"
 tokio = { workspace = true }
 zeroize = "1.8"
 chromakopia = "=0.2.0-pr-7.a68a872"
-rand = "0.9"
+rand = "0.10"
 
 [features]
 default = ["cli"]

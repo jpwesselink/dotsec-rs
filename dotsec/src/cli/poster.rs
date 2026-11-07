@@ -289,7 +289,7 @@ impl DotsecPoster {
 
 impl Effect for DotsecPoster {
     fn render(&self, buf: &mut FrameBuffer, frame: usize) {
-        use rand::Rng;
+        use rand::RngExt;
         let mut rng = rand::rng();
         let glitch: Vec<char> = "!@#$%^&*<>[]{}|/\\~`+=?".chars().collect();
 
