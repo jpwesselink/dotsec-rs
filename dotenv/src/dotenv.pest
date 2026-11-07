@@ -114,7 +114,11 @@ text_directive_name = @{
     | "region"
     ) ~ !(ASCII_ALPHA | "_" | "-")
 }
-text_directive_value = @{ (!(NEW_LINE | " @") ~ ANY)+ }
+// Must contain a non-blank char: a blank value is trimmed to "" by the parser
+// and `# @name=` (nothing after `=`) can't be rendered back into valid input.
+text_directive_value = @{
+    (" " | "\t")* ~ !(NEW_LINE | " " | "\t" | "\r") ~ ANY ~ (!(NEW_LINE | " @") ~ ANY)*
+}
 
 // === KV pairs ===
 // Atomic so the trailing blank is a real word boundary (`exportFOO=` is key

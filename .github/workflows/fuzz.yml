@@ -66,15 +66,15 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
 
-      # Seed the live corpus from `fuzz/seeds/` if the cache restore missed —
-      # mirrors the local-developer setup documented in fuzz/README.md.
-      - name: Seed corpus if empty
+      # Merge `fuzz/seeds/` into the (possibly cache-restored) live corpus.
+      # Always, not only on a cache miss: seeds added later (e.g. minimized
+      # crash reproducers) must reach the nightly too. `--update=none` keeps the
+      # accumulated corpus entries untouched.
+      - name: Merge seeds into corpus
         working-directory: fuzz
         run: |
           mkdir -p corpus/${{ matrix.target }}
-          if [ -z "$(ls -A corpus/${{ matrix.target }} 2>/dev/null)" ]; then
-            cp seeds/${{ matrix.target }}/* corpus/${{ matrix.target }}/
-          fi
+          cp --update=none seeds/${{ matrix.target }}/* corpus/${{ matrix.target }}/
 
       # 600 seconds per target = 10 min nightly budget. `rss_limit_mb` guards
       # against runaway allocations from a crafted input — without it, a
