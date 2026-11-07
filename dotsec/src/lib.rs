@@ -1,4 +1,4 @@
-use comfy_table::{modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, ContentArrangement, Table};
+use comfy_table::{presets::UTF8_FULL, ContentArrangement, Table};
 use dotenv::{lines_to_json, Line};
 
 // Re-export everything from dotsec-core
@@ -71,8 +71,7 @@ fn create_output(
         OutputFormat::Text => {
             let mut table = Table::new();
             table
-                .load_preset(UTF8_FULL)
-                .apply_modifier(UTF8_ROUND_CORNERS)
+                .load_style(UTF8_FULL.with_rounded_corners())
                 .set_content_arrangement(ContentArrangement::Dynamic)
                 .set_header(vec!["Key", "Value"]);
             for line in lines {
