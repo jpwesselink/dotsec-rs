@@ -45,10 +45,6 @@
     {
       "label": "#56 release-plz-2026-07-14T09-03-14Z",
       "path": "/pr-56/"
-    },
-    {
-      "label": "#60 fix/empty-text-directive",
-      "path": "/pr-60/"
     }
   ],
   "latest": "/v7.0.1/"
