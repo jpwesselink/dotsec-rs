@@ -6,12 +6,16 @@ description = "Shared cryptographic functions for dotsec"
 license = "MIT"
 
 [dependencies]
-aes-gcm = "0.10.3"
+aes-gcm = "0.11"
 base64 = { workspace = true }
-hmac = "0.12"
-rand = "0.8"
-sha2 = "0.10"
+hmac = "0.13"
+getrandom = "0.4"
+sha2 = "0.11"
 subtle = "2"
 thiserror = { workspace = true }
 zeroize = "1.8"
+# Held at 0.11: age 0.12 makes p256 (→ crypto-bigint 0.5, RUSTSEC-2026-0387,
+# non-constant-time ops) a mandatory dependency for its new HPKE recipients.
+# We only use x25519, but don't ship flagged constant-time code in a secrets
+# tool. Bump once age depends on crypto-bigint >= 0.7.
 age = { version = "0.11", features = ["armor"] }

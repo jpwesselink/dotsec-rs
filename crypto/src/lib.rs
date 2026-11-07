@@ -1,6 +1,6 @@
 use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng, Payload},
-    AeadCore, Aes256Gcm,
+    aead::{Aead, Generate, KeyInit, Payload},
+    Aes256Gcm,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use hmac::{Hmac, Mac};
@@ -36,7 +36,8 @@ pub enum CryptoError {
 /// 32-byte output is stored verbatim (base64-encoded) as `mac=...` inside the
 /// `@dotsec(...)` directive on disk.
 pub fn compute_file_mac(dek: &[u8], canonical: &[u8]) -> [u8; 32] {
-    let mut hmac = <HmacSha256 as Mac>::new_from_slice(dek).expect("HMAC accepts any key length");
+    let mut hmac =
+        <HmacSha256 as KeyInit>::new_from_slice(dek).expect("HMAC accepts any key length");
     hmac.update(canonical);
     hmac.finalize().into_bytes().into()
 }
@@ -53,7 +54,8 @@ pub fn verify_file_mac(dek: &[u8], canonical: &[u8], mac: &[u8]) -> Result<(), C
 
 /// Compute a 32-byte key commitment: HMAC-SHA256(key=DEK, msg="dotsec-key-commit").
 pub fn compute_key_commitment(dek: &[u8]) -> Vec<u8> {
-    let mut mac = <HmacSha256 as Mac>::new_from_slice(dek).expect("HMAC accepts any key length");
+    let mut mac =
+        <HmacSha256 as KeyInit>::new_from_slice(dek).expect("HMAC accepts any key length");
     mac.update(b"dotsec-key-commit");
     mac.finalize().into_bytes().to_vec()
 }
@@ -70,8 +72,6 @@ fn verify_key_commitment(dek: &[u8], commitment: &[u8]) -> Result<(), CryptoErro
 /// Pad plaintext with random bytes so ciphertext length doesn't leak value length.
 /// Wire format: `[2-byte big-endian original length] [original data] [random padding]`
 pub fn pad(data: &[u8]) -> Result<Vec<u8>, CryptoError> {
-    use rand::RngCore;
-
     if data.len() > u16::MAX as usize {
         return Err(CryptoError::AesError(format!(
             "value too large to pad: {} bytes exceeds maximum of {} bytes",
@@ -83,11 +83,11 @@ pub fn pad(data: &[u8]) -> Result<Vec<u8>, CryptoError> {
     let header_len = 2;
     let total = header_len + data.len();
     let base_padded = total.div_ceil(64) * 64;
-    let extra_blocks = (OsRng.next_u32() % 2) as usize;
+    let extra_blocks = (getrandom::u32().map_err(rng_error)? % 2) as usize;
     let padded_len = base_padded + (extra_blocks * 64);
 
     let mut buf = vec![0u8; padded_len];
-    OsRng.fill_bytes(&mut buf);
+    getrandom::fill(&mut buf).map_err(rng_error)?;
     let len = data.len() as u16;
     buf[0..2].copy_from_slice(&len.to_be_bytes());
     buf[2..2 + data.len()].copy_from_slice(data);
@@ -111,7 +111,7 @@ pub fn unpad(data: &[u8]) -> Result<&[u8], CryptoError> {
 pub fn encrypt_value(plaintext: &str, dek: &[u8], aad: &str) -> Result<String, CryptoError> {
     let cipher =
         Aes256Gcm::new_from_slice(dek).map_err(|e| CryptoError::AesError(e.to_string()))?;
-    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+    let nonce = aes_gcm::Nonce::try_generate().map_err(rng_error)?;
     // Zeroizing covers every `?` exit below — manual zeroize would skip them.
     let padded = Zeroizing::new(pad(plaintext.as_bytes())?);
     let commitment = compute_key_commitment(dek);
@@ -149,7 +149,7 @@ pub fn decrypt_value(enc_str: &str, dek: &[u8], aad: &str) -> Result<String, Cry
 
     verify_key_commitment(dek, commitment)?;
 
-    let nonce = aes_gcm::Nonce::from_slice(nonce_bytes);
+    let nonce = aes_gcm::Nonce::try_from(nonce_bytes).map_err(|_| CryptoError::InvalidFormat)?;
     let cipher =
         Aes256Gcm::new_from_slice(dek).map_err(|e| CryptoError::AesError(e.to_string()))?;
 
@@ -161,7 +161,7 @@ pub fn decrypt_value(enc_str: &str, dek: &[u8], aad: &str) -> Result<String, Cry
     // intermediate plaintext copy escapes until the success-only to_string.
     let decrypted = Zeroizing::new(
         cipher
-            .decrypt(nonce, payload)
+            .decrypt(&nonce, payload)
             .map_err(|e| CryptoError::AesError(e.to_string()))?,
     );
 
@@ -178,10 +178,16 @@ pub fn is_encrypted_value(value: &str) -> bool {
 
 /// Generate a random 32-byte AES-256 data encryption key.
 pub fn generate_dek() -> Zeroizing<Vec<u8>> {
-    use rand::RngCore;
-    let mut dek = vec![0u8; 32];
-    OsRng.fill_bytes(&mut dek);
-    Zeroizing::new(dek)
+    let mut dek = Zeroizing::new(vec![0u8; 32]);
+    // Same contract as before (rand's OsRng::fill_bytes): an OS RNG failure
+    // is unrecoverable for key generation, so panic rather than return a
+    // weak key.
+    getrandom::fill(&mut dek).expect("system RNG failure while generating DEK");
+    dek
+}
+
+fn rng_error(e: getrandom::Error) -> CryptoError {
+    CryptoError::AesError(format!("system RNG failure: {e}"))
 }
 
 #[cfg(test)]
@@ -276,7 +282,7 @@ mod decrypt_error_path_tests {
 
     fn craft_unpad_failing_blob(dek_bytes: &[u8], aad: &str) -> String {
         let cipher = Aes256Gcm::new_from_slice(dek_bytes).unwrap();
-        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        let nonce = aes_gcm::Nonce::try_generate().unwrap();
 
         // length header claims 999 bytes inside a 4-byte buffer -> unpad rejects.
         let mut bad_inner = vec![0u8; 4];
@@ -311,7 +317,7 @@ mod decrypt_error_path_tests {
         let dek = dek();
         let aad = "UTF8";
         let cipher = Aes256Gcm::new_from_slice(&dek).unwrap();
-        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        let nonce = aes_gcm::Nonce::try_generate().unwrap();
         let inner = pad(&[0xC3, 0x28]).unwrap();
         let payload = Payload {
             msg: &inner,
