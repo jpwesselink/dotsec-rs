@@ -58,8 +58,7 @@ pub async fn match_args(
     } else {
         None
     };
-    let mut entries = dotenv::lines_to_entries(&lines);
-    dotsec::merge_schema_directives_into_entries(&mut entries, schema.as_ref());
+    let entries = dotsec::entries_with_schema(&lines, schema.as_ref());
 
     // Re-encrypt every @encrypt entry (now including schema-merged ones)
     // under the new DEK.

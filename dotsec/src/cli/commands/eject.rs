@@ -84,11 +84,18 @@ pub async fn match_args(
             }
         }
 
-        // Write schema file. We rely on `schema_to_string` to render
-        // everything — including the file-level directives now attached to
-        // the first entry — so that read-back via `parse_schema` produces
-        // an in-memory schema byte-for-byte equivalent to the one we just
-        // passed to `encrypt_lines_to_sec`.
+        // Write schema file. `schema_to_string` renders the leading
+        // file-level directives as a separate header block (not on the first
+        // key's directive line); read-back via `parse_schema` still produces
+        // an in-memory schema equivalent to the one we pass to
+        // `encrypt_lines_to_sec`, so the MAC's schema hash stays stable.
+        //
+        // The `@default-*` directive is intentionally *also* left in the
+        // .sec: runtime paths that only see the .sec (e.g. `dotsec run`'s
+        // secret redaction) rely on it, and `entries_with_schema` makes sure
+        // it never overrides a per-key `@plaintext`/`@encrypt` that moved
+        // into the schema — so the encrypt/plaintext state of every entry is
+        // unchanged by extract-schema.
         let schema_output = dotenv::schema_to_string(&schema);
         dotsec::write_sec_file(output, &schema_output)?;
 

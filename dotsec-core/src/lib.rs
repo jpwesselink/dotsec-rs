@@ -427,46 +427,75 @@ enum SecFormat {
 
 // --- Encrypt ---
 
-/// Merge schema-owned directives into a list of entries so the caller sees
-/// `@encrypt`/`@plaintext` (and `@type`, `@push`, …) even when they live in
-/// `dotsec.schema` rather than inline on the entry.
+/// Build the effective per-entry directives for `lines`, merging in
+/// schema-owned directives so the caller sees `@encrypt`/`@plaintext` (and
+/// `@type`, `@push`, …) even when they live in `dotsec.schema` rather than
+/// inline on the entry.
 ///
-/// Conflict resolution:
-/// - Inline `@encrypt`/`@plaintext` on an entry win as a pair: if either is
-///   set, both are skipped from the schema so the user's local override sticks.
-/// - Other directives: only added when the entry doesn't already have them.
-/// - Schema-level `@default-encrypt` applies when the entry has no
-///   inline-or-schema `@encrypt`/`@plaintext` decision yet.
+/// Encryption decision, highest precedence first:
+/// 1. Explicit inline `@encrypt`/`@plaintext` on the entry in the `.sec`.
+/// 2. Per-key `@encrypt`/`@plaintext` in the schema.
+/// 3. File-level default: encrypt if either the `.sec` or the schema carries
+///    `@default-encrypt`.
+///
+/// The file-level default must NOT be treated as an inline override.
+/// `lines_to_entries` materialises `@default-encrypt` as a synthetic
+/// `@encrypt` on every entry, which used to shadow a schema-level
+/// `@plaintext` — so `dotsec extract-schema` (which moves `@plaintext` into
+/// the schema but leaves `@default-encrypt` in the `.sec`) silently turned
+/// plaintext values into `ENC[…]`. Explicit inline directives are therefore
+/// computed from the lines with the `@default-*` directives removed.
+///
+/// Without a schema this is exactly `lines_to_entries(lines)`.
 ///
 /// **Use this in any command that re-encrypts** — `rotate-key`, `dotsec
 /// encrypt`, etc. Skipping the merge causes a plaintext leak: a value that's
 /// encrypted via schema-only `@encrypt` would otherwise be treated as
 /// plaintext and re-written without encryption.
-pub fn merge_schema_directives_into_entries(
-    entries: &mut [dotenv::Entry],
-    schema: Option<&Schema>,
-) {
+pub fn entries_with_schema(lines: &[Line], schema: Option<&Schema>) -> Vec<dotenv::Entry> {
     let Some(schema) = schema else {
-        return;
+        return lines_to_entries(lines);
     };
-    let schema_default_encrypt: Option<bool> = schema
-        .iter()
-        .flat_map(|(_, e)| e.directives.iter())
-        .find_map(|(name, _)| match name.as_str() {
-            "default-encrypt" => Some(true),
-            "default-plaintext" => Some(false),
-            _ => None,
-        });
 
-    for entry in entries.iter_mut() {
-        let inline_encryption_override = entry
+    fn is_default_directive(name: &str) -> bool {
+        name == "default-encrypt" || name == "default-plaintext"
+    }
+    fn has_decision(entry: &dotenv::Entry) -> bool {
+        entry
             .directives
             .iter()
-            .any(|(n, _)| n == "encrypt" || n == "plaintext");
+            .any(|(n, _)| n == "encrypt" || n == "plaintext")
+    }
+
+    let file_default_encrypt = lines.iter().find_map(|l| match l {
+        Line::Directive { name, .. } if is_default_directive(name) => {
+            Some(name == "default-encrypt")
+        }
+        _ => None,
+    });
+    let schema_default_encrypt = schema
+        .iter()
+        .flat_map(|(_, e)| e.directives.iter())
+        .find_map(|(name, _)| is_default_directive(name).then_some(name == "default-encrypt"));
+    // Either side asking for encrypt-by-default wins: this never encrypts
+    // less than the pre-fix behaviour did for keys without a per-key decision.
+    let default_encrypt =
+        file_default_encrypt == Some(true) || schema_default_encrypt == Some(true);
+
+    // Entries carrying only the user's explicit inline directives.
+    let explicit_lines: Vec<Line> = lines
+        .iter()
+        .filter(|l| !matches!(l, Line::Directive { name, .. } if is_default_directive(name)))
+        .cloned()
+        .collect();
+    let mut entries = lines_to_entries(&explicit_lines);
+
+    for entry in entries.iter_mut() {
+        let inline_encryption_override = has_decision(entry);
 
         if let Some(schema_entry) = schema.get(&entry.key) {
             for (name, value) in &schema_entry.directives {
-                if name == "default-encrypt" || name == "default-plaintext" {
+                if is_default_directive(name) {
                     continue;
                 }
                 if (name == "encrypt" || name == "plaintext") && inline_encryption_override {
@@ -477,17 +506,12 @@ pub fn merge_schema_directives_into_entries(
                 }
             }
         }
-        if !inline_encryption_override
-            && !entry
-                .directives
-                .iter()
-                .any(|(n, _)| n == "encrypt" || n == "plaintext")
-        {
-            if let Some(true) = schema_default_encrypt {
-                entry.directives.push(("encrypt".to_string(), None));
-            }
+        if default_encrypt && !has_decision(entry) {
+            entry.directives.push(("encrypt".to_string(), None));
         }
     }
+
+    entries
 }
 
 /// Encrypt in-memory lines and write the result to a .sec file.
@@ -502,8 +526,7 @@ pub async fn encrypt_lines_to_sec(
     encryption_engine: &EncryptionEngine,
     schema: Option<&Schema>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut entries = lines_to_entries(lines);
-    merge_schema_directives_into_entries(&mut entries, schema);
+    let entries = entries_with_schema(lines, schema);
 
     let (dek, wrapped_dek) = match encryption_engine {
         EncryptionEngine::Aws(opts) => {

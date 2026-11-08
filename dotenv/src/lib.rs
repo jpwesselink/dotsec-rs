@@ -702,34 +702,60 @@ pub fn parse_schema(source: &str) -> Result<Schema, Box<pest::error::Error<Rule>
 }
 
 /// Serialize a schema back to file format.
+///
+/// File-level directives (`@default-encrypt` / `@default-plaintext`) are
+/// rendered as their own header block, separated from the first key by a
+/// blank line. `parse_schema` accumulates every directive before the first key
+/// onto that key, so the header block reads back into the same in-memory
+/// schema (and thus the same canonical bytes / MAC) — it just no longer looks
+/// like a per-key directive of the first key.
 pub fn schema_to_string(schema: &Schema) -> String {
+    fn push_directive_line(output: &mut String, directives: &[&(String, Option<String>)]) {
+        output.push_str("# ");
+        for (i, (name, value)) in directives.iter().enumerate() {
+            if i > 0 {
+                output.push(' ');
+            }
+            match value {
+                Some(v) => {
+                    if QUOTED_VALUE_DIRECTIVES.contains(&name.as_str()) {
+                        output.push_str(&format!("@{}=\"{}\"", name, v));
+                    } else {
+                        output.push_str(&format!("@{}={}", name, v));
+                    }
+                }
+                None => output.push_str(&format!("@{}", name)),
+            }
+        }
+        output.push('\n');
+    }
+
     let mut output = String::new();
     let mut first = true;
 
     for (_key, entry) in schema.iter() {
-        if !first && !entry.directives.is_empty() {
+        let mut key_directives: Vec<&(String, Option<String>)> = entry.directives.iter().collect();
+
+        if first {
+            // Only a *leading* run of file-level directives on the first
+            // entry is hoisted: that's exactly what `parse_schema` yields for a
+            // header block, so read-back preserves directive order.
+            let leading = key_directives
+                .iter()
+                .take_while(|(name, _)| SCHEMA_FILE_LEVEL_DIRECTIVES.contains(&name.as_str()))
+                .count();
+            if leading > 0 {
+                let file_level: Vec<_> = key_directives.drain(..leading).collect();
+                push_directive_line(&mut output, &file_level);
+                output.push('\n');
+            }
+        } else if !key_directives.is_empty() {
             output.push('\n');
         }
         first = false;
 
-        if !entry.directives.is_empty() {
-            output.push_str("# ");
-            for (i, (name, value)) in entry.directives.iter().enumerate() {
-                if i > 0 {
-                    output.push(' ');
-                }
-                match value {
-                    Some(v) => {
-                        if QUOTED_VALUE_DIRECTIVES.contains(&name.as_str()) {
-                            output.push_str(&format!("@{}=\"{}\"", name, v));
-                        } else {
-                            output.push_str(&format!("@{}={}", name, v));
-                        }
-                    }
-                    None => output.push_str(&format!("@{}", name)),
-                }
-            }
-            output.push('\n');
+        if !key_directives.is_empty() {
+            push_directive_line(&mut output, &key_directives);
         }
 
         output.push_str(&entry.key);
@@ -2444,6 +2470,23 @@ mod tests {
             assert_eq!(a.key, b.key);
             assert_eq!(a.directives, b.directives);
         }
+    }
+
+    #[test]
+    fn schema_to_string_renders_file_level_directives_as_header_block() {
+        let source =
+            "# @default-encrypt\n\n# @plaintext @type=number\nPORT\n\n# @type=string\nSECRET\n";
+        let schema = parse_schema(source).unwrap();
+        // parse_schema attaches the header directive to the first key ...
+        assert!(schema.get("PORT").unwrap().has_directive("default-encrypt"));
+        // ... but rendering keeps it as its own file-level block.
+        let output = schema_to_string(&schema);
+        assert_eq!(output, source);
+        let reparsed = parse_schema(&output).unwrap();
+        assert_eq!(
+            schema_to_canonical_bytes(&reparsed),
+            schema_to_canonical_bytes(&schema)
+        );
     }
 
     #[test]
