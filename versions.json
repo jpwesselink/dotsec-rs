@@ -51,10 +51,6 @@
       "path": "/pr-63/"
     },
     {
-      "label": "#64 fix/run-security",
-      "path": "/pr-64/"
-    },
-    {
       "label": "#65 feat/rotate-keypair",
       "path": "/pr-65/"
     },
