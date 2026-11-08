@@ -1,5 +1,10 @@
 [workspace]
 semver_check = false
+# Versions come from our git tags (dotsec-vX.Y.Z, …), not crates.io: the crate
+# names there belong to unrelated projects, so registry lookups made release-plz
+# think 7.0.1 was never released and it stopped bumping (stuck since 2026-07).
+git_only = true
+git_tag_name = "{{ package }}-v{{ version }}"
 
 # Crate names on crates.io are owned by unrelated parties (RustCrypto for `crypto`,
 # junhsonjb for `dotsec`, etc.), so we never publish to crates.io. Users get dotsec
