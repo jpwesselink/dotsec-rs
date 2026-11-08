@@ -10,7 +10,7 @@
 <script defer src="/dotsec-rs/beta/static/js/lib-react.a054607913.js"></script>
 <script defer src="/dotsec-rs/beta/static/js/lib-router.b2c64079c3.js"></script>
 <script defer src="/dotsec-rs/beta/static/js/613.d46e225703.js"></script>
-<script defer src="/dotsec-rs/beta/static/js/index.9955b2aa5e.js"></script>
+<script defer src="/dotsec-rs/beta/static/js/index.39def895fd.js"></script>
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="generator" content="Rspress v2.0.5">
 <meta property="og:type" content="website">
@@ -23,7 +23,7 @@
 <p>Directives are comments that control encryption, typing, validation, and push targets. They sit on the line immediately above the key they apply to:</p>
 <div class="rp-codeblock language-bash"><div class="rp-codeblock__content"><div class="rp-codeblock__content__scroll-container rp-scrollbar rp-scrollbar--always"><pre class="shiki css-variables" style="background-color:var(--shiki-background);color:var(--shiki-foreground)" tabindex="0" data-lang="bash"><code><span class="line"><span style="color:var(--shiki-token-comment)"># @encrypt</span></span>
 <span class="line"><span style="color:var(--shiki-token-comment)"># @type=string @format=url @not-empty</span></span>
-<span class="line"><span style="color:var(--shiki-foreground)">DATABASE_URL</span><span style="color:var(--shiki-token-keyword)">=</span><span style="color:var(--shiki-token-string-expression)">&quot;postgres://user:pass@localhost:5432/mydb&quot;</span></span>
+<span class="line"><span style="color:var(--shiki-foreground)">API_BASE_URL</span><span style="color:var(--shiki-token-keyword)">=</span><span style="color:var(--shiki-token-string-expression)">&quot;https://api.example.com&quot;</span></span>
 <span class="line"></span>
 <span class="line"><span style="color:var(--shiki-token-comment)"># @plaintext</span></span>
 <span class="line"><span style="color:var(--shiki-token-comment)"># @type=enum(&quot;development&quot;, &quot;preview&quot;, &quot;production&quot;)</span></span>
@@ -71,7 +71,7 @@
 
 
 
-<div class="rp-table-scroll-container rp-scrollbar"><table><thead><tr><th>Directive</th><th>Value</th><th>Description</th></tr></thead><tbody><tr><td><code>@provider</code></td><td><code>local</code>, <code>aws</code></td><td>Encryption provider (<code>local</code> is the default)</td></tr><tr><td><code>@key-id</code></td><td>KMS key ID or alias</td><td>KMS key to use (AWS only)</td></tr><tr><td><code>@region</code></td><td>AWS region</td><td>AWS region (AWS only)</td></tr><tr><td><code>@default-encrypt</code></td><td>none</td><td>Encrypt all variables by default</td></tr><tr><td><code>@default-plaintext</code></td><td>none</td><td>Don&#x27;t encrypt by default</td></tr></tbody></table></div>
+<div class="rp-table-scroll-container rp-scrollbar"><table><thead><tr><th>Directive</th><th>Value</th><th>Description</th></tr></thead><tbody><tr><td><code>@provider</code></td><td><code>local</code>, <code>aws</code></td><td>Encryption provider (<code>local</code> is the default)</td></tr><tr><td><code>@key-id</code></td><td>KMS key ID or alias (<code>aws</code>); key-file path (<code>local</code>)</td><td>With <code>@provider=aws</code>, the KMS key to use. With <code>@provider=local</code>, the path of the age key file to use instead of <code>&lt;sec-file&gt;.key</code> (<code>DOTSEC_PRIVATE_KEY</code> still takes precedence)</td></tr><tr><td><code>@region</code></td><td>AWS region</td><td>AWS region (AWS only)</td></tr><tr><td><code>@default-encrypt</code></td><td>none</td><td>Encrypt all variables by default</td></tr><tr><td><code>@default-plaintext</code></td><td>none</td><td>Don&#x27;t encrypt by default</td></tr></tbody></table></div>
 <h3 class="rp-toc-include" id="encryption-directives"><a href="#encryption-directives" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Encryption directives</h3>
 
 
@@ -310,7 +310,11 @@
 
 
 
-<div class="rp-table-scroll-container rp-scrollbar"><table><thead><tr><th>Belongs in schema</th><th>Belongs in <code>.sec</code></th></tr></thead><tbody><tr><td><code>@type</code>, <code>@format</code>, <code>@pattern</code></td><td><code>@provider</code></td></tr><tr><td><code>@min</code>, <code>@max</code>, <code>@min-length</code>, <code>@max-length</code></td><td><code>@key-id</code></td></tr><tr><td><code>@encrypt</code>, <code>@plaintext</code></td><td><code>@region</code></td></tr><tr><td><code>@push</code>, <code>@optional</code></td><td></td></tr><tr><td><code>@not-empty</code>, <code>@deprecated</code>, <code>@description</code></td><td></td></tr><tr><td><code>@default-encrypt</code>, <code>@default-plaintext</code></td><td></td></tr></tbody></table></div>
+
+
+
+
+<div class="rp-table-scroll-container rp-scrollbar"><table><thead><tr><th>Belongs in schema</th><th>Belongs in <code>.sec</code></th></tr></thead><tbody><tr><td><code>@type</code>, <code>@format</code>, <code>@pattern</code></td><td><code>@provider</code></td></tr><tr><td><code>@min</code>, <code>@max</code>, <code>@min-length</code>, <code>@max-length</code></td><td><code>@key-id</code></td></tr><tr><td><code>@encrypt</code>, <code>@plaintext</code></td><td><code>@region</code></td></tr><tr><td><code>@push</code>, <code>@optional</code></td><td></td></tr><tr><td><code>@not-empty</code>, <code>@deprecated</code>, <code>@description</code></td><td></td></tr><tr><td><code>@also-env</code></td><td></td></tr><tr><td><code>@default-encrypt</code>, <code>@default-plaintext</code></td><td></td></tr></tbody></table></div>
 <h3 class="rp-toc-include" id="discovery"><a href="#discovery" class="rp-header-anchor rp-link" aria-hidden="true">#</a>Discovery</h3>
 <p>The schema file is found automatically:</p>
 <ol>
