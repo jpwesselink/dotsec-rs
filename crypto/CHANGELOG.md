@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.1.0](https://github.com/jpwesselink/dotsec-rs/compare/crypto-v7.0.1...crypto-v7.1.0) - 2026-11-08
+
+### Fixed
+
+- *(run)* don't leak the private key to the child; validate before running; fix export ([#64](https://github.com/jpwesselink/dotsec-rs/pull/64))
+
+### Other
+
+- *(deps)* bump RustCrypto stack, pinned by format-compat tests ([#62](https://github.com/jpwesselink/dotsec-rs/pull/62))
+
 ## [7.0.1](https://github.com/jpwesselink/dotsec-rs/compare/crypto-v7.0.0...crypto-v7.0.1) - 2026-06-13
 
 ### Other

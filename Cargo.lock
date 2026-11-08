@@ -245,7 +245,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "aws"
-version = "7.0.1"
+version = "7.1.0"
 dependencies = [
  "aws-config",
  "aws-sdk-kms",
@@ -1285,7 +1285,7 @@ dependencies = [
 
 [[package]]
 name = "crypto"
-version = "7.0.1"
+version = "7.1.0"
 dependencies = [
  "aes-gcm",
  "age",
@@ -1521,7 +1521,7 @@ dependencies = [
 
 [[package]]
 name = "dotenv"
-version = "7.0.1"
+version = "7.1.0"
 dependencies = [
  "indexmap 2.14.2",
  "pest",
@@ -1534,7 +1534,7 @@ dependencies = [
 
 [[package]]
 name = "dotsec"
-version = "7.0.1"
+version = "7.1.0"
 dependencies = [
  "aws",
  "base64 0.23.1",
@@ -1561,7 +1561,7 @@ dependencies = [
 
 [[package]]
 name = "dotsec-core"
-version = "7.0.1"
+version = "7.1.0"
 dependencies = [
  "aws",
  "base64 0.23.1",
@@ -1576,7 +1576,7 @@ dependencies = [
 
 [[package]]
 name = "dotsec-napi"
-version = "7.0.0"
+version = "7.1.0"
 dependencies = [
  "dotsec-core",
  "napi",

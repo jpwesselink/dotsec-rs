@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.1.0](https://github.com/jpwesselink/dotsec-rs/compare/aws-v7.0.1...aws-v7.1.0) - 2026-11-08
+
+### Fixed
+
+- *(deps)* clear cargo audit; build darwin-arm64 on macos-latest ([#59](https://github.com/jpwesselink/dotsec-rs/pull/59))
+
+### Other
+
+- *(deps)* bump non-crypto majors ([#61](https://github.com/jpwesselink/dotsec-rs/pull/61))
+
 ## [7.0.1](https://github.com/jpwesselink/dotsec-rs/compare/aws-v7.0.0...aws-v7.0.1) - 2026-06-13
 
 ### Other
