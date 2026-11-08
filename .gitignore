@@ -31,3 +31,5 @@ settings.json
 *.swp
 *~
 .claude/
+# Throwaway test identities for format-compat fixtures (not real secrets).
+!dotsec-core/tests/fixtures/**/*.key
