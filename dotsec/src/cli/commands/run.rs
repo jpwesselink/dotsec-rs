@@ -1,7 +1,7 @@
 use clap::{arg, Command};
 use log::debug;
 
-use crate::cli::helpers::with_progress;
+use crate::cli::helpers::{collect_validation_errors, report_validation_errors, with_progress};
 use crate::default_options::DefaultOptions;
 
 pub fn command() -> Command {
@@ -53,6 +53,21 @@ pub async fn match_args(
             )
             .await?
         };
+
+        // Validate before anything reaches the child: a value that breaks
+        // its @type/@pattern/schema rules (e.g. a tampered plaintext URL, which
+        // the file MAC deliberately doesn't cover) must never be injected.
+        let source = env_file
+            .map(String::as_str)
+            .unwrap_or(default_options.sec_file);
+        let errors = collect_validation_errors(&lines, default_options.schema_path.as_deref())?;
+        if report_validation_errors(source, &errors) > 0 {
+            return Err(format!(
+                "Validation failed — not running `{}`. Fix the values or run `dotsec validate` for details.",
+                cmd_parts.join(" ")
+            )
+            .into());
+        }
 
         let env_vars = dotsec::resolve_env_vars(&lines);
         let secrets = dotsec::collect_secret_values(&lines, &env_vars);

@@ -2,7 +2,7 @@ use clap::Command;
 use colored::Colorize;
 use log::debug;
 
-use crate::cli::helpers::with_progress;
+use crate::cli::helpers::{collect_validation_errors, report_validation_errors, with_progress};
 use crate::default_options::DefaultOptions;
 
 pub fn command() -> Command {
@@ -27,65 +27,21 @@ pub async fn match_args(
         )
         .await?;
 
-        let entries = dotenv::lines_to_entries(&lines);
-        let mut errors = dotenv::validate_entries_with_env(&entries);
-
-        // Schema-aware validation if schema exists
-        if let Some(ref schema_path) = default_options.schema_path {
-            debug!("Validating against schema: {}", schema_path);
-            let schema_content = std::fs::read_to_string(schema_path)?;
-            let schema = dotenv::parse_schema(&schema_content)?;
-            let file_config = dotenv::extract_file_config(&lines);
-            let schema_errors =
-                dotenv::validate_entries_against_schema(&entries, &schema, &file_config);
-            errors.extend(schema_errors);
-        }
-
-        let error_count = errors
-            .iter()
-            .filter(|e| e.severity == dotenv::Severity::Error)
-            .count();
-        let warning_count = errors
-            .iter()
-            .filter(|e| e.severity == dotenv::Severity::Warning)
-            .count();
+        let entry_count = dotenv::lines_to_entries(&lines).len();
+        let errors = collect_validation_errors(&lines, default_options.schema_path.as_deref())?;
 
         if errors.is_empty() {
             println!(
                 "{} {} ({})",
                 "✓".green(),
                 sec_file,
-                format!("{} entries", entries.len()).dimmed()
+                format!("{} entries", entry_count).dimmed()
             );
             if let Some(ref schema_path) = default_options.schema_path {
                 println!("  {} validated against {}", "✓".green(), schema_path,);
             }
-        } else {
-            // Print errors first, then warnings
-            if error_count > 0 {
-                eprintln!("{} {} — {} error(s):\n", "✗".red(), sec_file, error_count);
-                for error in errors
-                    .iter()
-                    .filter(|e| e.severity == dotenv::Severity::Error)
-                {
-                    eprintln!("  {} {}", "•".red(), error);
-                }
-            }
-            if warning_count > 0 {
-                if error_count > 0 {
-                    eprintln!();
-                }
-                eprintln!("{} {} warning(s):\n", "⚠".yellow(), warning_count);
-                for warning in errors
-                    .iter()
-                    .filter(|e| e.severity == dotenv::Severity::Warning)
-                {
-                    eprintln!("  {} {}", "•".yellow(), warning);
-                }
-            }
-            if error_count > 0 {
-                return Err("Validation failed".into());
-            }
+        } else if report_validation_errors(sec_file, &errors) > 0 {
+            return Err("Validation failed".into());
         }
     }
     Ok(())
