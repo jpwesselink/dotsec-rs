@@ -1036,6 +1036,18 @@ fn lookup(name: &str, resolved: &[(String, String)]) -> String {
 pub fn filter_env_injectable_lines(lines: &[Line]) -> Vec<Line> {
     use std::collections::HashSet;
 
+    // File-level directives describe the whole file, never a single entry:
+    // they must survive even when the first entry (whose block they may sit
+    // in) is dropped.
+    const FILE_LEVEL: &[&str] = &[
+        "provider",
+        "key-id",
+        "region",
+        "default-encrypt",
+        "default-plaintext",
+        header_v3::HEADER_DIRECTIVE_NAME,
+    ];
+
     let entries = lines_to_entries(lines);
     let excluded_keys: HashSet<&str> = entries
         .iter()
@@ -1047,38 +1059,58 @@ pub fn filter_env_injectable_lines(lines: &[Line]) -> Vec<Line> {
         return lines.to_vec();
     }
 
+    // `pending` holds an entry's directive block *including* the newlines
+    // between its lines, so a kept block is re-emitted exactly as it was.
+    // (Emitting the newlines eagerly while holding the directives back glued
+    // the last directive onto the key: `# @type=numberPORT=3000`, which
+    // turned the entry into a comment.)
     let mut out: Vec<Line> = Vec::with_capacity(lines.len());
-    let mut pending_directives: Vec<Line> = Vec::new();
+    let mut pending: Vec<Line> = Vec::new();
+    let mut skip_newline = false;
 
     for line in lines {
         match line {
-            Line::Directive { .. } => {
-                pending_directives.push(line.clone());
-            }
-            Line::Kv { key, .. } => {
-                if excluded_keys.contains(key.as_str()) {
-                    // Drop both the kv and its preceding directive block (and trailing newline).
-                    pending_directives.clear();
-                    if matches!(out.last(), Some(Line::Newline)) {
-                        out.pop();
-                    }
-                } else {
-                    out.append(&mut pending_directives);
-                    out.push(line.clone());
+            Line::Directive { .. } => pending.push(line.clone()),
+            Line::Newline if skip_newline => skip_newline = false,
+            Line::Newline | Line::Whitespace { .. } if !pending.is_empty() => {
+                pending.push(line.clone());
+                // A blank line ends the block: directives above it don't
+                // belong to the next entry (file-level header, orphans).
+                let n = pending.len();
+                if n >= 2 && matches!(pending[n - 2..], [Line::Newline, Line::Newline]) {
+                    out.append(&mut pending);
                 }
             }
-            Line::Comment { .. } => {
-                // Comments terminate directive chains; flush pending.
-                out.append(&mut pending_directives);
+            Line::Kv { key, .. } if excluded_keys.contains(key.as_str()) => {
+                // Drop the entry and its own directives, keep file-level ones.
+                let kept: Vec<Line> = pending
+                    .drain(..)
+                    .filter(|l| {
+                        matches!(l, Line::Directive { name, .. } if FILE_LEVEL.contains(&name.as_str()))
+                    })
+                    .collect();
+                if !kept.is_empty() {
+                    out.extend(kept);
+                    out.push(Line::Newline);
+                }
+                skip_newline = true;
+            }
+            Line::Kv { .. } => {
+                out.append(&mut pending);
                 out.push(line.clone());
             }
-            _ => out.push(line.clone()),
+            _ => {
+                out.append(&mut pending);
+                out.push(line.clone());
+            }
+        }
+        if !matches!(line, Line::Newline | Line::Kv { .. }) {
+            skip_newline = false;
         }
     }
 
-    // Any trailing pending directives without a kv (shouldn't happen in well-formed input,
-    // but preserve them rather than silently drop).
-    out.append(&mut pending_directives);
+    // Trailing directives without a kv: preserve rather than silently drop.
+    out.append(&mut pending);
     out
 }
 
@@ -1322,6 +1354,60 @@ mod tests {
         assert!(!rendered.contains("DB_PASSWORD"));
         assert!(!rendered.contains("aws-ssm"));
         assert!(rendered.contains("API_KEY=\"k\""));
+    }
+
+    #[test]
+    fn filter_env_injectable_lines_keeps_blocks_intact() {
+        // Regression: the kept entries' directives were glued onto their key
+        // (`# @type=numberPORT=3000`), commenting the entry out of the export.
+        let src = "# @provider=local @default-plaintext\n\n# @type=number\nPORT=\"3000\"\n# @push=aws-ssm(path=\"/app/t\")\nTOKEN=\"abc\"\n# @type=number\nPORT2=\"4000\"\n";
+        let filtered = filter_env_injectable_lines(&parse_content(src).unwrap());
+        let rendered = dotenv::lines_to_string(&filtered);
+        assert_eq!(
+            rendered,
+            "# @provider=local @default-plaintext\n\n# @type=number\nPORT=\"3000\"\n# @type=number\nPORT2=\"4000\"\n"
+        );
+    }
+
+    #[test]
+    fn filter_env_injectable_lines_keeps_file_level_directives_of_dropped_first_entry() {
+        let src =
+            "# @provider=local @default-encrypt\n# @push=aws-ssm\nTOKEN=\"abc\"\nFOO=\"bar\"\n";
+        let filtered = filter_env_injectable_lines(&parse_content(src).unwrap());
+        let rendered = dotenv::lines_to_string(&filtered);
+        assert!(rendered.contains("@provider=local"), "{rendered}");
+        assert!(rendered.contains("@default-encrypt"), "{rendered}");
+        assert!(
+            !rendered.contains("TOKEN") && !rendered.contains("aws-ssm"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("FOO=\"bar\""), "{rendered}");
+    }
+
+    #[test]
+    fn filtered_export_reparses_to_exactly_the_injected_keys() {
+        // Whatever shape the file has, the export must parse back and contain
+        // exactly the keys `dotsec run` would inject.
+        for src in [
+            "# @push=aws-ssm\nA=\"1\"\nB=\"2\"\n",
+            "B=\"2\"\n# @push=aws-ssm\nA=\"1\"\n",
+            "# @provider=local\n\n# @type=number\n# @push=aws-ssm\nA=\"1\"\n\n# c\n# @type=number\nB=\"2\"\nC=\"3\"\n",
+            "# @push=aws-ssm\nA=\"1\"\n# @push=aws-ssm\nB=\"2\"\n# @encrypt\nC=\"3\"",
+        ] {
+            let lines = parse_content(src).unwrap();
+            let want: Vec<String> = resolve_env_vars(&lines).into_iter().map(|(k, _)| k).collect();
+            let rendered = dotenv::lines_to_string(&filter_env_injectable_lines(&lines));
+            let reparsed = parse_content(&rendered)
+                .unwrap_or_else(|e| panic!("export must re-parse: {e}\n{rendered}"));
+            let got: Vec<String> = reparsed
+                .iter()
+                .filter_map(|l| match l {
+                    Line::Kv { key, .. } => Some(key.clone()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(got, want, "src={src:?}\nrendered={rendered:?}");
+        }
     }
 
     #[test]

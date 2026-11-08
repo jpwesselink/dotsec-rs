@@ -707,6 +707,60 @@ pub fn prompt_variable_directives(
     Ok(directives)
 }
 
+/// Validate decrypted lines against inline directives and, when present, the
+/// schema. Shared by `dotsec validate` and `dotsec run` (which refuses to
+/// start the child on errors), so both apply exactly the same rules.
+pub fn collect_validation_errors(
+    lines: &[dotenv::Line],
+    schema_path: Option<&str>,
+) -> Result<Vec<dotenv::ValidationError>, Box<dyn std::error::Error>> {
+    let entries = dotenv::lines_to_entries(lines);
+    let mut errors = dotenv::validate_entries_with_env(&entries);
+    if let Some(schema_path) = schema_path {
+        log::debug!("Validating against schema: {}", schema_path);
+        let schema_content = std::fs::read_to_string(schema_path)?;
+        let schema = dotenv::parse_schema(&schema_content)?;
+        let file_config = dotenv::extract_file_config(lines);
+        errors.extend(dotenv::validate_entries_against_schema(
+            &entries,
+            &schema,
+            &file_config,
+        ));
+    }
+    Ok(errors)
+}
+
+/// Print validation errors then warnings to stderr. Returns the error count.
+pub fn report_validation_errors(source: &str, errors: &[dotenv::ValidationError]) -> usize {
+    let error_count = errors
+        .iter()
+        .filter(|e| e.severity == dotenv::Severity::Error)
+        .count();
+    let warning_count = errors.len() - error_count;
+    if error_count > 0 {
+        eprintln!("{} {} — {} error(s):\n", "✗".red(), source, error_count);
+        for error in errors
+            .iter()
+            .filter(|e| e.severity == dotenv::Severity::Error)
+        {
+            eprintln!("  {} {}", "•".red(), error);
+        }
+    }
+    if warning_count > 0 {
+        if error_count > 0 {
+            eprintln!();
+        }
+        eprintln!("{} {} warning(s):\n", "⚠".yellow(), warning_count);
+        for warning in errors
+            .iter()
+            .filter(|e| e.severity == dotenv::Severity::Warning)
+        {
+            eprintln!("  {} {}", "•".yellow(), warning);
+        }
+    }
+    error_count
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -158,6 +158,12 @@ pub async fn run_command(
     for arg in &cmd_parts[1..] {
         cmd.arg(arg);
     }
+    // The child inherits our environment. Never hand it the age private key:
+    // it only needs the decrypted values, and with the key a compromised
+    // dependency in the child could decrypt every secret in the file (and
+    // any other file wrapped to the same key). Removed before `env_vars` are
+    // applied, so an explicit entry of that name in the file still wins.
+    cmd.env_remove(crypto::local::PRIVATE_KEY_ENV);
     for (key, val) in env_vars {
         cmd.env(key, val);
     }

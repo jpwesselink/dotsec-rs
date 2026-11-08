@@ -109,13 +109,17 @@ pub fn discover_key_file(sec_file: &str) -> Option<String> {
     }
 }
 
+/// Environment variable that carries the age private key (checked before any
+/// key file). `dotsec run` strips it from the child's environment.
+pub const PRIVATE_KEY_ENV: &str = "DOTSEC_PRIVATE_KEY";
+
 /// Load the private key from DOTSEC_PRIVATE_KEY env var or <sec_file>.key file.
 pub fn load_private_key(
     sec_file: &str,
     key_file_override: Option<&str>,
 ) -> Result<Zeroizing<String>, CryptoError> {
     // 1. Check env var
-    if let Ok(key) = std::env::var("DOTSEC_PRIVATE_KEY") {
+    if let Ok(key) = std::env::var(PRIVATE_KEY_ENV) {
         return Ok(Zeroizing::new(key));
     }
 
