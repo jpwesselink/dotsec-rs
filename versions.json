@@ -51,10 +51,6 @@
       "path": "/pr-63/"
     },
     {
-      "label": "#66 chore/audit-ignores",
-      "path": "/pr-66/"
-    },
-    {
       "label": "#67 fix/cli-import-set-extract",
       "path": "/pr-67/"
     },
