@@ -61,6 +61,10 @@
     {
       "label": "#65 feat/rotate-keypair",
       "path": "/pr-65/"
+    },
+    {
+      "label": "#66 chore/audit-ignores",
+      "path": "/pr-66/"
     }
   ],
   "latest": "/v7.0.1/"
