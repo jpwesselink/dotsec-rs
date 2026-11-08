@@ -53,6 +53,10 @@
     {
       "label": "#63 fix/release-plz-git-only",
       "path": "/pr-63/"
+    },
+    {
+      "label": "#64 fix/run-security",
+      "path": "/pr-64/"
     }
   ],
   "latest": "/v7.0.1/"
