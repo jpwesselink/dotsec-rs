@@ -49,10 +49,6 @@
     {
       "label": "#63 fix/release-plz-git-only",
       "path": "/pr-63/"
-    },
-    {
-      "label": "#69 docs/test-vectors",
-      "path": "/pr-69/"
     }
   ],
   "latest": "/v7.0.1/"
