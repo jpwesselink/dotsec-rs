@@ -47,10 +47,6 @@
       "path": "/pr-56/"
     },
     {
-      "label": "#62 chore/deps-crypto",
-      "path": "/pr-62/"
-    },
-    {
       "label": "#63 fix/release-plz-git-only",
       "path": "/pr-63/"
     },
