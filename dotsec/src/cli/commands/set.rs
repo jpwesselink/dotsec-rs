@@ -259,13 +259,15 @@ pub async fn match_args(
     // Build directives for this variable
     let mut new_directives: Vec<dotenv::Line> = Vec::new();
     let mut schema_directives: Vec<(String, Option<String>)> = Vec::new();
-    let mut new_is_encrypted = false;
+    let new_is_encrypted;
 
-    let has_encrypt_flag = sub.get_flag("encrypt");
-    let has_plaintext_flag = sub.get_flag("plaintext");
-    let type_arg = sub.get_one::<String>("type");
-    let push_arg = sub.get_one::<String>("push");
-    let also_env_flag = sub.get_flag("also-env");
+    let flags = DirectiveFlags {
+        encrypt: sub.get_flag("encrypt"),
+        plaintext: sub.get_flag("plaintext"),
+        type_name: sub.get_one::<String>("type").cloned(),
+        push: sub.get_one::<String>("push").cloned(),
+        also_env: sub.get_flag("also-env"),
+    };
     let description_arg = sub.get_one::<String>("description");
 
     if key_in_schema {
@@ -299,81 +301,14 @@ pub async fn match_args(
             }
         }
     } else if schema.is_some() {
-        // Schema exists but key is new — prompt for directives (or auto-detect with -y), write to schema
-        if interactive {
-            new_directives =
-                helpers::prompt_variable_directives(&key, &value, file_default_encrypt, None)?;
-        } else if auto_yes {
-            // Auto-detect directives like import -y
-            let is_secret = helpers::looks_like_secret(&key);
-            if file_default_encrypt {
-                if !is_secret {
-                    new_directives.push(dotenv::Line::Directive {
-                        name: "plaintext".to_string(),
-                        value: None,
-                    });
-                }
-            } else if is_secret {
-                new_directives.push(dotenv::Line::Directive {
-                    name: "encrypt".to_string(),
-                    value: None,
-                });
-            }
-            let type_name = match helpers::guess_type(&value) {
-                1 => "number",
-                2 => "boolean",
-                _ => "string",
-            };
-            new_directives.push(dotenv::Line::Directive {
-                name: "type".to_string(),
-                value: Some(type_name.to_string()),
-            });
+        // Schema exists but key is new — prompt for directives (or build them
+        // from flags / auto-detection), write to schema.
+        new_directives = if interactive {
+            helpers::prompt_variable_directives(&key, &value, file_default_encrypt, None)?
         } else {
-            if has_encrypt_flag {
-                new_directives.push(dotenv::Line::Directive {
-                    name: "encrypt".to_string(),
-                    value: None,
-                });
-            } else if has_plaintext_flag {
-                new_directives.push(dotenv::Line::Directive {
-                    name: "plaintext".to_string(),
-                    value: None,
-                });
-            }
-            if let Some(t) = type_arg {
-                new_directives.push(dotenv::Line::Directive {
-                    name: "type".to_string(),
-                    value: Some(t.clone()),
-                });
-            }
-            if let Some(p) = push_arg {
-                new_directives.push(dotenv::Line::Directive {
-                    name: "push".to_string(),
-                    value: Some(p.clone()),
-                });
-                if also_env_flag {
-                    new_directives.push(dotenv::Line::Directive {
-                        name: "also-env".to_string(),
-                        value: None,
-                    });
-                }
-            }
-        }
-
-        // Determine encryption from the directives we just built
-        let has_explicit_encrypt = new_directives
-            .iter()
-            .any(|l| matches!(l, dotenv::Line::Directive { name: n, .. } if n == "encrypt"));
-        let has_explicit_plaintext = new_directives
-            .iter()
-            .any(|l| matches!(l, dotenv::Line::Directive { name: n, .. } if n == "plaintext"));
-        if has_explicit_encrypt {
-            new_is_encrypted = true;
-        } else if has_explicit_plaintext {
-            new_is_encrypted = false;
-        } else {
-            new_is_encrypted = file_default_encrypt;
-        }
+            build_flag_directives(&key, &value, file_default_encrypt, auto_yes, &flags)
+        };
+        new_is_encrypted = resolve_is_encrypted(&new_directives, file_default_encrypt);
 
         // Tack on the description (if provided). Lives in the schema with
         // every other directive on this entry.
@@ -403,88 +338,12 @@ pub async fn match_args(
         }
     } else {
         // No schema — directives inline in .sec
-        if interactive {
-            new_directives =
-                helpers::prompt_variable_directives(&key, &value, file_default_encrypt, None)?;
-
-            let has_explicit_encrypt = new_directives
-                .iter()
-                .any(|l| matches!(l, dotenv::Line::Directive { name: n, .. } if n == "encrypt"));
-            let has_explicit_plaintext = new_directives
-                .iter()
-                .any(|l| matches!(l, dotenv::Line::Directive { name: n, .. } if n == "plaintext"));
-            if has_explicit_encrypt {
-                new_is_encrypted = true;
-            } else if has_explicit_plaintext {
-                new_is_encrypted = false;
-            } else {
-                new_is_encrypted = file_default_encrypt;
-            }
-        } else if auto_yes && !has_encrypt_flag && !has_plaintext_flag && type_arg.is_none() {
-            // Auto-detect directives like import -y
-            let is_secret = helpers::looks_like_secret(&key);
-            if file_default_encrypt {
-                if !is_secret {
-                    new_directives.push(dotenv::Line::Directive {
-                        name: "plaintext".to_string(),
-                        value: None,
-                    });
-                }
-                new_is_encrypted = is_secret || file_default_encrypt;
-            } else if is_secret {
-                new_is_encrypted = true;
-                new_directives.push(dotenv::Line::Directive {
-                    name: "encrypt".to_string(),
-                    value: None,
-                });
-            } else {
-                new_is_encrypted = false;
-            }
-            let type_name = match helpers::guess_type(&value) {
-                1 => "number",
-                2 => "boolean",
-                _ => "string",
-            };
-            new_directives.push(dotenv::Line::Directive {
-                name: "type".to_string(),
-                value: Some(type_name.to_string()),
-            });
+        new_directives = if interactive {
+            helpers::prompt_variable_directives(&key, &value, file_default_encrypt, None)?
         } else {
-            if has_encrypt_flag {
-                new_is_encrypted = true;
-                new_directives.push(dotenv::Line::Directive {
-                    name: "encrypt".to_string(),
-                    value: None,
-                });
-            } else if has_plaintext_flag {
-                new_directives.push(dotenv::Line::Directive {
-                    name: "plaintext".to_string(),
-                    value: None,
-                });
-            } else {
-                new_is_encrypted = file_default_encrypt;
-            }
-
-            if let Some(t) = type_arg {
-                new_directives.push(dotenv::Line::Directive {
-                    name: "type".to_string(),
-                    value: Some(t.clone()),
-                });
-            }
-
-            if let Some(p) = push_arg {
-                new_directives.push(dotenv::Line::Directive {
-                    name: "push".to_string(),
-                    value: Some(p.clone()),
-                });
-                if also_env_flag {
-                    new_directives.push(dotenv::Line::Directive {
-                        name: "also-env".to_string(),
-                        value: None,
-                    });
-                }
-            }
-        }
+            build_flag_directives(&key, &value, file_default_encrypt, auto_yes, &flags)
+        };
+        new_is_encrypted = resolve_is_encrypted(&new_directives, file_default_encrypt);
 
         // Description applies regardless of how the other directives were
         // populated (interactive / auto-yes / explicit flags). Append last so
@@ -612,6 +471,86 @@ pub async fn match_args(
 /// `set` does an in-place update of an existing Kv. Without the file-level
 /// guard, updating an entry whose file-level config was on the same comment
 /// line above would wipe `@provider`/`@key-id` from the file.
+/// Directive-related CLI flags passed to `dotsec set`.
+struct DirectiveFlags {
+    encrypt: bool,
+    plaintext: bool,
+    type_name: Option<String>,
+    push: Option<String>,
+    also_env: bool,
+}
+
+fn directive(name: &str, value: Option<String>) -> dotenv::Line {
+    dotenv::Line::Directive {
+        name: name.to_string(),
+        value,
+    }
+}
+
+/// Build the directives for a new/updated key in non-interactive mode.
+///
+/// Explicit flags always win, field by field. `-y` only fills in what the
+/// flags leave open (encryption via secret-name heuristics, type via value
+/// sniffing) — it never discards an explicit flag such as `--push`.
+fn build_flag_directives(
+    key: &str,
+    value: &str,
+    file_default_encrypt: bool,
+    auto_yes: bool,
+    flags: &DirectiveFlags,
+) -> Vec<dotenv::Line> {
+    let mut directives = Vec::new();
+
+    if flags.encrypt {
+        directives.push(directive("encrypt", None));
+    } else if flags.plaintext {
+        directives.push(directive("plaintext", None));
+    } else if auto_yes {
+        let is_secret = helpers::looks_like_secret(key);
+        if file_default_encrypt && !is_secret {
+            directives.push(directive("plaintext", None));
+        } else if !file_default_encrypt && is_secret {
+            directives.push(directive("encrypt", None));
+        }
+    }
+
+    if let Some(t) = &flags.type_name {
+        directives.push(directive("type", Some(t.clone())));
+    } else if auto_yes {
+        let type_name = match helpers::guess_type(value) {
+            1 => "number",
+            2 => "boolean",
+            _ => "string",
+        };
+        directives.push(directive("type", Some(type_name.to_string())));
+    }
+
+    if let Some(p) = &flags.push {
+        directives.push(directive("push", Some(p.clone())));
+        if flags.also_env {
+            directives.push(directive("also-env", None));
+        }
+    }
+
+    directives
+}
+
+/// Whether a key ends up encrypted given its directives and the file default.
+fn resolve_is_encrypted(directives: &[dotenv::Line], file_default_encrypt: bool) -> bool {
+    let has = |wanted: &str| {
+        directives
+            .iter()
+            .any(|l| matches!(l, dotenv::Line::Directive { name, .. } if name == wanted))
+    };
+    if has("encrypt") {
+        true
+    } else if has("plaintext") {
+        false
+    } else {
+        file_default_encrypt
+    }
+}
+
 fn find_directive_start(lines: &[dotenv::Line], kv_pos: usize) -> usize {
     let is_file_level = |name: &str| {
         matches!(

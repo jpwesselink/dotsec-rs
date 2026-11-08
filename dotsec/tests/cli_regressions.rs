@@ -69,3 +69,53 @@ fn import_yes_in_fresh_dir_uses_local_encrypt_defaults_without_prompting() {
     assert_eq!(code, 0, "show must succeed: {stderr}");
     assert!(stdout.contains("sk-123"), "decrypted value: {stdout}");
 }
+
+// --- set --push -y ---
+
+#[test]
+fn set_push_with_yes_keeps_push_directive() {
+    let dir = fixture();
+    let (_, stderr, code) = run(
+        dir.path(),
+        &["set", "API_KEY", "v", "--push", "aws-ssm", "-y"],
+    );
+    assert_eq!(code, 0, "set should succeed: {stderr}");
+
+    let sec = read(dir.path().join(".sec"));
+    assert!(
+        sec.contains("@push=aws-ssm"),
+        "@push must be written with -y:\n{sec}"
+    );
+}
+
+#[test]
+fn set_push_with_yes_keeps_push_directive_in_schema() {
+    let dir = fixture();
+    // Bootstrap a .sec, then a schema, then add a new key with --push -y.
+    let (_, stderr, code) = run(dir.path(), &["set", "FIRST", "1", "--type", "number", "-y"]);
+    assert_eq!(code, 0, "{stderr}");
+    let (_, stderr, code) = run(dir.path(), &["extract-schema"]);
+    assert_eq!(code, 0, "{stderr}");
+
+    let (_, stderr, code) = run(
+        dir.path(),
+        &[
+            "set",
+            "API_KEY",
+            "v",
+            "--push",
+            "aws-secrets-manager",
+            "--also-env",
+            "-y",
+        ],
+    );
+    assert_eq!(code, 0, "set should succeed: {stderr}");
+
+    let schema = read(dir.path().join("dotsec.schema"));
+    assert!(
+        schema.contains("@push=aws-secrets-manager") && schema.contains("@also-env"),
+        "@push/@also-env must land in the schema with -y:\n{schema}"
+    );
+    let (_, stderr, code) = run(dir.path(), &["show", "--reveal"]);
+    assert_eq!(code, 0, "show must succeed: {stderr}");
+}
