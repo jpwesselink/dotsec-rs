@@ -53,3 +53,9 @@ export declare function schemaToJsonSchema(schemaSource: string): string;
 
 /** Generate TypeScript code from a schema file. */
 export declare function schemaToTypescript(schemaSource: string): string;
+
+/** Generate the standard dotsec file header as a string. */
+export declare function generateHeader(): string;
+
+/** Check whether a .sec file source string contains the dotsec header. Throws on parse error. */
+export declare function hasHeader(source: string): boolean;
