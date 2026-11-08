@@ -170,6 +170,8 @@ What it does:
 3. Writes per-key directives + bare keys to `dotsec.schema`
 4. Rewrites `.sec` with only file-level directives + key=value pairs
 
+The encrypt/plaintext state of every entry is preserved: a `@plaintext` value stays plaintext, an encrypted one stays encrypted. A file-level `@default-encrypt` / `@default-plaintext` is written to the top of `dotsec.schema` as its own block and is also kept in `.sec` (runtime commands such as `dotsec run` read it from there); per-key `@encrypt` / `@plaintext` in the schema always take precedence over it.
+
 Refuses if the schema file already exists. Delete it first or use `--output` for a different path.
 
 ### Multi-environment workflow
