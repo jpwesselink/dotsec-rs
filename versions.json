@@ -45,10 +45,6 @@
     {
       "label": "#56 release-plz-2026-07-14T09-03-14Z",
       "path": "/pr-56/"
-    },
-    {
-      "label": "#63 fix/release-plz-git-only",
-      "path": "/pr-63/"
     }
   ],
   "latest": "/v7.0.1/"
