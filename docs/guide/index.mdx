@@ -33,7 +33,7 @@ Your private key landed in `.sec.key`, which dotsec auto-added to `.gitignore`. 
 
 ```bash
 dotsec set API_KEY sk-live-xxx --encrypt   # auto-creates .sec + keypair
-dotsec set PORT 3000                       # plaintext var
+dotsec set PORT 3000 --plaintext           # values are encrypted by default; opt out for non-secrets
 dotsec run -- node server.js
 ```
 

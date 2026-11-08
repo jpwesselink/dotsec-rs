@@ -2,7 +2,7 @@
 
 Use dotsec programmatically — parse, validate, and generate code from `.env` / `.sec` / `dotsec.schema` files.
 
-> The libraries handle **parsing and validation only**. Encryption and decryption stay in the CLI — no key material ever crosses the library boundary. This is deliberate; see the [security model](/guide/security#engineering-posture).
+> The Node package `@dotsec/core` handles **parsing and validation only**. Encryption and decryption stay out of it, and no key material crosses the FFI boundary. This is deliberate; see the [security model](/guide/security#engineering-posture). The Rust crate `dotsec-core` is different: it is the library the CLI itself is built on, and it does export the encrypt/decrypt functions (`encrypt_lines_to_sec`, `decrypt_sec_to_lines`).
 
 ## Start here: typed env vars, zero dependencies
 

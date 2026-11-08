@@ -13,13 +13,13 @@ Jump by intent:
 
 ## `dotsec set`
 
-Add or update a single variable. On a new project with no `.sec` file, auto-creates `.sec` + keypair.
+Add or update a single variable. On a new project with no `.sec` file, auto-creates `.sec` + keypair, with `@default-encrypt` at file level so values are encrypted unless you opt out.
 
 ```bash
 dotsec set API_KEY sk-live-xxx --encrypt          # encrypted variable
-dotsec set PORT 3000                              # plaintext variable
+dotsec set PORT 3000 --plaintext                  # plaintext variable (opt out of the default)
 dotsec set                                        # fully interactive
-dotsec set API_KEY sk-live-xxx -y                 # skip prompts, auto-detect directives
+dotsec set API_KEY sk-live-xxx -y                 # skip prompts, auto-detect directives (non-secret-looking names get @plaintext)
 dotsec set PORT 3000 --type number                # set @type directive
 dotsec set RUNTIME_ONLY_VAR <value> --push aws-ssm              # @push only — pushed, never in local env
 dotsec set SHARED_VAR <value> --push aws-ssm --also-env         # @push + @also-env — pushed AND in local env
@@ -29,13 +29,13 @@ dotsec set SHARED_VAR <value> --push aws-ssm --also-env         # @push + @also-
 |---|---|
 | `--encrypt` / `--plaintext` | Control encryption for this variable |
 | `--type <TYPE>` | Set the `@type` directive: `string`, `number`, `boolean`, `enum(...)` |
-| `--push <TARGET>` | Set the `@push` directive: `aws-ssm`, `aws-secrets-manager` |
+| `--push <TARGET>` | Set the `@push` directive: `aws-ssm`, `aws-secrets-manager` (also written with `-y`) |
 | `--also-env` | Pair with `--push` so the value is *also* injected by `dotsec run` / included in `dotsec export` (v6 excludes push-only entries from env by default) |
 | `--description <TEXT>` | Set the `@description` directive (lands in the schema when one exists) |
 | `-y`, `--yes` | Skip directive prompts |
-| `--no-gitignore` | Skip the first-run auto-add of `*.key` to `.gitignore` — see [Setup](/guide/setup#sec-key-is-auto-gitignored) |
+| `--no-gitignore` | Skip the first-run auto-add of `*.key` to `.gitignore` — see [Setup](/guide/setup#seckey-is-auto-gitignored) |
 
-When you go through the interactive prompts (`dotsec set` with no value, or with `--push` and no `-y`), choosing a push target triggers a follow-up "Also inject into local env?" prompt — default no, matching the v6 push-only semantics.
+When you go through the interactive prompts (`dotsec set` with no value given), choosing a push target triggers a follow-up "Also inject into local env?" prompt — default no, matching the v6 push-only semantics.
 
 Secret-looking names (containing `KEY`, `SECRET`, `PASSWORD`, `TOKEN`, etc.) use masked input in interactive mode.
 
@@ -58,7 +58,7 @@ dotsec init --no-gitignore     # skip auto-adding *.key to .gitignore
 
 For most projects, `dotsec set` on a new file handles this automatically. Use `init` when you need AWS KMS or want explicit control over the config.
 
-Flags: `--no-gitignore` (same semantics as on `dotsec set` — skip auto-`.gitignore` of the generated keypair file; see [Setup](/guide/setup#sec-key-is-auto-gitignored)).
+Flags: `--no-gitignore` (same semantics as on `dotsec set` and `dotsec import` — skip auto-`.gitignore` of the generated keypair file; see [Setup](/guide/setup#seckey-is-auto-gitignored)).
 
 ## `dotsec import`
 
@@ -68,11 +68,14 @@ Migrate a `.env` file into `.sec`:
 dotsec import                  # import from .env (default)
 dotsec import .env.production  # import from specific file
 dotsec import -y               # auto-accept with heuristic type detection
+dotsec import --no-gitignore   # don't auto-add *.key to .gitignore
 ```
+
+Like `set`, `import` creates `.sec` and a keypair if they don't exist yet.
 
 If `.sec` already exists, offers: import new variables only, overwrite all, or cancel. Source `.env` directives pre-populate the prompts as defaults.
 
-The `-y` flag skips per-variable prompts. If `.sec` doesn't exist yet, config (provider, key, region) is taken from the source `.env`'s directives when present, else defaults are used silently — `-y` never falls back to interactive prompts.
+The `-y` flag skips per-variable prompts. If `.sec` doesn't exist yet, config (provider, key, region) is taken from the source `.env`'s directives when present, else the defaults are used silently (local provider, `@default-encrypt`) — `-y` never falls back to interactive prompts.
 
 ## `dotsec export`
 
@@ -85,7 +88,7 @@ dotsec export -o .env      # decrypt .sec → .env file
 
 ## `dotsec show`
 
-Display decrypted `.sec` contents. Values are masked by default.
+Display decrypted `.sec` contents. Values are masked by default — *all* of them, plaintext included, so `show` doesn't tell you which values are encrypted. For that, look for `ENC[` in the `.sec` file.
 
 ```bash
 dotsec show                              # raw key=value (masked)
@@ -100,6 +103,8 @@ dotsec show --output-format text         # formatted text
 ## `dotsec run`
 
 Decrypt `.sec` in memory and inject env vars into a child process. Encrypted values are automatically redacted from stdout/stderr.
+
+Before starting your command, `run` validates the file — inline directives and `dotsec.schema`, the same rules as [`dotsec validate`](#dotsec-validate). On validation errors it refuses to start the command; warnings are printed but don't block. `DOTSEC_PRIVATE_KEY` is removed from the child's environment, so your app gets the decrypted values but never the key.
 
 ```bash
 dotsec run -- node server.js                  # from .sec (decrypts)
@@ -155,7 +160,7 @@ Reports: missing keys, extra keys, directive mismatches, ordering differences, a
 
 ## `dotsec extract-schema`
 
-Extract per-key directives from a `.sec` file into a `dotsec.schema` file. This is the migration path from a single `.sec` file to a multi-environment setup. Also available as `dotsec eject` (alias).
+Extract per-key directives from a `.sec` file into a `dotsec.schema` file. It moves directives only; which values are encrypted doesn't change. This is the migration path from a single `.sec` file to a multi-environment setup. Also available as `dotsec eject` (alias).
 
 ```bash
 dotsec extract-schema                    # creates dotsec.schema, strips directives from .sec
@@ -177,11 +182,20 @@ Refuses if the schema file already exists. Delete it first or use `--output` for
 ### Multi-environment workflow
 
 ```bash
-dotsec extract-schema                    # creates dotsec.schema, cleans .sec
-cp .sec .sec.staging                     # new env — edit values + file-level directives
-cp .sec .sec.production
-dotsec validate --sec-file .sec.staging  # validates against shared schema
+dotsec extract-schema                                # creates dotsec.schema, cleans .sec
+dotsec --sec-file .sec.staging set DB_URL https://…  # new env file, gets its own .sec.staging.key
+dotsec --sec-file .sec.staging validate              # validates against the shared schema
 ```
+
+Things to know:
+
+- **Each `.sec` file has its own key.** `.sec.staging` uses `.sec.staging.key` (or `DOTSEC_PRIVATE_KEY`). Don't `cp .sec .sec.staging`: the copy keeps `.sec`'s wrapped DEK, so it would need `.sec`'s key, not a key of its own.
+- **Schema changes affect every env file.** A hash of `dotsec.schema` is bound into each file's MAC. Adding a key to the schema, for example with `dotsec set NEW_KEY …` against `.sec`, breaks the MAC of every *other* env file, and those then fail with the integrity error. After a deliberate schema change, re-MAC each of the other files and then set the new key's value there:
+
+  ```bash
+  dotsec --sec-file .sec.staging encrypt
+  dotsec --sec-file .sec.staging set NEW_KEY <value>
+  ```
 
 ## `dotsec remove-directives`
 
@@ -235,10 +249,13 @@ This is the recovery path the integrity-failure message points at: when the file
 Generate a new data encryption key (DEK) and re-encrypt all values:
 
 ```bash
-dotsec rotate-key
+dotsec rotate-key                  # new DEK, same key
+dotsec rotate-key --new-keypair    # local only: new age identity + new DEK
 ```
 
 For local encryption: generates a new DEK wrapped with the same age key. For AWS KMS: requests a new data key from KMS. Either way, all values are re-encrypted and the `@dotsec(...)` directive's `dek=` and `mac=` fields are refreshed.
+
+`--new-keypair` (local provider only) also replaces the age identity: the new key is staged as `<key-file>.new` and renamed into place after the `.sec` file is written. dotsec warns if `DOTSEC_PRIVATE_KEY` still holds the old key. Use this when the private key leaked. For the AWS provider it's rejected; revoke `kms:Decrypt` in IAM instead. Older `.sec` versions in git history remain decryptable with the old key, so also rotate the affected secrets at their source — see [Operations](/guide/operations#rotate-the-keypair-local-provider-only).
 
 ## `dotsec migrate`
 
@@ -292,4 +309,4 @@ Running `dotsec` with no subcommand renders a brand poster: the `.sec` wordmark,
 | `-d, --debug` | — | Enable debug logging |
 | `-h, --help` | — | Print help |
 | `-V, --version` | — | Print version |
-| — | `DOTSEC_PRIVATE_KEY` | Age private key for local-provider decryption — checked before any `<sec>.key` file |
+| — | `DOTSEC_PRIVATE_KEY` | Age private key for local-provider decryption — checked before any key file. Not passed on to the child of `dotsec run` |

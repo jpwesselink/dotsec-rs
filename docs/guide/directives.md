@@ -5,7 +5,7 @@ Directives are comments that control encryption, typing, validation, and push ta
 ```bash
 # @encrypt
 # @type=string @format=url @not-empty
-DATABASE_URL="postgres://user:pass@localhost:5432/mydb"
+API_BASE_URL="https://api.example.com"
 
 # @plaintext
 # @type=enum("development", "preview", "production")
@@ -27,7 +27,7 @@ These go at the top of the `.sec` file (or in `dotsec.schema`) and apply to the 
 | Directive | Value | Description |
 |-----------|-------|-------------|
 | `@provider` | `local`, `aws` | Encryption provider (`local` is the default) |
-| `@key-id` | KMS key ID or alias | KMS key to use (AWS only) |
+| `@key-id` | KMS key ID or alias (`aws`); key-file path (`local`) | With `@provider=aws`, the KMS key to use. With `@provider=local`, the path of the age key file to use instead of `<sec-file>.key` (`DOTSEC_PRIVATE_KEY` still takes precedence) |
 | `@region` | AWS region | AWS region (AWS only) |
 | `@default-encrypt` | none | Encrypt all variables by default |
 | `@default-plaintext` | none | Don't encrypt by default |
@@ -182,6 +182,7 @@ With a schema in place:
 | `@encrypt`, `@plaintext` | `@region` |
 | `@push`, `@optional` | |
 | `@not-empty`, `@deprecated`, `@description` | |
+| `@also-env` | |
 | `@default-encrypt`, `@default-plaintext` | |
 
 ### Discovery

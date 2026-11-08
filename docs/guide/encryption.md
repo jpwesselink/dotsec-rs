@@ -60,7 +60,8 @@ AGE-SECRET-KEY-1QPZZY...
 
 Key discovery order (checked in this order):
 1. `DOTSEC_PRIVATE_KEY` environment variable
-2. `<sec-file>.key` file alongside the `.sec` file
+2. The key file named by `@key-id`, if the `.sec` file sets one. For the local provider, `@key-id` is a path to the key file; for the AWS provider, the same directive names the KMS key
+3. Otherwise `<sec-file>.key` next to the `.sec` file (`.sec.staging` → `.sec.staging.key`)
 
 For CI/CD, use the env var — no file writes needed:
 
@@ -108,7 +109,7 @@ base64(32-byte-commitment || 12-byte-nonce || ciphertext || 16-byte-auth-tag)
 
 - **Commitment** — HMAC-SHA256 of the DEK, verified before decryption to detect wrong-key attempts early
 - **Nonce** — random 12 bytes per value (no nonce reuse even if the value is unchanged)
-- **Padding** — plaintext is padded to 64-byte blocks with 0–1 random extra blocks to hide length
+- **Padding** — before encryption the value gets a 2-byte big-endian length prefix and is padded with random bytes to a multiple of 64 bytes. With 50% probability one extra 64-byte block is added, so the ciphertext length doesn't pin down the plaintext length. The 2-byte prefix caps a single value at 65,535 bytes; larger values are rejected
 
 ## File-level integrity tag
 
@@ -122,21 +123,23 @@ In addition to per-value AEAD (which authenticates each `ENC[...]` against its k
 | **Encrypted entries**: all inline directives (`@encrypt`, `@push`, `@type`, `@pattern`, …) | **Plaintext entries**: inline directives (move them into `dotsec.schema` to get coverage — see below) |
 | **Encrypted entries**: the `ENC[...]` ciphertext bytes (rollback-resistant) | Comments, whitespace, blank lines |
 | Entry **ordering** (file order is part of the canonical — applies to plaintext and encrypted entries alike) | The `mac=` field itself |
-| File-level directives (`@provider`, `@key-id`, `@region`, `@default-encrypt`) |  |
+| File-level directives (`@provider`, `@key-id`, `@region`, `@default-encrypt`) | The wrapped DEK (`dek=` field) |
 | Hash of `dotsec.schema` canonical form |  |
+
+Leaving `dek=` out of the MAC is safe: the MAC is keyed with the DEK itself, so a swapped wrapped DEK either fails to unwrap or unwraps to a different DEK, which then fails the key commitment and the MAC check.
 
 The scope is deliberately split: **structure** (what entries exist, what they're called, what's encrypted and how) is integrity-protected by the MAC. **Plaintext value content** is integrity-protected by the schema — when one exists.
 
 ### What this defeats
 
 - **Directive tampering** on encrypted entries: flipping `@encrypt` off, redirecting `@push` to an attacker-owned target, weakening `@type` on an encrypted entry to bypass validation, swapping `@key-id` to an attacker's KMS key.
-- **Ciphertext rollback**: substituting `DB_PASSWORD=ENC[old-value]` from a git history (per-value AEAD doesn't catch this because it only binds to the key name; the MAC over ENC bytes does).
+- **Single-value ciphertext rollback**: substituting `DB_PASSWORD=ENC[old-value]` from a git history (per-value AEAD doesn't catch this because it only binds to the key name; the MAC over ENC bytes does). This does not cover reverting the *whole* file to an earlier version dotsec wrote: that older file carries its own valid MAC under the same DEK and verifies until `dotsec rotate-key` replaces the DEK.
 - **Entry add / remove / rename / reorder**: an attacker can't inject `EXFIL_URL=https://attacker.example`, drop a sensitive key, or reorder entries to confuse downstream consumers — even for plaintext entries, the *name* is covered.
 - **Schema tampering**: editing `dotsec.schema` to drop `@max=65535` or weaken `@type` invalidates every `.sec` file's MAC. The schema hash is canonicalized — adding `@description` or reordering keys is a no-op, only semantic changes flip the hash.
 
 ### What this does **not** defeat — and how to compensate
 
-- **Editing a plaintext value in place.** `PORT=3000` → `PORT=4000` passes through. The threat model: an attacker who can write the file can already rewrite a plaintext value to something that influences your app's runtime behavior (a path, a URL, a hostname). **Compensate by putting validation rules in `dotsec.schema`** (`@type=enum(...)`, `@pattern=...`, `@max=...`) — `dotsec validate` runs them on every load and catches tampered values.
+- **Editing a plaintext value in place.** `PORT=3000` → `PORT=4000` passes through. The threat model: an attacker who can write the file can already rewrite a plaintext value to something that influences your app's runtime behavior (a path, a URL, a hostname). **Compensate by putting validation rules in `dotsec.schema`** (`@type=enum(...)`, `@pattern=...`, `@max=...`) — `dotsec run` validates against them before starting your command (as does `dotsec validate`) and refuses to start on errors. `dotsec show` and `dotsec export` don't validate — see [which commands validate](/guide/security#what-an-attacker-with-the-sec-file-can-do).
 - **Editing an inline directive on a *plaintext* entry.** If you write `# @type=enum("prod","staging")\nENV=prod` inline in `.sec`, an attacker can flip the directive to `@type=string` without tripping the MAC. **Compensate by moving plaintext validation directives into `dotsec.schema`** — schema directives ARE bound via `schema_hash`, so semantic schema changes invalidate every file's MAC.
 - **An attacker who controls both the `.sec` file and the DEK.** Defense in depth ends at key compromise.
 
@@ -197,13 +200,22 @@ dotsec rotate-key
 
 This decrypts all values with the old DEK, generates a new DEK (local: new random DEK wrapped with the same age key; KMS: new data key from KMS), and re-encrypts everything. The `dek=` and `mac=` fields in the `@dotsec(...)` directive are both refreshed.
 
-Use this periodically or after a suspected key compromise. For a full key compromise (private key leaked), generate a new keypair first:
+Use this periodically, or after removing someone's access. Plain `rotate-key` keeps the same age key (or KMS key), so it does **not** help if the private key itself leaked.
+
+### Replacing the keypair (local provider)
+
+If the private key leaked, replace it:
 
 ```bash
-# Local: generate a new keypair, then rotate
-dotsec init          # generates new .sec.key
-dotsec rotate-key    # re-wraps all values with new key
+dotsec rotate-key --new-keypair
 ```
+
+This generates a new age identity and a new DEK, re-encrypts every value, and replaces the key file. The new key is staged as `<key-file>.new` and renamed into place only after the `.sec` file has been written. If `DOTSEC_PRIVATE_KEY` still holds the old key, dotsec warns you. `--new-keypair` is rejected for the AWS provider; there, revoke `kms:Decrypt` in IAM instead.
+
+Afterwards:
+
+1. Update `DOTSEC_PRIVATE_KEY` wherever it's set (CI secrets, password-manager wrappers) and share the new key file with your team over a secure channel.
+2. **Rotate the actual secrets at their source.** Older versions of `.sec` in git history are still encrypted under the old key and stay decryptable by anyone who holds it. Replacing the keypair protects future versions only.
 
 ---
 

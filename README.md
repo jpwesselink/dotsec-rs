@@ -9,7 +9,7 @@
 dotsec encrypts your secrets into a `.sec` file — same shape as `.env`, but committed to git as the single source of truth, decrypted in memory only when your app runs.
 
 - **KMS-native, AWS-integrated** — `EncryptionContext` binding on every wrap and unwrap; IAM controls access, CloudTrail logs every decrypt. Push to SSM Parameter Store and Secrets Manager via `@push=aws-ssm` / `@push=aws-secrets-manager` directives, for runtime services that read from AWS directly.
-- **Built like crypto matters** — AAD-bound per-value AEAD, file-level MAC over canonical content, schema-hash binding, key commitment, zeroize on every exit path, constant-time integrity checks, cargo-fuzz harness with 4 targets.
+- **Built like crypto matters** — AAD-bound per-value AEAD, file-level MAC over canonical content, schema-hash binding, key commitment, zeroize of key material on every exit path, constant-time integrity checks, cargo-fuzz harness with 4 targets.
 - **Schema-driven validation** with `@type`, `@format`, `@pattern`, `@min/@max`, `@enum`. Generate a zero-runtime-dependency TypeScript validator from your schema in one command.
 - **Works with anything** — `dotsec run -- <your command>`. No SDK per language. Node, Python, Ruby, Go, Rust, Docker, kubectl, terraform — anything that reads env vars.
 - **Standard age envelope** — no lock-in. Anyone with the private key can decrypt with the `age` or `rage` CLI directly.
@@ -26,11 +26,11 @@ Distribution is npm-only (the obvious crate names on crates.io are owned by unre
 
 ```bash
 dotsec set API_KEY sk-live-xxx --encrypt   # creates .sec + keypair on first run
-dotsec set PORT 3000                       # plaintext variable
+dotsec set PORT 3000 --plaintext           # encrypted by default; opt out for non-secrets
 dotsec run -- node server.js               # inject decrypted vars into your process
 ```
 
-That's it. `.sec` goes into git. `.sec.key` stays out — `dotsec set`/`init` auto-adds `*.key` to `.gitignore` on first run (`--no-gitignore` to skip).
+That's it. `.sec` goes into git. `.sec.key` stays out — `dotsec set`/`import`/`init` auto-adds `*.key` to `.gitignore` on first run (`--no-gitignore` to skip).
 
 No AWS account. No config file. No setup step.
 

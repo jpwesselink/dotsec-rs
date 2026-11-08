@@ -16,7 +16,7 @@ That's it. `dotsec set` updates the value in-place using the existing DEK; the r
 
 ### Rotate the data encryption key (DEK)
 
-After a suspected compromise, on a periodic schedule, or after offboarding someone who had the key file:
+On a periodic schedule, or after removing someone's KMS access (it changes the DEK, so older copies of the file stop verifying against the current one). If a local private key leaked, or someone who had the key file leaves, plain `rotate-key` is not enough. It keeps the same age key; use [`--new-keypair`](#rotate-the-keypair-local-provider-only) instead.
 
 ```bash
 dotsec rotate-key
@@ -35,11 +35,12 @@ If a value itself was leaked (Stripe key exposed in a log file), rotating the DE
 After a key file leak or to ship a fresh keypair to a new team:
 
 ```bash
-dotsec init          # generates new .sec.key + age recipient
-dotsec rotate-key    # re-wraps the DEK with the new recipient
+dotsec rotate-key --new-keypair   # new age identity + new DEK, re-encrypts, replaces the key file
 ```
 
-Then share the new `.sec.key` via your password manager and have everyone replace their local copy. For KMS, this isn't a thing — there's no keypair to rotate. You rotate the KMS key itself in AWS (`aws kms enable-key-rotation` for annual automatic rotation, or manual key migration if you need policy changes).
+The new key is staged as `<key-file>.new` and renamed into place after the `.sec` file is written; dotsec warns if `DOTSEC_PRIVATE_KEY` still holds the old key. Then update `DOTSEC_PRIVATE_KEY` in CI secrets, share the new `.sec.key` via your password manager, and have everyone replace their local copy. Older versions of `.sec` in git history stay decryptable with the old key, so rotate any secret the old key-holder could have read at its source.
+
+`--new-keypair` is local-provider only and is rejected for KMS. For KMS, this isn't a thing — there's no keypair to rotate. You rotate the KMS key itself in AWS (`aws kms enable-key-rotation` for annual automatic rotation, or manual key migration if you need policy changes).
 
 ## Revocation: people changing
 
@@ -48,10 +49,11 @@ Then share the new `.sec.key` via your password manager and have everyone replac
 When someone leaves the team, the `.sec.key` file they had on disk is still valid forever. The model is "anyone with this file can decrypt." So:
 
 ```bash
-dotsec init          # new keypair
-dotsec rotate-key    # re-wrap DEK to new recipient
-# distribute new .sec.key to remaining team, update CI secrets
+dotsec rotate-key --new-keypair   # new keypair + new DEK
+# distribute new .sec.key to remaining team, update DOTSEC_PRIVATE_KEY in CI secrets
 ```
+
+This locks them out of future versions only. Every `.sec` they could see in git history stays decryptable with the key they still hold, so rotate the secrets they had access to at their source as well.
 
 There's no concept of "revoke just this person" with the local provider — rotation is the only mechanism. If your team turns over often, this is friction. The KMS provider exists partly because of this.
 
@@ -73,20 +75,21 @@ You can also restrict their access to specific time windows or specific files vi
 Treat **every value in every `.sec` file the key unlocks** as exposed. Decryption is now possible for anyone holding the leaked key.
 
 1. **Rotate the affected secrets at their providers.** The Stripe key, the OAuth client secret, the database password — go to each provider's console, rotate, paste the new value into a `dotsec set` command.
-2. **Generate a new keypair and rotate the DEK** so historical `.sec` files in git (which the attacker may have copied) become useless going forward:
+2. **Replace the keypair and the DEK** so future versions of `.sec` are encrypted under a key the attacker doesn't have:
    ```bash
-   dotsec init && dotsec rotate-key
+   dotsec rotate-key --new-keypair
    ```
+   This does not protect historical `.sec` files in git: the attacker can still decrypt those with the leaked key. That's why step 1 matters.
 3. **Investigate the leak vector.** Was the key file committed accidentally? Did a backup tool copy it off-machine? Was it in a CI log? Close that path before redistributing the new key.
-4. **Distribute the new keypair** to teammates via your password manager and update CI secrets.
+4. **Distribute the new keypair** to teammates via your password manager and update `DOTSEC_PRIVATE_KEY` in CI secrets.
 
-Note: the values rotated at their providers (step 1) are the actual recovery. The DEK rotation (step 2) is hygiene — it stops future use of the leaked key, but it doesn't unleak values an attacker may already have decrypted.
+Note: the values rotated at their providers (step 1) are the actual recovery. The keypair rotation (step 2) is hygiene — it stops future use of the leaked key, but it doesn't unleak values an attacker may already have decrypted.
 
 ### A KMS key was misused or compromised
 
 If you suspect a principal with `kms:Decrypt` access decrypted things they shouldn't have:
 
-1. **Query CloudTrail** to see exactly what was decrypted by whom and when. With encryption-context binding, every dotsec decrypt is filterable on `requestParameters.encryptionContext.dotsec:format=v3`:
+1. **Query CloudTrail** to see which principal called `kms:Decrypt`, on which KMS key, and when. (It can't tell you which `.sec` file — the encryption context is the same for all of them; per-environment KMS keys are how you tell them apart.) With encryption-context binding, every dotsec decrypt is filterable on `requestParameters.encryptionContext.dotsec:format=v3`:
    ```sql
    -- CloudWatch Insights / Athena
    fields @timestamp, userIdentity.principalId, sourceIPAddress
@@ -103,7 +106,7 @@ If you suspect a principal with `kms:Decrypt` access decrypted things they shoul
 A malicious dependency ran in a CI job that had been granted KMS access, and it called `kms:Decrypt` on your wrapped DEKs and exfiltrated plaintext.
 
 1. **Revoke the CI role's `kms:Decrypt` immediately** — block further decrypts while you investigate.
-2. **CloudTrail will show exactly which `.sec` files were decrypted** during the compromise window (via encryption-context binding).
+2. **Use CloudTrail to scope the damage.** It records every `kms:Decrypt` call by that role during the compromise window: principal, time, source IP, KMS key. It does **not** say which `.sec` file was decrypted, because every dotsec file uses the same encryption context (`dotsec:format=v3`). To tell environments apart, use a separate KMS key per environment (the key ID is in the event) or a separate principal per environment.
 3. **Rotate every value that was decryptable from that role**, at its provider.
 4. **Investigate the CI compromise**: which dependency, which install step, was it a lifecycle script that ran before the dotsec call, did the runner allow outbound traffic to the attacker's exfil endpoint?
 5. **Harden the CI posture** so the same vector doesn't reopen. That's your standard CI security work — pin actions, pin dependencies, separate the install job from the decrypt job — and lives in your platform docs, not dotsec's. The dotsec-specific knobs ([CI/CD → dotsec knobs](/guide/ci#dotsec-knobs-that-matter-in-ci)) cover encryption-context binding, per-env keys, and step-level secret scoping.
@@ -114,7 +117,7 @@ A secret showed up in an application log, a crash report, a frontend bundle, a `
 
 1. **Rotate the leaked value at its provider** immediately — no DEK rotation needed because the `.sec` file isn't what leaked.
 2. **Patch the leak source.** Scrub env vars from your log formatter / crash reporter, remove the `process.env.X` reference from frontend code, lock down access to the docker daemon, whatever the vector was.
-3. **Document for the postmortem.** This is exactly what the "Runtime exposure dotsec does NOT solve" list in the [security model](/guide/security#runtime-exposure-dotsec-does-not-solve) names — your app and runtime own this surface.
+3. **Document for the postmortem.** This is exactly what [Where dotsec stops](/guide/security#where-dotsec-stops) in the security model describes — your app and runtime own this surface.
 
 ## "Force re-encrypt" — `dotsec encrypt`
 
@@ -138,7 +141,7 @@ Quick answers to "what does dotsec tell me about who did what?":
 
 | Question | Local provider | AWS KMS provider |
 |---|---|---|
-| Who decrypted this file? | Not recoverable. Anyone with the key file can decrypt without leaving a trace. | CloudTrail records every `kms:Decrypt` with principal, timestamp, source IP, encryption context. |
+| Who decrypted this file? | Not recoverable. Anyone with the key file can decrypt without leaving a trace. | CloudTrail records every `kms:Decrypt` with principal, timestamp, source IP, KMS key and encryption context. The context is the same for every dotsec file, so per-file attribution needs per-environment KMS keys or principals. |
 | When was the DEK last rotated? | git log on `.sec` shows when the `dek=` field last changed. | Same. |
 | Who edited the schema? | git log on `dotsec.schema`. | Same. |
 | Did a recent run actually decrypt, or did it fail? | Not recoverable from the file. | CloudTrail shows successful and denied `kms:Decrypt` calls. |

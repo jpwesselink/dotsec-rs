@@ -76,7 +76,7 @@ This creates:
 
 ### `.sec.key` is auto-`.gitignore`d
 
-The first time `dotsec set` or `dotsec init` generates a keypair, it makes sure `.sec.key` is excluded from git. The exact action depends on what it finds in the directory:
+The first time `dotsec set`, `dotsec import` or `dotsec init` generates a keypair, it makes sure `.sec.key` is excluded from git. The exact action depends on what it finds in the directory:
 
 | Existing state | What dotsec does |
 |---|---|
@@ -84,7 +84,7 @@ The first time `dotsec set` or `dotsec init` generates a keypair, it makes sure 
 | `.gitignore` missing, inside a git repo | **Creates** `.gitignore` with `# Added by dotsec` + `*.key` |
 | `.gitignore` already excludes `*.key` (or `.sec.key` / `**/*.key`) | Silent no-op — nothing to do |
 | Not in a git repo | Skip with an info note — creating a `.gitignore` here would be presumptuous |
-| `--no-gitignore` passed on `set` / `init` | Skip with an explicit reminder that exclusion is now your responsibility |
+| `--no-gitignore` passed on `set` / `import` / `init` | Skip with an explicit reminder that exclusion is now your responsibility |
 
 The pattern is `*.key` (not just `.sec.key`) because once you start using multiple environments — `prod.sec.key`, `staging.sec.key`, `local.sec.key` — a narrower rule would silently leak the ones it doesn't match.
 
@@ -109,7 +109,10 @@ dotsec checks `DOTSEC_PRIVATE_KEY` before looking for a key file, so this works 
 
 Key discovery order:
 1. `DOTSEC_PRIVATE_KEY` environment variable
-2. `<sec-file>.key` file in the same directory
+2. The key-file path in `@key-id`, if the `.sec` file sets one (for the local provider `@key-id` is a file path; for AWS it names the KMS key)
+3. Otherwise `<sec-file>.key` next to the `.sec` file
+
+`dotsec run` removes `DOTSEC_PRIVATE_KEY` from the environment of the command it starts, so your app never sees the key.
 
 ## AWS KMS setup
 
@@ -164,7 +167,7 @@ Writing secrets (`dotsec set`, `rotate-key`) additionally needs `kms:GenerateDat
 
 ## Multiple environments
 
-Each environment gets its own `.sec` file with its own keypair:
+Each environment gets its own `.sec` file with its own key file: `.sec.staging` uses `.sec.staging.key`, `.sec.production` uses `.sec.production.key` (or `DOTSEC_PRIVATE_KEY` in CI, set per environment):
 
 ```bash
 SEC_FILE=.sec.staging dotsec set DB_URL postgres://staging-db
@@ -178,4 +181,4 @@ dotsec extract-schema   # creates dotsec.schema from .sec
 dotsec validate         # validates .sec against schema
 ```
 
-See the [directives guide](/guide/directives#schema-files) for details.
+The schema's hash is bound into every env file's integrity tag. When you add a key to the shared schema, the *other* env files fail their MAC check until you re-MAC them with `dotsec --sec-file .sec.staging encrypt` (and so on per file). See the [multi-environment workflow](/guide/commands#multi-environment-workflow) and the [directives guide](/guide/directives#schema-files) for details.
