@@ -31,13 +31,13 @@ The properties below are visible in the source — they're not marketing claims.
 
 | Property | How |
 |---|---|
-| Per-value confidentiality | AES-256-GCM, fresh 96-bit nonce per value, separately keyed under the DEK |
+| Per-value confidentiality | AES-256-GCM under one DEK shared by every value in the file, with a fresh random 96-bit nonce per value. The same DEK is also the HMAC key for the file MAC and the key commitment |
 | Per-value tamper detection | AEAD authentication tag covers ciphertext; AAD binds each ciphertext to its key name so values can't be swapped between keys |
 | File-level integrity | HMAC-SHA256 over a canonical serialization covering entry names, order, ENC bytes, file-level directives, directives on encrypted entries, and a hash of `dotsec.schema` |
-| Rollback resistance | The file MAC covers ENC ciphertext bytes, so substituting an older blob from git history breaks verification |
+| Rollback resistance (per value) | The file MAC covers ENC ciphertext bytes, so splicing a single older blob from git history into the current file breaks verification. Reverting the *whole* file to an earlier dotsec-written version is not detected — see [below](#what-an-attacker-with-the-sec-file-can-do) |
 | Wrong-key detection | 32-byte key commitment over the DEK, checked before AEAD decrypt |
-| Plaintext-length hiding | Plaintext padded to a 64-byte multiple plus a random extra block |
-| Confidentiality at rest in process memory | DEKs, decrypted plaintext, key-file contents wrapped in `Zeroizing` at the moment secret material enters them — every error path wipes |
+| Plaintext-length hiding | Plaintext padded to a 64-byte multiple, with an extra 64-byte block added with 50% probability |
+| Memory hygiene | The DEK, key-file contents, and intermediate decryption buffers are wrapped in `Zeroizing`, so those are wiped on every exit path. Decrypted values themselves end up in ordinary `String`s and in the child process's environment — they are not zeroized |
 | Timing-safe integrity comparison | MAC and key-commitment checks via `subtle` (constant-time) |
 | Parser robustness on untrusted input | Cargo-fuzz harness with four targets covering `.sec` parsing, schema parsing, header parsing, and parse → render idempotency |
 
@@ -53,6 +53,7 @@ Nothing useful, by design — but precisely:
 | Read plaintext values | Sees them — that's what `@plaintext` means. Don't mark secrets plaintext. |
 | Swap a ciphertext between keys (`DB_PASSWORD` → `API_KEY`) | Rejected — per-value AEAD binds each ciphertext to its key name. |
 | Roll back one value to an older ciphertext from git history | Rejected — the file MAC covers the `ENC[...]` bytes. |
+| Revert the **whole** file to an earlier version dotsec wrote | **Passes.** An old `.sec` carries a valid MAC under the same DEK, so it verifies until the DEK changes. Running `dotsec rotate-key` (for example after removing someone's access) changes the DEK, and older files then no longer verify against the current one — but anyone holding the old key can still decrypt them. |
 | Add, remove, rename, or reorder entries | Rejected — entry names and order are MAC-covered, plaintext included. |
 | Flip `@encrypt` off, redirect `@push`, weaken `@type` on an encrypted entry | Rejected — directives on encrypted entries are MAC-covered. |
 | Weaken `dotsec.schema` (drop `@max`, loosen `@pattern`) | Rejected — a canonical hash of the schema is bound into the MAC. |
@@ -73,7 +74,14 @@ The last row is the documented gap: plaintext values are not MAC-covered, so han
 
 Rule of thumb: if mutating the value alone would shift a **security boundary**, mark it `@encrypt` even if the value itself isn't a credential. Confidentiality isn't the only reason to encrypt — integrity is.
 
-For everything else, put validation rules (`@type`, `@pattern`, `@min`/`@max`, `enum(...)`) in `dotsec.schema`. The schema *is* integrity-bound, and `dotsec validate` runs on every load — a tampered plaintext value that breaks the schema is rejected before your app sees it.
+For everything else, put validation rules (`@type`, `@pattern`, `@min`/`@max`, `enum(...)`) in `dotsec.schema`. The schema *is* integrity-bound, and `dotsec run` validates before it starts your command (same rules as `dotsec validate`) — a tampered plaintext value that breaks the schema makes `run` refuse to start, so your app never sees it. Which commands validate, and how strictly:
+
+| Command | Validation |
+|---|---|
+| `dotsec run`, `dotsec validate` | Inline directives + schema. Errors block (non-zero exit, command not started); warnings don't |
+| `dotsec set` | The value being written is checked against its schema entry; a violation is rejected |
+| `dotsec push`, `dotsec format` | Schema validation runs, but findings are printed as warnings and don't block |
+| `dotsec show`, `dotsec export` | No schema validation (the MAC is still checked) |
 
 ## On-disk surface area
 
@@ -82,13 +90,13 @@ dotsec is designed so the only sensitive artifact on a developer's machine is th
 | Setup | What sits on disk | Defense surface |
 |---|---|---|
 | dotsec, local provider | `.sec` (encrypted, committed) + `.sec.key` (gitignored) | Same as any private-key-on-disk model. Key file inherits the OS's filesystem permissions. |
-| dotsec, local provider with `DOTSEC_PRIVATE_KEY` injected | `.sec` only | No key material on disk — comes from an env var that any wrapping tool (password manager CLI, `direnv`, `gpg --decrypt`) can fill in at spawn time |
+| dotsec, local provider with `DOTSEC_PRIVATE_KEY` injected | `.sec` only | No key material on disk — comes from an env var that any wrapping tool (password manager CLI, `direnv`, `gpg --decrypt`) can fill in at spawn time. `dotsec run` removes `DOTSEC_PRIVATE_KEY` from the child's environment: your app gets the decrypted values, never the key |
 | dotsec, AWS KMS provider | `.sec` only | **No key material on disk at all.** The wrapped DEK is in `.sec` but is opaque to anyone without `kms:Decrypt`. The KEK lives in the AWS HSM. |
 
 The KMS row matters for the supply-chain attack class — when a compromised dependency's postinstall script runs as your user and grep-walks the filesystem for `.env`, `.sec.key`, AWS credentials, etc., there's simply nothing to find. The wrapped DEK in `.sec` is useless without an IAM-authenticated, CloudTrail-logged call to KMS, which the malicious script cannot make undetected.
 
 :::tip Harden the local provider further
-`DOTSEC_PRIVATE_KEY` is checked before any key file ([discovery order](/guide/encryption#key-file)), so any tool that can inject an env var into a child process can take over key delivery — letting you delete `.sec.key` from disk. Examples worth exploring: the [1Password CLI](https://developer.1password.com/docs/cli/) (`op run` resolves `op://` secret references), [direnv](https://direnv.net/) bound to a keychain command, or a shell function that reads from `gpg --decrypt`.
+`DOTSEC_PRIVATE_KEY` is checked before any key file ([discovery order](/guide/encryption#key-file)), so any tool that can inject an env var into a child process can take over key delivery — letting you delete `.sec.key` from disk. `dotsec run` strips `DOTSEC_PRIVATE_KEY` before spawning your command, so the child process (and any dependency running in it) doesn't inherit the key. Anything else that runs in the same shell or wrapper while the variable is set can still read it. Examples worth exploring: the [1Password CLI](https://developer.1password.com/docs/cli/) (`op run` resolves `op://` secret references), [direnv](https://direnv.net/) bound to a keychain command, or a shell function that reads from `gpg --decrypt`.
 :::
 
 ## Where dotsec stops
@@ -114,17 +122,17 @@ Anyone reading the file learns that you use Stripe, OpenAI, and JWTs, and they l
 
 ## Assumptions
 
-- **dotsec defends data at rest, not at runtime.** See [above](#what-dotsec-solves-and-what-it-doesnt).
+- **dotsec defends data at rest, not at runtime.** See [above](#what-dotsec-solves--and-what-it-doesnt).
 - **dotsec can't stop same-user code from clobbering `.sec.key`.** Use the KMS provider if that's in your threat model — no key file.
 - **Key compromise ends the story.** An attacker holding both the file and the private key (or `kms:Decrypt` rights) reads everything. There is no defense-in-depth below the key.
-- **`panic = "abort"` skips destructor-based memory wipe.** Two layers defend against the resulting coredump exposure: the fuzz harness keeps the input-driven panic surface closed, and `dotsec` calls `setrlimit(RLIMIT_CORE, 0)` at startup so a panic can't drop a dump containing in-flight secrets in the first place.
+- **`panic = "abort"` skips destructor-based memory wipe.** Two layers defend against the resulting coredump exposure: the fuzz harness keeps the input-driven panic surface closed, and on Unix `dotsec` lowers the *soft* `RLIMIT_CORE` to 0 at startup so a panic in dotsec itself doesn't drop a dump containing in-flight secrets. Only the soft limit is lowered, so a child started by `dotsec run` can raise it again and still enable core dumps for itself. On Windows this step does nothing.
 - **`dotsec migrate` executes the v4 config.** A `dotsec.config.{ts,js}` is code; migrating runs it. Only migrate configs you trust — see [the migrate command](/guide/commands#dotsec-migrate).
 
 ## Engineering posture
 
 - **Fuzzing.** The parser surface that consumes untrusted `.sec` content (grammar, `@dotsec(...)` header, schema files, parse→render round-trip) is covered by four `cargo-fuzz` targets with curated seed corpora — see `fuzz/` in the repo.
-- **Dependency audit.** CI runs `cargo audit` on every push; ignores live in `.cargo/audit.toml`, each with a written rationale.
-- **Memory hygiene.** DEKs, decrypted values, and key-file contents are wrapped in `Zeroizing` at the moment secret material enters them, so every exit path (including errors) wipes them.
+- **Dependency audit.** CI runs `cargo audit` on pushes to `main` and on pull requests. `.cargo/audit.toml` has no ignored advisories; any future ignore must carry a written rationale there.
+- **Memory hygiene.** The DEK, key-file contents, and intermediate decryption buffers are wrapped in `Zeroizing`, so every exit path (including errors) wipes them. Decrypted values are not: they live in ordinary strings and end up in the child's environment, which is where `dotsec run` puts them on purpose.
 - **Constant-time comparisons** for the file MAC and the key commitment (via `subtle`).
 - **No secrets over FFI.** The `@dotsec/core` Node bindings expose parsing, validation, and formatting only — no decrypt, no key material crosses the boundary.
 
@@ -132,7 +140,7 @@ Anyone reading the file learns that you use Stripe, OpenAI, and JWTs, and they l
 
 Honest disclosure, because security-conscious adopters ask:
 
-**What we have.** The age and AES-256-GCM primitives themselves are well-audited (age had a [Cure53 review in 2021](https://age-encryption.org/)). The dotsec wire format on top of them — the canonical serialization, MAC scope, schema-hash binding — is specified in source-as-spec form: `dotsec-core/src/header_v3.rs` documents the directive shape, `crypto/src/mac.rs` documents the canonical bytes the MAC covers. The parser surface that consumes untrusted `.sec` content is fuzzed by four `cargo-fuzz` targets running nightly in CI. Memory hygiene (zeroize on every error path), constant-time MAC comparison (via `subtle`), and panic-time coredump suppression (`setrlimit(RLIMIT_CORE, 0)`) are documented above.
+**What we have.** The age and AES-256-GCM primitives themselves are well-audited (age had a [Cure53 review in 2021](https://age-encryption.org/)). The dotsec wire format on top of them — the canonical serialization, MAC scope, schema-hash binding — is specified in source-as-spec form: `dotsec-core/src/header_v3.rs` documents the directive shape, `crypto/src/mac.rs` documents the canonical bytes the MAC covers. The parser surface that consumes untrusted `.sec` content is fuzzed by four `cargo-fuzz` targets running nightly in CI. Memory hygiene (zeroize of the DEK, key-file contents and intermediate buffers), constant-time MAC comparison (via `subtle`), and panic-time coredump suppression (soft `RLIMIT_CORE` lowered to 0, Unix only) are documented above.
 
 **What we don't have.** No independent cryptographic audit of the dotsec wire format yet. No published test vectors as a stand-alone artifact (they exist as unit tests in `crypto/src/mac.rs` but aren't packaged for cross-implementation verification). The project is a single-maintainer Rust rewrite that hit v7 in 2026; it does not have the "deployed at scale for five years across thousands of teams" maturity that some adopters require.
 

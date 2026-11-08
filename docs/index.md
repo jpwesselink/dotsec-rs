@@ -18,7 +18,7 @@ features:
     link: /guide/setup#aws-kms-setup
   - icon: 🧪
     title: Engineered like crypto matters
-    details: AAD-bound per-value AEAD, file-level MAC over canonical content, schema-hash binding, key commitment, length padding, zeroize on every exit path, constant-time integrity checks. Cargo-fuzz harness with 4 targets. Visible in the source.
+    details: AAD-bound per-value AEAD, file-level MAC over canonical content, schema-hash binding, key commitment, length padding, zeroize of key material on every exit path, constant-time integrity checks. Cargo-fuzz harness with 4 targets. Visible in the source.
     link: /guide/security
   - icon: ✅
     title: Schema-driven validation
@@ -57,24 +57,30 @@ PORT=3000
 ```bash
 # @dotsec(format=v3, mac=base64-32-bytes..., dek=base64-wrapped-dek...)
 
-# @encrypt
+# dotsec v7.0.1 — encrypted environment file
+# https://github.com/jpwesselink/dotsec-rs
+
+# @provider=local @default-encrypt
+
+# @type=string
 DATABASE_URL=ENC[base64...]
-
-# @encrypt
+# @type=string
 API_KEY=ENC[base64...]
-
+# @plaintext @type=number
 PORT=3000
 ```
+
+That's what `dotsec import -y` writes: the file defaults to encrypted (`@default-encrypt`), and values whose names and contents don't look secret are auto-marked `@plaintext`.
 
 `dotsec import` does the transformation in one command. Commit `.sec`, delete `.env`, run your app the same way you always have — `dotsec run -- <your command>` decrypts in memory and injects the env vars into your process. No code change, no SDK, no plaintext on disk.
 
 ## …and you can have types on them
 
-Add `@type`, `@format`, `@min`/`@max`, or `@enum` directives to constrain values. `dotsec validate` enforces them on every load — and the same directives generate a TypeScript validator with zero runtime dependencies.
+Add `@type` (including `@type=enum(...)`), `@format`, `@pattern` or `@min`/`@max` directives to constrain values. `dotsec validate` checks them, and `dotsec run` checks them before starting your command and refuses to start on errors — and the same directives generate a TypeScript validator with zero runtime dependencies.
 
 ```bash
 # @encrypt @type=string @format=url @not-empty
-DATABASE_URL=ENC[base64...]
+API_BASE_URL=ENC[base64...]
 
 # @encrypt @type=string @min-length=32
 API_KEY=ENC[base64...]
@@ -100,8 +106,8 @@ import { parseEnv } from './env';
 const env = parseEnv();   // validates at startup, throws on error
 env.PORT;                 // number
 env.NODE_ENV;             // "development" | "staging" | "production"
-env.DATABASE_URL;         // string (validated as URL)
+env.API_BASE_URL;         // string (validated as http(s) URL)
 env.API_KEY;              // string, 32+ chars
 ```
 
-Run `grep import src/env.ts` and you'll find nothing — that's the whole point. JSON Schema export (`--format json`) works the same way.
+Run `grep import src/env.ts` and you'll find nothing — that's the whole point. JSON Schema export (`dotsec schema export`, the default `--format json-schema`) works the same way.

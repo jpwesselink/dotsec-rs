@@ -57,26 +57,23 @@ cargo +nightly fuzz cmin parse_dotenv
 
 ## CI
 
-Fuzzing for hours doesn't fit a normal PR gate, but a short bounded run as a
-regression catch does — it'll immediately surface a grammar edit that turns
-one of the `parse_directive` unwraps into a panic:
+Fuzzing runs in `.github/workflows/fuzz.yml`, not on pull requests:
 
-```yaml
-# .github/workflows/fuzz.yml
-name: fuzz
-on: [pull_request]
-jobs:
-  fuzz:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target: [parse_dotenv, parse_header, parse_schema, roundtrip]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
-      - run: cargo install cargo-fuzz
-      - run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=90 -rss_limit_mb=512
-```
+- **Schedule:** nightly at 04:00 UTC, plus manual runs via `workflow_dispatch`.
+- **Per target:** each of the four targets runs as its own matrix job for
+  600 seconds (`-max_total_time=600 -rss_limit_mb=512`).
+- **Corpus:** `fuzz/corpus/<target>` is cached between runs, and the curated
+  seeds from `fuzz/seeds/<target>/` are merged into it on every run.
+- **Crashes:** on failure, `fuzz/artifacts/<target>/` is uploaded as a
+  workflow artifact (kept 30 days).
+
+When a crash is fixed, add its minimized reproducer
+(`cargo +nightly fuzz tmin <target> <crash-file>`) to `fuzz/seeds/<target>/`
+so every later run replays it.
+
+The `roundtrip` invariant also runs on **every PR** on stable Rust:
+`dotenv/tests/roundtrip.rs` is a proptest twin of the fuzz target and replays
+`fuzz/seeds/roundtrip/`, as part of the normal `cargo test --workspace` in `ci.yml`.
 
 For continuous deep fuzzing (the thing that actually finds the rare bug),
 register the repo with OSS-Fuzz once it's public — it's free for open source

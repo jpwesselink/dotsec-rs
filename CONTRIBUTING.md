@@ -94,7 +94,7 @@ Prerelease binaries report the prerelease version in `dotsec --version`: each ma
 
 | Workflow | File | Description |
 |---|---|---|
-| **CI** | `ci.yml` | Runs on every push and PR. Gates: `cargo fmt --all -- --check`, `cargo build --workspace --all-targets`, `cargo test --workspace --all-targets`, `cargo clippy --workspace --all-targets -- -D warnings`, and a separate `cargo audit` job |
+| **CI** | `ci.yml` | Runs on pushes to `main` and on pull requests (opened / synchronized). Gates: `cargo fmt --all -- --check`, `cargo build --workspace --all-targets`, `cargo test --workspace --all-targets`, `cargo clippy --workspace --all-targets -- -D warnings`, and a separate `cargo audit` job |
 | **Publish CLI to NPM** | `publish-npm.yml` | Builds the CLI binary for 6 platforms, packs the npm matrix, publishes `dotsec`. Triggered by push-to-main (beta tag), release event (latest tag), or `workflow_dispatch` |
 | **Publish Core npm package** | `publish-napi.yml` | Same shape as above for the NAPI bindings; publishes `@dotsec/core` |
 | **Deploy docs** | `deploy-docs.yml` | Builds and deploys docs to GitHub Pages. Versioned subdirectories: `/v{X.Y.Z}/` (release event), `/beta/` (main push), `/pr-{N}/` (PR commit) |
@@ -102,7 +102,7 @@ Prerelease binaries report the prerelease version in `dotsec --version`: each ma
 
 ### Why no crates.io
 
-The obvious crate names on crates.io — `dotsec`, `crypto`, `dotenv`, `aws` — are owned by unrelated projects from before dotsec-rs existed. Renaming the Rust crates to publishable names is on the backlog but doesn't change the user-facing distribution story: users always get dotsec via `npm install -g dotsec`, which bundles a native per-platform binary built from the Rust source. `dotsec-core` (the NAPI library) is similarly published only as `@dotsec/core` on npm.
+The obvious crate names on crates.io — `dotsec`, `crypto`, `dotenv`, `aws` — are owned by unrelated projects from before dotsec-rs existed. Renaming the Rust crates to publishable names is on the backlog but doesn't change the user-facing distribution story: users always get dotsec via `npm install -g dotsec`, which bundles a native per-platform binary built from the Rust source. `dotsec-napi` (the NAPI bindings) is published only as `@dotsec/core` on npm; the Rust `dotsec-core` library isn't published anywhere.
 
 ## Security issues
 
