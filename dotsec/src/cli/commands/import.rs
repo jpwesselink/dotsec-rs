@@ -166,6 +166,20 @@ pub async fn match_args(
         // No .sec, but source .env has config directives — use them
         println!("{} Using config from {}", "✓".green(), env_file);
         existing_config = Some(source_config.clone());
+    } else if auto_yes {
+        // No .sec, no source config, `-y`: never prompt. Use the same defaults
+        // `dotsec set` uses for a brand-new project (local provider, encrypt by
+        // default) so the two-command onboarding works in CI / scripts.
+        println!(
+            "{} No .sec file found. Using defaults: provider=local, default-encrypt",
+            "✓".green()
+        );
+        existing_config = Some(dotenv::FileConfig {
+            provider: Some("local".to_string()),
+            key_id: None,
+            region: None,
+            default_encrypt: Some(true),
+        });
     } else {
         // No .sec, no source config — prompt like init
         println!("\n{}", "No .sec file found. Setting up config:".bold());
