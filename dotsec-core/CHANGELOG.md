@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.1.0](https://github.com/jpwesselink/dotsec-rs/compare/dotsec-core-v7.0.1...dotsec-core-v7.1.0) - 2026-11-08
+
+### Fixed
+
+- *(cli)* import -y without prompts, set --push -y keeps @push, extract-schema keeps encryption state ([#67](https://github.com/jpwesselink/dotsec-rs/pull/67))
+- *(run)* don't leak the private key to the child; validate before running; fix export ([#64](https://github.com/jpwesselink/dotsec-rs/pull/64))
+- *(decrypt)* MAC failure now points at the specific drift vs git HEAD ([#50](https://github.com/jpwesselink/dotsec-rs/pull/50))
+
+### Other
+
+- *(deps)* bump RustCrypto stack, pinned by format-compat tests ([#62](https://github.com/jpwesselink/dotsec-rs/pull/62))
+
 ## [7.0.1](https://github.com/jpwesselink/dotsec-rs/compare/dotsec-core-v7.0.0...dotsec-core-v7.0.1) - 2026-06-13
 
 ### Added

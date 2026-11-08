@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.1.0](https://github.com/jpwesselink/dotsec-rs/compare/dotsec-v7.0.1...dotsec-v7.1.0) - 2026-11-08
+
+### Added
+
+- *(rotate-key)* --new-keypair replaces a leaked age key ([#65](https://github.com/jpwesselink/dotsec-rs/pull/65))
+
+### Fixed
+
+- *(cli)* import -y without prompts, set --push -y keeps @push, extract-schema keeps encryption state ([#67](https://github.com/jpwesselink/dotsec-rs/pull/67))
+- *(run)* don't leak the private key to the child; validate before running; fix export ([#64](https://github.com/jpwesselink/dotsec-rs/pull/64))
+- *(cli)* lower only the soft core-dump limit
+- *(validate)* file-level @default-encrypt no longer triggers false 'inline @encrypt' errors ([#49](https://github.com/jpwesselink/dotsec-rs/pull/49))
+
+### Other
+
+- *(deps)* bump non-crypto majors ([#61](https://github.com/jpwesselink/dotsec-rs/pull/61))
+
 ## [7.0.1](https://github.com/jpwesselink/dotsec-rs/compare/dotsec-v0.1.0...dotsec-v7.0.1) - 2026-06-13
 
 ### Fixed

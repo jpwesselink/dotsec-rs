@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.1.0](https://github.com/jpwesselink/dotsec-rs/compare/dotenv-v7.0.1...dotenv-v7.1.0) - 2026-11-08
+
+### Fixed
+
+- *(cli)* import -y without prompts, set --push -y keeps @push, extract-schema keeps encryption state ([#67](https://github.com/jpwesselink/dotsec-rs/pull/67))
+- *(dotenv)* blank text-directive values; run roundtrip invariant on every PR ([#60](https://github.com/jpwesselink/dotsec-rs/pull/60))
+- *(dotenv)* stop silently dropping kv entries; make fuzz targets pass ([#58](https://github.com/jpwesselink/dotsec-rs/pull/58))
+- *(validate)* file-level @default-encrypt no longer triggers false 'inline @encrypt' errors ([#49](https://github.com/jpwesselink/dotsec-rs/pull/49))
+
 ## [7.0.1](https://github.com/jpwesselink/dotsec-rs/compare/dotenv-v7.0.0...dotenv-v7.0.1) - 2026-06-13
 
 ### Other
