@@ -219,3 +219,49 @@ fn update_existing_kv_preserves_file_level_directives() {
         "show must return the new value:\nstdout: {stdout}"
     );
 }
+
+// --- rotate-key --new-keypair ---
+
+#[test]
+fn rotate_key_new_keypair_retires_the_old_key() {
+    let dir = fixture();
+    let (_, err, code) = run(dir.path(), &["set", "API_KEY", "s3cret", "--encrypt"]);
+    assert_eq!(code, 0, "{err}");
+    let old_key = read(dir.path().join(".sec.key"));
+    let old_sec = read(dir.path().join(".sec"));
+
+    let (out, err, code) = run(dir.path(), &["rotate-key", "--new-keypair"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let new_key = read(dir.path().join(".sec.key"));
+    assert_ne!(old_key, new_key, "key file must hold a new identity");
+    assert!(new_key.starts_with("AGE-SECRET-KEY-"));
+    assert!(
+        !dir.path().join(".sec.key.new").exists(),
+        "staged key must be moved into place"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(dir.path().join(".sec.key"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "new key file must be owner-only");
+    }
+
+    // New key decrypts the rotated file.
+    let (out, err, code) = run(dir.path(), &["show", "--reveal"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("s3cret"), "{out}");
+
+    // Old key no longer decrypts the rotated file.
+    std::fs::write(dir.path().join(".sec.key"), &old_key).unwrap();
+    let (_, _, code) = run(dir.path(), &["show", "--reveal"]);
+    assert_ne!(code, 0, "old key must not decrypt the rotated .sec");
+
+    // Sanity: the old key did decrypt the pre-rotation file.
+    std::fs::write(dir.path().join(".sec"), &old_sec).unwrap();
+    let (out, _, code) = run(dir.path(), &["show", "--reveal"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("s3cret"));
+}

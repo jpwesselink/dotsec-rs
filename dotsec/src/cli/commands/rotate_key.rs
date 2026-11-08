@@ -1,20 +1,37 @@
-use clap::Command;
+use clap::{Arg, ArgAction, Command};
 use colored::Colorize;
 
 use crate::cli::helpers::with_progress;
 use crate::default_options::DefaultOptions;
 
 pub fn command() -> Command {
-    Command::new("rotate-key").about("Generate a new DEK and re-encrypt all values")
+    Command::new("rotate-key")
+        .about("Generate a new DEK and re-encrypt all values")
+        .arg(
+            Arg::new("new-keypair")
+                .long("new-keypair")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "Also replace the age keypair (local provider). Use this when \
+                     .sec.key or DOTSEC_PRIVATE_KEY may have leaked: rotating only \
+                     the DEK keeps it wrapped to the old key.",
+                ),
+        )
+        .after_help(
+            "Examples:\n  \
+             dotsec rotate-key                  # new DEK, same key (routine rotation)\n  \
+             dotsec rotate-key --new-keypair    # new DEK and new age keypair (key leaked)",
+        )
 }
 
 pub async fn match_args(
     matches: &clap::ArgMatches,
     default_options: &DefaultOptions<'_>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if matches.subcommand_matches("rotate-key").is_none() {
+    let Some(sub) = matches.subcommand_matches("rotate-key") else {
         return Ok(());
-    }
+    };
+    let new_keypair = sub.get_flag("new-keypair");
 
     let sec_file = default_options.sec_file;
     let encryption_engine = &default_options.encryption_engine;
@@ -26,8 +43,34 @@ pub async fn match_args(
     )
     .await?;
 
+    // With --new-keypair (local only): the new identity and where it goes.
+    // Written to `<key file>.new` first and renamed into place only after the
+    // .sec is rewritten, so a crash never leaves a .sec whose key is lost.
+    let mut new_key_path: Option<String> = None;
+
     // Generate a new DEK and wrap it with the appropriate provider
     let (new_dek, new_wrapped_dek) = match encryption_engine {
+        dotsec::EncryptionEngine::Aws(_) if new_keypair => {
+            return Err(
+                "--new-keypair only applies to the local provider. With AWS KMS there is \
+                        no key on disk: revoke the leaked principal's kms:Decrypt in IAM (and \
+                        consider rotating the KMS key), then run `dotsec rotate-key`."
+                    .into(),
+            );
+        }
+        dotsec::EncryptionEngine::Local(opts) if new_keypair => {
+            let key_path = opts
+                .key_file
+                .clone()
+                .unwrap_or_else(|| format!("{}.key", sec_file));
+            let (identity, recipient) = crypto::local::generate_keypair();
+            let identity = zeroize::Zeroizing::new(identity);
+            dotsec::write_sec_file(&format!("{key_path}.new"), &format!("{}\n", *identity))?;
+            let dek = crypto::generate_dek();
+            let wrapped = crypto::local::wrap_dek(&dek, &recipient)?;
+            new_key_path = Some(key_path);
+            (dek, wrapped)
+        }
         dotsec::EncryptionEngine::Aws(opts) => {
             let key_id = opts.key_id.as_deref().ok_or("AWS key_id is required")?;
             aws::generate_data_key(
@@ -106,11 +149,42 @@ pub async fn match_args(
     let output = dotenv::lines_to_string(&sec_lines);
     dotsec::write_sec_file(sec_file, &output)?;
 
-    println!(
-        "\n{} Key rotated — all values in {} re-encrypted with new DEK",
-        "✓".green(),
-        sec_file.bold()
-    );
+    if let Some(key_path) = new_key_path {
+        let staged = format!("{key_path}.new");
+        std::fs::rename(&staged, &key_path).map_err(|e| {
+            format!(
+                "{sec_file} is now encrypted to the NEW key, which is in {staged}, but moving it \
+                 to {key_path} failed: {e}. Move it there yourself — the old key no longer works."
+            )
+        })?;
+        println!(
+            "\n{} Keypair replaced — {} re-encrypted with a new DEK wrapped to a new age key",
+            "✓".green(),
+            sec_file.bold()
+        );
+        println!("  New private key: {}", key_path.bold());
+        if std::env::var("DOTSEC_PRIVATE_KEY").is_ok() {
+            println!(
+                "  {} DOTSEC_PRIVATE_KEY is set and still holds the OLD key (it wins over the key \
+                 file). Update it — and every CI secret / password-manager entry — with the \
+                 contents of {}.",
+                "!".yellow().bold(),
+                key_path
+            );
+        }
+        println!(
+            "  Share the new key with your team over a secure channel. The old key can no \
+             longer decrypt the current {}, but it still decrypts every older version in \
+             git history — treat those secrets as exposed and rotate them at the source.",
+            sec_file
+        );
+    } else {
+        println!(
+            "\n{} Key rotated — all values in {} re-encrypted with new DEK",
+            "✓".green(),
+            sec_file.bold()
+        );
+    }
 
     Ok(())
 }
